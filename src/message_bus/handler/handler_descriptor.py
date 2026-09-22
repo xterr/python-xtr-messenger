@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypeAlias, get_type_hints
+from typing import TYPE_CHECKING, TypeAlias, cast, get_type_hints
 
 from message_bus.envelope import Envelope
 from message_bus.exception import HandlerSignatureError
@@ -41,6 +41,34 @@ class HandlerDescriptor:
             wants_envelope=_wants_envelope(handler),
         )
 
+    @classmethod
+    def of_type(
+        cls,
+        handler_type: type,
+        handler: Handler,
+        name: str | None = None,
+    ) -> HandlerDescriptor:
+        """Describe ``handler``, taking its shape from ``handler_type``.
+
+        For a handler that does not exist yet — one a container builds when a
+        message arrives — so the class is all there is to check. Checking it
+        now means a handler with a shape the bus cannot call is rejected
+        while wiring rather than on the first message.
+
+        Raises:
+            HandlerSignatureError: If the parameters are not a shape the bus
+                can call.
+        """
+        call = _own_call_of(handler_type)
+        if call is None:
+            raise HandlerSignatureError(handler_type.__qualname__, ())
+        declared = tuple(inspect.signature(call).parameters)[1:]
+        return cls(
+            handler=handler,
+            name=name or handler_type.__qualname__,
+            wants_envelope=_decide(declared, _hints_of(call), handler_type.__qualname__),
+        )
+
     async def invoke(self, envelope: Envelope) -> None:
         """Call the handler with the message, and the envelope if it asked."""
         if self.wants_envelope:
@@ -69,14 +97,45 @@ def _annotated(handler: Handler) -> object:
     return call if call is not None else handler
 
 
-def _wants_envelope(handler: Handler) -> bool:
-    parameters = tuple(inspect.signature(handler).parameters)
+def _own_call_of(handler_type: type) -> Handler | None:
+    """Return the ``__call__`` ``handler_type`` itself defines, if any.
+
+    Not ``getattr``: every class inherits ``type.__call__`` from its
+    metaclass — the thing that makes ``Thing()`` build one — so asking
+    whether a class is callable always says yes, and a class that handles
+    nothing would be accepted as a handler and fail on the first message.
+    """
+    for ancestor in handler_type.__mro__:
+        found = ancestor.__dict__.get("__call__")
+        if found is not None:
+            return cast("Handler", found)
+    return None
+
+
+def _hints_of(target: object) -> dict[str, object]:
+    try:
+        return dict(get_type_hints(target))
+    except (NameError, TypeError):
+        return {}
+
+
+def _decide(parameters: tuple[str, ...], hints: dict[str, object], name: str) -> bool:
+    """Report whether a handler declaring ``parameters`` wants the envelope.
+
+    The one place the rule lives, so a handler that is a function and one a
+    container will build are held to the same shape.
+
+    Raises:
+        HandlerSignatureError: If the parameters are not a shape the bus can
+            call.
+    """
     if len(parameters) < _ENVELOPE_ARITY:
         return False
-    try:
-        hints = get_type_hints(_annotated(handler))
-    except (NameError, TypeError):
-        hints = {}
     if len(parameters) > _ENVELOPE_ARITY or hints.get(parameters[1]) is not Envelope:
-        raise HandlerSignatureError(_name_of(handler), parameters)
+        raise HandlerSignatureError(name, parameters)
     return True
+
+
+def _wants_envelope(handler: Handler) -> bool:
+    parameters = tuple(inspect.signature(handler).parameters)
+    return _decide(parameters, _hints_of(_annotated(handler)), _name_of(handler))

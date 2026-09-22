@@ -40,6 +40,7 @@ Where that goes is configuration. Whether it happens in-process or on RabbitMQ i
 uv add xtr-message-bus                    # sync:// and in-memory://
 uv add "xtr-message-bus[amqp]"            # + RabbitMQ
 uv add "xtr-message-bus[pydantic]"        # + pydantic messages
+uv add "xtr-message-bus[wireup]"          # + a pre-wired DI container
 ```
 
 | Extra | Brings | For |
@@ -48,6 +49,7 @@ uv add "xtr-message-bus[pydantic]"        # + pydantic messages
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
+| `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
 
 Requires Python 3.11+.
 
@@ -330,60 +332,48 @@ transports should not: a whole transport is driven by the library's `Worker`.
 
 ## Wiring with a container
 
-Every collaborator is a constructor argument and every contract is a `@runtime_checkable`
-Protocol, so a DI container can own the whole graph. Nothing here requires one.
+Handlers usually need things — a database session, a client, a unit of work. Every
+collaborator here is a constructor argument and every contract is a `@runtime_checkable`
+Protocol, so a container can own the whole graph. Nothing requires one.
 
-Here it is with [wireup](https://github.com/maldoinc/wireup) (2.x). Handlers become objects,
-which is what lets them take dependencies:
+With the `wireup` extra, one call registers everything:
 
 ```python
 # app/bus.py
+from collections.abc import AsyncIterator
+
 from wireup import injectable
 
-from message_bus import (
-    HandlersLocator,
-    HandlersLocatorInterface,
-    MessageBusConfig,
-    MessageBusFactory,
-    MessageBusInterface,
-    TransportConfig,
-)
+from message_bus import MessageBusConfig, TransportConfig
+from message_bus.integration.wireup import make_injectables
 
 
-@injectable
+@injectable(lifetime="scoped")
+async def session(pool: Pool) -> AsyncIterator[Session]:
+    async with pool.begin() as opened:
+        yield opened
+
+
+@injectable(lifetime="scoped")
 class IngestHandler:
-    def __init__(self, documents: DocumentService) -> None:
-        self._documents = documents
+    def __init__(self, db: Session) -> None:      # injected, per message
+        self._db = db
 
     async def __call__(self, message: IngestDocument) -> None:
-        await self._documents.ingest(message.document_id)
+        await self._db.record(message.document_id)
 
 
-@injectable
-def message_bus_config() -> MessageBusConfig:
-    return MessageBusConfig(
-        transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
-        routing={IngestDocument: "jobs"},
-    )
+CONFIG = MessageBusConfig(
+    transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
+    routing={IngestDocument: "jobs"},
+)
 
-
-@injectable
-def handlers(ingest: IngestHandler) -> HandlersLocatorInterface:
-    registry = HandlersLocator()
-    registry.register(IngestDocument, ingest)
-    return registry
-
-
-@injectable
-def message_bus(
-    config: MessageBusConfig,
-    registry: HandlersLocatorInterface,
-) -> MessageBusInterface:
-    return MessageBusFactory(config, handlers=registry).bus()
+INJECTABLES = make_injectables(
+    CONFIG,
+    handlers={IngestDocument: IngestHandler},
+    transports=["jobs"],          # omit in a publishing process
+)
 ```
-
-A route, or anything else, then asks for `MessageBusInterface` and gets a bus it can publish
-through. A worker entrypoint resolves one and runs it:
 
 ```python
 # app/worker.py
@@ -391,12 +381,12 @@ import asyncio
 
 import wireup
 
-from app import bus as bus_module
+from app import bus
 from message_bus import WorkerInterface
 
 
 async def main() -> None:
-    container = wireup.create_async_container(injectables=[bus_module])
+    container = wireup.create_async_container(injectables=[bus, *bus.INJECTABLES])
     try:
         worker = await container.get(WorkerInterface)
         await worker.run()
@@ -407,35 +397,38 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+A publishing process asks for `MessageBusInterface` instead and gets a bus wired to the same
+configuration.
+
+**Handlers are built per message, inside a scope.** A handler declared `lifetime="scoped"` — or
+holding anything that is — gets a fresh instance for every message, and whatever it opened is
+released when that message finishes. The session above is a real transaction per message, and
+the generator's `finally` runs whether the handler succeeded or raised.
+
 <details>
-<summary><b>Two things to know</b></summary>
+<summary><b>Three things to know</b></summary>
 
-**`@as_message_handler` writes to a process-wide registry.** That is deliberate — declaration
-happens at import, as a side effect of defining the function, and needs somewhere to
-accumulate. A container cannot reach into it. Under a container, skip the decorator and
-`register()` container-built handlers instead, as above; the two approaches do not mix, because
-declaring into one registry and resolving from another fails silently.
+**Do not mix `@as_message_handler` with the container.** The decorator writes to a process-wide
+registry at import time, which a container cannot reach into. Declaring into one registry and
+resolving from another fails silently — nothing handles the message, and nothing says so. Under
+a container, bind classes in `handlers={...}` and skip the decorator.
 
-**A discovered factory is built with no arguments.** So a factory needing a collaborator — a
-private registry, your serializer — must be constructed by you and passed in. On AMQP that
-matters, because handlers are registered with the broker by the factory:
+**A handler's shape is checked while wiring**, from the class, so one the bus cannot call is
+rejected before any message arrives — not on the first delivery in production.
+
+**A class bound but never registered as an injectable cannot be caught by wireup's validation.**
+The locator resolves by class when a message arrives, which is runtime behaviour rather than a
+graph edge. It surfaces per message as a rejection carrying the reason, because the worker
+refuses to die on one message.
 
 ```python
-@injectable
-def worker(
-    config: MessageBusConfig,
-    registry: HandlersLocatorInterface,
-) -> WorkerInterface:
-    return WorkerFactory(
-        config,
-        [AmqpTransportFactory(handlers=registry)],   # the factory needs it too
-        handlers=registry,
-    ).worker(["jobs"])
+INJECTABLES = make_injectables(
+    CONFIG,
+    handlers={IngestDocument: IngestHandler},
+    transports=["jobs"],
+    factories=[AmqpTransportFactory(serializer=mine)],   # a factory needing a collaborator
+)
 ```
-
-`assert_routes_registered(worker.broker, [IngestDocument])` at startup catches the mistake:
-publishing to AMQP does not fail for an unregistered name — the message is accepted and
-silently never consumed.
 
 </details>
 

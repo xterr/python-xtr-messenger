@@ -25,6 +25,9 @@ dependencies = [
 pydantic = [
     "pydantic>=2.0",
 ]
+wireup = [
+    "wireup>=2.12",
+]
 taskiq = [
     "taskiq>=0.12.4",
     "anyio>=4.0",
@@ -56,6 +59,7 @@ dev = [
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
+    "wireup>=2.12",
 ]
 
 [build-system]
@@ -149,6 +153,12 @@ unfixable = []
 # taskiq resolves task annotations at runtime, so `Context` must be a real
 # import here, not a TYPE_CHECKING one.
 "src/message_bus/taskiq/handler.py" = ["TC001", "TC002", "TC003"]
+# wireup registers a factory under its return annotation, read at runtime.
+# Deferring these would register the factories under nothing.
+"src/message_bus/integration/wireup.py" = ["TC001", "TC002", "TC003"]
+# Same reason on the consuming side: wireup reads a factory's annotations at
+# runtime, so a test that registers one cannot defer them either.
+"tests/integration/*.py" = ["TC001", "TC002", "TC003"]
 "tests/**/*.py" = [
     "S101",    # assert is the point of pytest
     "S603",    # a fresh interpreter is the only way to assert a module was never imported
