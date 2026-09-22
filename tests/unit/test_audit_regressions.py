@@ -20,6 +20,7 @@ from message_bus import (
     JsonSerializer,
     MessageBus,
     MessageBusConfig,
+    SendersLocator,
     TransportConfig,
     WorkerFactory,
     as_message,
@@ -35,6 +36,7 @@ from message_bus.stamp import (
     NonSendableStampInterface,
     TransportMessageIdStamp,
 )
+from message_bus.transport.in_memory import InMemoryTransport
 
 pytestmark = pytest.mark.anyio
 
@@ -233,3 +235,69 @@ def test_a_signature_the_bus_cannot_call_is_still_refused() -> None:
 
     with pytest.raises(HandlerSignatureError, match="Wrong"):
         _ = HandlersLocator().register(Audited, Wrong())
+
+
+class Auditable:
+    """A marker a family of messages shares."""
+
+
+@as_message(name="test.audit.order.v1")
+@dataclass(frozen=True, slots=True)
+class OrderPlaced(Auditable):
+    identifier: UUID
+
+
+def test_a_subclass_handler_does_not_switch_off_its_base_handler() -> None:
+    """M2. Lookup stopped at the nearest ancestor with handlers.
+
+    Registering a handler for one subclass silently stopped a handler on the
+    marker class from firing, with nothing to indicate it.
+    """
+    registry = HandlersLocator()
+
+    async def audit(message: Auditable) -> None:
+        del message
+
+    async def place(message: OrderPlaced) -> None:
+        del message
+
+    _ = registry.register(Auditable, audit, name="audit")
+    _ = registry.register(OrderPlaced, place, name="place")
+
+    assert [d.name for d in registry.handlers_for(OrderPlaced)] == ["place", "audit"]
+
+
+def test_handler_lookup_and_routing_walk_the_hierarchy_the_same_way() -> None:
+    """They disagreed: one accumulated, the other stopped at the first match."""
+    registry = HandlersLocator()
+    transport = InMemoryTransport()
+
+    async def on_base(message: Auditable) -> None:
+        del message
+
+    async def on_child(message: OrderPlaced) -> None:
+        del message
+
+    _ = registry.register(Auditable, on_base, name="base")
+    _ = registry.register(OrderPlaced, on_child, name="child")
+    routing = SendersLocator(
+        {Auditable: "slow", OrderPlaced: "fast"},
+        {"slow": transport, "fast": transport},
+    )
+
+    handled = [d.name for d in registry.handlers_for(OrderPlaced)]
+    routed = [name for name, _ in routing.senders_for(Envelope.wrap(OrderPlaced(uuid4())))]
+
+    assert len(handled) == len(routed) == 2
+
+
+def test_one_handler_registered_across_the_hierarchy_runs_once() -> None:
+    registry = HandlersLocator()
+
+    async def audit(message: Auditable) -> None:
+        del message
+
+    _ = registry.register(Auditable, audit, name="base")
+    _ = registry.register(OrderPlaced, audit, name="child")
+
+    assert len(registry.handlers_for(OrderPlaced)) == 1

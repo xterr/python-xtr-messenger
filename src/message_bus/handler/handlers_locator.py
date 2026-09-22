@@ -50,12 +50,27 @@ class HandlersLocator(HandlersLocatorInterface):
 
     @override
     def handlers_for(self, message_type: type) -> tuple[HandlerDescriptor, ...]:
-        """Return the handlers bound to ``message_type`` or any of its bases."""
+        """Return every handler bound to ``message_type`` or any of its bases.
+
+        Most specific first, and a handler registered twice across the chain
+        runs once.
+
+        All of them, not the nearest ancestor's. Stopping at the first match
+        meant registering a handler on a subclass silently switched off one
+        registered on its base — an audit trail or a metric attached to a
+        marker class would stop firing the moment someone handled one
+        subclass specifically, with nothing to indicate it. Routing already
+        accumulates the same way, so the two now agree.
+        """
+        found: list[HandlerDescriptor] = []
+        seen: set[int] = set()
         for base in message_type.__mro__:
-            found = self._handlers.get(base)
-            if found:
-                return found
-        return ()
+            for descriptor in self._handlers.get(base, ()):
+                if id(descriptor.handler) in seen:
+                    continue
+                seen.add(id(descriptor.handler))
+                found.append(descriptor)
+        return tuple(found)
 
     @override
     def message_types(self) -> tuple[type, ...]:
