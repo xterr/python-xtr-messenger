@@ -24,6 +24,7 @@ from .transport_message_id_stamp import TransportMessageIdStamp
 from .transport_names_stamp import TransportNamesStamp
 
 __all__ = [
+    "DEFAULT_STAMP_TYPES",
     "AckReceiptStamp",
     "BusNameStamp",
     "DelayStamp",
@@ -37,3 +38,20 @@ __all__ = [
     "TransportMessageIdStamp",
     "TransportNamesStamp",
 ]
+
+
+#: The stamps a serializer restores on decode when told nothing else.
+#:
+#: Encoding already writes every sendable stamp; this is the other half, and
+#: leaving it empty meant a producer's stamps were written to the wire and
+#: silently discarded by the consumer. Decoding stays an allow-list — a stamp
+#: names a class this process must import, so an unknown name is dropped
+#: rather than resolved — but the list defaults to what the library ships.
+DEFAULT_STAMP_TYPES: tuple[type[StampInterface], ...] = (
+    BusNameStamp,
+    DelayStamp,
+    ErrorDetailsStamp,
+    RedeliveryStamp,
+    TransportMessageIdStamp,
+    TransportNamesStamp,
+)

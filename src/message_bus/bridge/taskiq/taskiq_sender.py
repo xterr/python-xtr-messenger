@@ -63,6 +63,16 @@ class TaskiqSender(SenderInterface):
         """The queue this sender publishes to, if it pins one."""
         return self._queue
 
+    @property
+    def serializer(self) -> SerializerInterface:
+        """The serializer this sender encodes with.
+
+        Exposed so a deployment can confirm both halves of a transport were
+        built with the same one — they run in different processes, and a
+        producer encoding stamps a consumer will not restore is silent.
+        """
+        return self._serializer
+
     @override
     async def send(self, envelope: Envelope) -> Envelope:
         """Encode, publish, and stamp the envelope with the task id."""

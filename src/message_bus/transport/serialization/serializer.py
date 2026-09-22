@@ -19,7 +19,11 @@ from typing_extensions import override
 from message_bus.envelope import Envelope
 from message_bus.exception import MessageDecodingFailedError, UnknownMessageNameError
 from message_bus.message_registry import name_of, type_for_name
-from message_bus.stamp import NonSendableStampInterface, StampInterface
+from message_bus.stamp import (
+    DEFAULT_STAMP_TYPES,
+    NonSendableStampInterface,
+    StampInterface,
+)
 
 from .codec import default_codecs
 from .encoded_envelope import EncodedEnvelope
@@ -47,21 +51,32 @@ class JsonSerializer(SerializerInterface):
     handles dataclasses, plus pydantic models when pydantic is installed.
     Pass ``codecs`` to take control of the order or to add your own.
 
-    Only stamp types passed to ``stamp_types`` are restored on decode;
-    anything else is dropped rather than guessed at. Stamps inheriting
+    Decoding is an allow-list: a stamp header names a class this process
+    must import, so an unrecognised one is dropped rather than resolved.
+    The list defaults to the stamps the library ships — pass ``stamp_types``
+    to add your own, which you must do for a custom stamp to survive the
+    trip.
+
+    Stamps inheriting
     :class:`~message_bus.stamp.NonSendableStampInterface` never leave the
-    process.
+    process, so they are never written and never restored.
     """
 
     __slots__ = ("_codecs", "_stamp_types")
 
     def __init__(
         self,
-        stamp_types: Iterable[type[StampInterface]] = (),
+        stamp_types: Iterable[type[StampInterface]] | None = None,
         codecs: Sequence[MessageCodecInterface] = (),
     ) -> None:
-        """Restore only ``stamp_types`` on decode; convert messages via ``codecs``."""
-        self._stamp_types = {t.__name__: t for t in stamp_types}
+        """Restore ``stamp_types`` on decode; convert messages via ``codecs``.
+
+        Omitting ``stamp_types`` restores the stamps the library ships. Pass
+        an explicit iterable to widen it with your own, or ``()`` to restore
+        none at all.
+        """
+        restored = DEFAULT_STAMP_TYPES if stamp_types is None else stamp_types
+        self._stamp_types = {t.__name__: t for t in restored}
         self._codecs: tuple[MessageCodecInterface, ...] = tuple(codecs) or default_codecs()
 
     @override

@@ -58,13 +58,28 @@ class DeadLetterMiddleware(TaskiqMiddleware):
         )
 
     def _is_final_attempt(self, message: TaskiqMessage) -> bool:
+        """Report whether this delivery was the last one the ladder allows.
+
+        An unreadable count means *not* final. The sender always sets the
+        label, so its absence says the message reached the queue some other
+        way — and reading that as "attempts exhausted" would dead-letter it
+        on its first failure, turning one unknown into a message nobody
+        retries. Erring towards another delivery is recoverable; erring
+        towards the dead-letter queue is not.
+
+        This is the opposite of the reading
+        :func:`~message_bus.bridge.taskiq.binding.bind_handlers` gives a
+        handler, and deliberately so: there an unknown count is reported high
+        so a handler treats the delivery as its last chance and does not skip
+        cleanup. Both choices pick the outcome that loses nothing.
+        """
         raw = message.labels.get(RETRIES_LABEL)
         if isinstance(raw, bool) or not isinstance(raw, (int, str)):
-            return True
+            return False
         try:
             return int(raw) >= self.max_attempts - 1
         except ValueError:
-            return True
+            return False
 
     def _dead_letter(self, message: TaskiqMessage, exception: BaseException) -> Message:
         broker_message = self.broker.formatter.dumps(message)

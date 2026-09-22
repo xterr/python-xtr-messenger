@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 from .exception import NotConsumableError, UnknownTransportNameError
-from .message_bus_factory import MessageBusFactory
+from .message_bus import MessageBus
+from .middleware import HandleMessageMiddleware
 from .transport.receiver.chained_receiver import ChainedReceiver
 from .transport.receiver.receiver_interface import ReceiverInterface
 from .transport.transport_factory import TransportFactory
@@ -84,10 +85,22 @@ class WorkerFactory:
         return Worker(bus, _receiver_of(factory.create(group)))
 
     def _dispatcher(self) -> MessageBusInterface:
+        """Return the bus a collected message is dispatched through.
+
+        Handling only. An envelope that arrived from a transport carries a
+        :class:`~message_bus.stamp.ReceivedStamp` and is deliberately never
+        routed again, so a worker's bus would build every sender in the
+        configuration and then never use one — on AMQP that is a second
+        connection per worker, opened and idle.
+
+        A handler that publishes does so through the bus it was given, which
+        is the producing one built by
+        :class:`~message_bus.message_bus_factory.MessageBusFactory`. Pass
+        ``bus`` to supply that here instead.
+        """
         if self._bus is not None:
             return self._bus
-        # The composite is itself a factory, so the bus takes it as one.
-        return MessageBusFactory(self._config, [self._transports], self._handlers).bus(handles=True)
+        return MessageBus([HandleMessageMiddleware(self._handlers)])
 
     def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
         transports = self._config.transports

@@ -17,12 +17,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
+from taskiq_aio_pika import AioPikaBroker
 from typing_extensions import override
 
 from message_bus.bridge.taskiq.binding import bind_handlers
 from message_bus.bridge.taskiq.taskiq_sender import TaskiqSender
 from message_bus.bridge.taskiq.taskiq_worker import TaskiqWorker
 from message_bus.exception import MixedDsnError
+from message_bus.transport.serialization import JsonSerializer
 from message_bus.transport.transport_factory_interface import TransportFactoryInterface
 from message_bus.transport.transport_options import reject_unknown_options
 from message_bus.worker_providing_interface import WorkerProvidingInterface
@@ -82,7 +84,7 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         return {
             name: TaskiqSender(
                 broker,
-                serializer=self._serializer,
+                serializer=self._wire(),
                 queue=spec.queue_name if queues else None,
             )
             for name, spec in group.items()
@@ -116,8 +118,21 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         """
         del bus
         broker = self._broker_for(group)
-        _ = bind_handlers(broker, self._handlers, self._serializer)
+        _ = bind_handlers(broker, self._handlers, self._wire())
         return TaskiqWorker(broker)
+
+    def _wire(self) -> SerializerInterface:
+        """Return the serializer both halves of this transport use.
+
+        Producer and consumer are separate processes, so the guarantee that
+        matters is that an un-customised deploy is symmetric by
+        construction: both sides reach this method and get the same
+        configuration. Passing ``serializer`` overrides both at once, never
+        one of them.
+        """
+        if self._serializer is None:
+            self._serializer = JsonSerializer()
+        return self._serializer
 
     def _options_for(self, group: Mapping[str, TransportConfig]) -> AmqpOptions:
         """Read the settings every transport in ``group`` carries.
@@ -137,6 +152,15 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         return AmqpOptions.from_settings(merged, self._options)
 
     def _broker_for(self, group: Mapping[str, TransportConfig]) -> AioPikaBroker:
+        """Return the broker for ``group``'s connection.
+
+        Not shared between groups: the queues a group names are declared on
+        the broker, so a worker serving one queue and a producer publishing
+        to several need brokers that differ in what they declare.
+
+        Raises:
+            MixedDsnError: If the transports do not share one connection.
+        """
         connections = tuple(dict.fromkeys(spec.parsed.connection for spec in group.values()))
         if len(connections) != 1:
             raise MixedDsnError(connections)

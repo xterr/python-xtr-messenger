@@ -40,17 +40,18 @@ class TransportFactory(TransportFactoryInterface):
         TransportFactory([AmqpTransportFactory(serializer=mine)])
     """
 
-    __slots__ = ("_factories",)
+    __slots__ = ("_discovered", "_factories")
 
     def __init__(self, factories: Sequence[TransportFactoryInterface] | None = None) -> None:
         """Delegate to ``factories`` in order, or to discovery when omitted."""
         self._factories = None if factories is None else tuple(factories)
+        self._discovered: dict[str, TransportFactoryInterface] = {}
 
     @override
     def supports(self, dsn: Dsn) -> bool:
         """Report whether any factory behind this one recognises ``dsn``."""
         if self._factories is None:
-            return factory_for(dsn) is not None
+            return self._discover(dsn) is not None
         return any(factory.supports(dsn) for factory in self._factories)
 
     @override
@@ -61,6 +62,22 @@ class TransportFactory(TransportFactoryInterface):
             UnsupportedDsnError: If nothing recognises the scheme.
         """
         return self.serving(group).create(group)
+
+    def _discover(self, dsn: Dsn) -> TransportFactoryInterface | None:
+        """Return the factory serving ``dsn``, discovering it at most once.
+
+        Kept because a factory holds what it builds — the broker for a
+        connection, the recorder behind a name. Discovering a fresh one per
+        call would hand a worker and the bus it dispatches through two
+        objects for the same server, which is the opposite of the sharing a
+        connection is for.
+        """
+        known = self._discovered.get(dsn.scheme)
+        if known is None:
+            known = factory_for(dsn)
+            if known is not None:
+                self._discovered[dsn.scheme] = known
+        return known
 
     def serving(self, group: Mapping[str, TransportConfig]) -> TransportFactoryInterface:
         """Return the factory that recognises ``group``'s DSN.
@@ -74,7 +91,7 @@ class TransportFactory(TransportFactoryInterface):
         name = next(iter(group))
         dsn = group[name].parsed
         if self._factories is None:
-            discovered = factory_for(dsn)
+            discovered = self._discover(dsn)
             if discovered is not None:
                 return discovered
         else:

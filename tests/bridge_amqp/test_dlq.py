@@ -109,7 +109,13 @@ async def test_the_dead_lettered_message_records_why_it_died() -> None:
     assert published.headers["x-death-detail"] == "bad payload"
 
 
-async def test_a_message_that_lost_its_retry_label_is_dead_lettered_rather_than_dropped() -> None:
+async def test_a_message_that_lost_its_retry_label_is_retried_not_dead_lettered() -> None:
+    """Losing the label must not end the ladder on the first failure.
+
+    taskiq reads the same label as ``labels.get("_retries", 0) + 1``, so an
+    absent one is attempt 1 of the ladder and the message is redelivered.
+    Dead-lettering here would move a message nobody had finished trying.
+    """
     channel = FakeChannel()
     middleware = middleware_on(a_broker_with(channel))
     message = a_message(0)
@@ -117,7 +123,7 @@ async def test_a_message_that_lost_its_retry_label_is_dead_lettered_rather_than_
 
     await middleware.on_error(message, a_failure(), RuntimeError("boom"))
 
-    assert len(channel.default_exchange.published) == 1
+    assert channel.default_exchange.published == []
 
 
 async def test_a_broker_without_an_amqp_channel_is_left_alone() -> None:

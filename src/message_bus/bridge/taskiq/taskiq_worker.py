@@ -67,12 +67,17 @@ class TaskiqWorker(WorkerInterface):
     async def run(self) -> None:
         """Consume until :meth:`stop` is called or the task is cancelled.
 
-        Marks the broker as belonging to a worker before starting. That flag
+        Marks the broker as belonging to a worker while running. That flag
         is what stops a publish from this same process opening the connection
         a second time and re-firing the startup events the receiver has
         already run — a duplicate that is invisible until something
         registered twice fires twice.
+
+        The flag is restored on the way out. It lives on the broker, which
+        the producing side may share, so leaving it set would tell every
+        later publish that a worker owns a connection nothing is consuming.
         """
+        claimed = self._broker.is_worker_process
         self._broker.is_worker_process = True
         self._finished = asyncio.Event()
         receiver = Receiver(
@@ -84,6 +89,7 @@ class TaskiqWorker(WorkerInterface):
         try:
             await receiver.listen(self._finished)
         finally:
+            self._broker.is_worker_process = claimed
             self._finished = None
 
     def stop(self) -> None:
