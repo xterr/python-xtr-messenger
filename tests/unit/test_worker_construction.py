@@ -52,8 +52,8 @@ def a_config(dsn: str) -> MessageBusConfig:
 
 
 def test_building_a_worker_is_not_the_transport_factory_s_job() -> None:
-    """Symfony's TransportFactoryInterface has no worker method, and neither
-    does ours — a whole transport is driven by the library's own loop."""
+    """Building a worker is not a transport factory's job: a whole transport
+    is driven by the library's own loop."""
     assert not hasattr(TransportFactoryInterface, "worker")
 
 

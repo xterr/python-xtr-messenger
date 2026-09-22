@@ -1,12 +1,12 @@
 [project]
 name = "xtr-message-bus"
 version = "0.1.0"
-description = "A Symfony Messenger-style message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
+description = "A message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 license-files = ["LICENSE"]
-keywords = ["message-bus", "messenger", "middleware", "envelope", "taskiq", "amqp"]
+keywords = ["message-bus", "message-queue", "middleware", "envelope", "taskiq", "amqp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

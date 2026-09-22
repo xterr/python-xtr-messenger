@@ -20,10 +20,11 @@ class TransportConfig:
     """Configuration for a single named transport.
 
     Adapter settings can be written either in the DSN's query string or in
-    ``options``, the same choice Symfony offers between a DSN and a
-    ``options:`` key. A DSN travels in one environment variable, which suits
-    deployment; ``options`` survives review better once there are more than
-    a couple. Both reach the adapter through :attr:`settings`.
+    ``options``. A DSN travels in one environment variable, which suits
+    deployment; ``options`` survives review better once there are more than a
+    couple, and can be built from code. Both reach the adapter through
+    :attr:`settings`, so a setting can move between them without changing
+    meaning.
 
     Attributes:
         dsn: Selects the adapter and carries its connection details —

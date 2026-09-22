@@ -2,7 +2,7 @@
 
 # xtr-message-bus
 
-**A [Symfony Messenger](https://symfony.com/doc/current/messenger.html)-style message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
+**A message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
 <img alt="python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A5%203.11-3776AB?logo=python&logoColor=white">
 <img alt="core dependencies: 2" src="https://img.shields.io/badge/core%20deps-2-3FB950">
@@ -104,8 +104,9 @@ not change.
 
 ## Configuring transports
 
-Configuration is inert data — the Python reading of Symfony's `framework.messenger` section.
-It builds nothing; a factory does.
+Configuration is inert data: which transports exist and where messages go. It builds nothing —
+a factory does — so it can come from a settings module, an environment variable or a parsed
+file without dragging a broker along.
 
 ```python
 CONFIG = MessageBusConfig(
@@ -290,10 +291,10 @@ bridge/taskiq/      [taskiq]   — broker-agnostic: publish, consume, bind handl
 bridge/amqp/        [amqp]     — RabbitMQ only: connection, retry ladder, dead-lettering
 ```
 
-Everything under `transport/` imports with no extra installed — the same line Symfony draws by
-keeping AMQP in `Bridge/Amqp/` rather than beside the others. Nothing in `bridge/taskiq/` names
-a broker driver, so `[taskiq]` is usable on its own for Redis, NATS or an in-memory broker.
-Tests enforce all three claims.
+Everything under `transport/` imports with no extra installed; a transport needing a driver is
+a bridge, reachable only once its extra is present. Nothing in `bridge/taskiq/` names a broker
+driver either, so `[taskiq]` is usable on its own for Redis, NATS or an in-memory broker. Tests
+enforce all three claims.
 
 ### Writing your own
 
@@ -437,29 +438,6 @@ publishing to AMQP does not fail for an unregistered name — the message is acc
 silently never consumed.
 
 </details>
-
-## Mapping to Symfony Messenger
-
-| Symfony | Here |
-| --- | --- |
-| `MessageBusInterface`, `MessageBus` | `MessageBusInterface`, `MessageBus` |
-| `Envelope`, `StampInterface` | `Envelope`, `StampInterface` |
-| `NonSendableStampInterface` | `NonSendableStampInterface` |
-| `MiddlewareInterface`, `StackInterface` | `MiddlewareInterface`, `StackInterface` |
-| `SenderInterface`, `ReceiverInterface` | same — `get()` is an async iterator |
-| `TransportInterface`, `TransportFactory` | `TransportInterface`, `TransportFactory` |
-| `SendersLocatorInterface` | `SendersLocatorInterface`, `SendersLocator` |
-| `SendMessageMiddleware`, `HandleMessageMiddleware` | same |
-| `#[AsMessage(transport: ...)]` | `@as_message(name=..., transport=...)` |
-| `#[AsMessageHandler]` | `@as_message_handler` |
-| `SerializerInterface` | `SerializerInterface`, `JsonSerializer` |
-| `framework.messenger` config | `MessageBusConfig`, `TransportConfig` |
-| `Worker` | `Worker`, `WorkerInterface` |
-| `messenger:consume <transports>` | `WorkerFactory.worker([...])`, then `await worker.run()` |
-
-`get()` returns an async iterator rather than Symfony's polled `iterable`: Symfony polls
-because PHP has no persistent async runtime, Python does, and cancelling the task is graceful
-shutdown.
 
 ## Layout
 

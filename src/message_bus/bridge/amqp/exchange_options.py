@@ -30,8 +30,9 @@ _EXCHANGE_TYPES: Final = tuple(member.value for member in ExchangeType)
 class ExchangeOptions:
     """The exchange messages are published through.
 
-    Symfony nests these under ``exchange:``; here they are flat and prefixed,
-    because a DSN query string has no nesting.
+    Flat and prefixed rather than nested, because a DSN query string has no
+    nesting and a setting must read the same in either place it can be
+    written.
 
     Attributes:
         name: The exchange name, or ``None`` for taskiq's default.

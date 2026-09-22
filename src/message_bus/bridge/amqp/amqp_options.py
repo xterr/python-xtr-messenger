@@ -35,7 +35,7 @@ _DEFAULT_PREFETCH: Final = 10
 class AmqpOptions:
     """What an ``amqp://`` transport was configured with.
 
-    Grouped the way Symfony groups them, minus the credentials — those
+    Grouped by what they configure. Credentials are absent on purpose: they
     travel in the DSN itself, where a URL already expresses them.
 
     Attributes:

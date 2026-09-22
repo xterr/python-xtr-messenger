@@ -54,7 +54,7 @@ def a_registry(done: list[UUID]) -> HandlersLocator:
 
 
 def test_both_shipped_transports_are_whole_transports() -> None:
-    """Symfony's TransportInterface composes the send and receive halves."""
+    """A whole transport composes the send and receive halves."""
     assert isinstance(InMemoryTransport(), TransportInterface)
     assert isinstance(SyncTransport(HandlersLocator()), TransportInterface)
     assert isinstance(InMemoryTransport(), ReceiverInterface)

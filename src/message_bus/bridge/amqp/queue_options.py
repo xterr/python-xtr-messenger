@@ -32,9 +32,9 @@ _QUEUE_TYPES: Final = tuple(member.value for member in QueueType)
 class QueueOptions:
     """How each queue this transport names is declared.
 
-    Symfony gives these per queue under ``queues:``; here one set applies to
-    every queue on the connection, since transports sharing a DSN share a
-    broker and differ only in which queue they name.
+    One set applies to every queue on the connection: transports sharing a
+    DSN share a broker and differ only in which queue they name, so there is
+    nothing per-queue left to vary.
 
     Attributes:
         type: ``quorum`` replicates across nodes and is taskiq's default;

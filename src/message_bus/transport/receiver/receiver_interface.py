@@ -24,13 +24,11 @@ class ReceiverInterface(Protocol):
     :class:`~message_bus.stamp.ReceivedStamp`, which stops them being routed
     back out — a consumer cannot re-publish what it consumes.
 
-    **Divergence from Symfony.** Symfony's ``get()`` returns an iterable that
-    a worker polls in a loop, because PHP has no persistent async runtime to
-    hold a subscription open. Python does, so :meth:`get` is an async
-    iterator instead: it maps directly onto how brokers actually deliver,
-    cancellation gives graceful shutdown for free, and prefetch stays the
-    broker's business rather than something a poll interval has to
-    approximate.
+    :meth:`get` is an async iterator rather than something a worker polls.
+    That maps onto how brokers actually deliver — they push, and a
+    subscription stays open — so cancelling the task consuming it is a
+    graceful shutdown, and prefetch stays the broker's business rather than
+    something a poll interval has to approximate.
     """
 
     def get(self) -> AsyncIterator[Envelope]:
