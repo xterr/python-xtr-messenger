@@ -60,7 +60,11 @@ def middleware_on(broker: AioPikaBroker) -> DeadLetterMiddleware:
 
 
 def a_failure() -> TaskiqResult[object]:
-    return TaskiqResult[object](is_err=True, return_value=None, execution_time=0.0)
+    # taskiq stubs TaskiqResult's constructor loosely; ty reads the pydantic
+    # BaseModel signature rather than the generic.
+    return TaskiqResult[object](  # ty: ignore[invalid-return-type]
+        is_err=True, return_value=None, execution_time=0.0
+    )
 
 
 @pytest.mark.parametrize("retries", [0, 1])

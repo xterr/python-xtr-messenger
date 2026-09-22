@@ -54,6 +54,7 @@ dev = [
     "anyio>=4.0",
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
+    "ty>=0.0.83",
 ]
 
 [build-system]
@@ -174,6 +175,22 @@ quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+
+# ─────────────────────────────────────────────────────────────────
+# ty — a second opinion on the source
+# ─────────────────────────────────────────────────────────────────
+# Run alongside basedpyright rather than instead of it: the two disagree
+# often enough to be worth both, and ty has already caught a crash
+# basedpyright accepted (reading __name__ off a handler that is an object).
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.rules]
+# Tests monkey-patch third-party constructors to count instantiations and
+# assert on privates; neither has a typed form.
+invalid-assignment = "ignore"
+invalid-argument-type = "ignore"
+unknown-argument = "ignore"
 
 # ─────────────────────────────────────────────────────────────────
 # pytest

@@ -148,7 +148,7 @@ def _decode_stamp_list(
         raise MessageDecodingFailedError("stamp header must hold a JSON list", name)
     decoded: list[StampInterface] = []
     for raw in raw_list:
-        stamp = _convert(stamp_type, cast("JsonValue", raw), name)
+        stamp = _convert(stamp_type, raw, name)
         if not isinstance(stamp, StampInterface):
             raise MessageDecodingFailedError(
                 f"{stamp_type.__name__} did not decode to a stamp", name

@@ -13,6 +13,8 @@ from message_bus.exception import MessageDecodingFailedError
 from .message_codec_interface import MessageCodecInterface
 
 if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
+
     from .message_codec_interface import JsonValue
 
 __all__ = ["DataclassCodec"]
@@ -78,7 +80,9 @@ class DataclassCodec(MessageCodecInterface):
         try:
             if self._forbid_unknown_fields:
                 _ = msgspec.convert(raw, type=self._mirror_of(message_type), strict=True)
-            return cast("object", msgspec.convert(raw, type=message_type, strict=True))
+            # basedpyright sees msgspec.convert as returning Any and wants this
+            # narrowed; ty resolves it precisely and calls the cast redundant.
+            return cast("object", msgspec.convert(raw, type=message_type, strict=True))  # ty: ignore[redundant-cast]
         except (msgspec.ValidationError, TypeError, NotImplementedError) as exc:
             raise MessageDecodingFailedError(str(exc), name) from exc
 
@@ -102,7 +106,7 @@ def _mirror(message_type: type, seen: dict[type, type[msgspec.Struct]]) -> type[
         return placeholder
     hints = get_type_hints(message_type)
     fields: list[object] = []
-    for field in dataclasses.fields(message_type):
+    for field in dataclasses.fields(cast("type[DataclassInstance]", message_type)):
         annotation = cast("type", hints[field.name])
         if dataclasses.is_dataclass(annotation):
             annotation = _mirror(annotation, seen)

@@ -50,14 +50,33 @@ class HandlerDescriptor:
 
 
 def _name_of(handler: Handler) -> str:
-    return getattr(handler, "__qualname__", repr(handler))
+    named = getattr(handler, "__qualname__", None)
+    return named if isinstance(named, str) else type(handler).__qualname__
+
+
+def _annotated(handler: Handler) -> object:
+    """Return the object carrying ``handler``'s annotations.
+
+    A handler need not be a function. A dependency-injection container builds
+    objects, so a handler is often an instance whose ``__call__`` does the
+    work — and annotations live on that method, not on the instance, where
+    :func:`typing.get_type_hints` would find nothing and every such handler
+    would be rejected for not annotating a parameter it had annotated.
+    """
+    if inspect.isfunction(handler) or inspect.ismethod(handler):
+        return handler
+    call = getattr(type(handler), "__call__", None)  # noqa: B004
+    return call if call is not None else handler
 
 
 def _wants_envelope(handler: Handler) -> bool:
     parameters = tuple(inspect.signature(handler).parameters)
     if len(parameters) < _ENVELOPE_ARITY:
         return False
-    hints = get_type_hints(handler)
+    try:
+        hints = get_type_hints(_annotated(handler))
+    except (NameError, TypeError):
+        hints = {}
     if len(parameters) > _ENVELOPE_ARITY or hints.get(parameters[1]) is not Envelope:
         raise HandlerSignatureError(_name_of(handler), parameters)
     return True

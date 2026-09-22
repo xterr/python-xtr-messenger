@@ -5,6 +5,7 @@ from __future__ import annotations
 import gc
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import final
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,7 +14,11 @@ from taskiq_aio_pika import AioPikaBroker
 
 from message_bus import (
     Envelope,
+    HandleMessageMiddleware,
+    HandlerSignatureError,
+    HandlersLocator,
     JsonSerializer,
+    MessageBus,
     MessageBusConfig,
     TransportConfig,
     WorkerFactory,
@@ -175,3 +180,56 @@ def test_a_worker_still_declares_only_the_queues_it_was_given() -> None:
     broker = worker.broker
     assert isinstance(broker, AioPikaBroker)
     assert list(declared_queues(broker)) == ["jobs_low"]
+
+
+class DocumentService:
+    """Something a container would build and inject."""
+
+    def __init__(self) -> None:
+        self.ingested: list[UUID] = []
+
+
+@final
+class InjectedHandler:
+    """A handler that is an object, because its dependencies came from a container."""
+
+    def __init__(self, documents: DocumentService) -> None:
+        self._documents = documents
+
+    async def __call__(self, message: Audited, envelope: Envelope) -> None:
+        del envelope
+        self._documents.ingested.append(message.identifier)
+
+
+def test_a_handler_built_by_a_container_may_still_ask_for_the_envelope() -> None:
+    """Annotations live on __call__, not on the instance.
+
+    Reading them off the instance found nothing, so every container-built
+    handler that wanted the envelope was rejected for failing to annotate a
+    parameter it had annotated.
+    """
+    registry = HandlersLocator()
+
+    descriptor = registry.register(Audited, InjectedHandler(DocumentService()))
+
+    assert descriptor.wants_envelope is True
+    assert descriptor.name == "InjectedHandler"
+
+
+async def test_a_container_built_handler_runs_on_the_bus() -> None:
+    documents = DocumentService()
+    registry = HandlersLocator()
+    _ = registry.register(Audited, InjectedHandler(documents))
+    identifier = uuid4()
+
+    _ = await MessageBus([HandleMessageMiddleware(registry)]).dispatch(Audited(identifier))
+
+    assert documents.ingested == [identifier]
+
+
+def test_a_signature_the_bus_cannot_call_is_still_refused() -> None:
+    class Wrong:
+        async def __call__(self, message: Audited, extra: str) -> None: ...
+
+    with pytest.raises(HandlerSignatureError, match="Wrong"):
+        _ = HandlersLocator().register(Audited, Wrong())

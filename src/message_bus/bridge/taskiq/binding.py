@@ -83,9 +83,12 @@ def _task_for(
     async def run(body: str, context: Context = _CONTEXT) -> None:
         await descriptor.invoke(_rebuild(body, context, task_name, serializer))
 
-    run.__name__ = descriptor.handler.__name__
-    run.__qualname__ = descriptor.handler.__qualname__
-    run.__doc__ = descriptor.handler.__doc__
+    # Named from the descriptor, not the handler: a handler built by a
+    # dependency-injection container is an object, and an object has no
+    # __name__ — reading one off it crashed at worker startup.
+    run.__name__ = descriptor.name.rpartition(".")[2]
+    run.__qualname__ = descriptor.name
+    run.__doc__ = getattr(descriptor.handler, "__doc__", None)
     return run
 
 
