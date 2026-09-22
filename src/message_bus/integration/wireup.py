@@ -1,176 +1,191 @@
-"""Everything wired, for applications using a wireup container.
+"""Container-provided dependencies for handlers, via wireup.
+
+Install with the ``wireup`` extra. Two things to write. A handler stays a
+plain function declared the usual way, with anything it needs beyond the
+message as a parameter the container fills::
+
+    from wireup import Injected
+
+    from message_bus import as_message_handler
+    from message_bus.integration.wireup import injected
+
+
+    @as_message_handler(IngestDocument)
+    @injected
+    async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
+        await db.record(message.document_id)
+
+And the wiring, where the container is built::
+
+    container = wireup.create_async_container(
+        injectables=[app.services, *make_injectables(CONFIG, transports=["jobs"])],
+    )
+
+    worker = await container.get(WorkerInterface)
+    await worker.run()
+
+That is the whole surface. :func:`injected` runs at import, where it can
+only hide the parameters — the container does not exist yet, and the bus
+would otherwise reject a handler for declaring a parameter it cannot supply.
+:func:`make_injectables` runs where the container does exist, and fills them.
+
+wireup opens a scope around each call on its own, so a dependency declared
+``lifetime="scoped"`` is built once per message and released when that
+message finishes. A singleton stays shared by every message. Scoping
+describes what a message should not share, not what a handler must be.
 
 .. note::
    Every annotation a container reads is imported at runtime, not deferred
    into a ``TYPE_CHECKING`` block. wireup resolves a factory's parameters and
    return type when the container is built, and a deferred name is not there
    to resolve.
-
-
-Install with the ``wireup`` extra. One call registers the whole graph::
-
-    import wireup
-    from message_bus.integration.wireup import make_injectables
-
-    container = wireup.create_async_container(
-        injectables=[
-            app.handlers,
-            *make_injectables(CONFIG, handlers={IngestDocument: IngestHandler}),
-        ],
-    )
-
-    bus = await container.get(MessageBusInterface)
-
-Handlers are **resolved per message, inside a scope**. A handler declared
-``lifetime="scoped"`` — or holding anything that is — gets a fresh instance
-for each message, and whatever that instance opened is released when the
-message finishes. A database session per message costs nothing to arrange.
-
-Declaring handlers explicitly, rather than with
-:func:`~message_bus.decorator.as_message_handler`, is the point: the
-decorator writes to a process-wide registry at import time, which a
-container cannot reach into. Mixing the two silently declares handlers into
-one registry and resolves them from another.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast, final
+from collections.abc import Sequence
+from typing import TypeVar, final
 
 import wireup
 from typing_extensions import override
 from wireup import AsyncContainer
+from wireup.ioc.util import hide_annotated_names
 
-from message_bus.exception import UnresolvableHandlerError
-from message_bus.handler import HandlerDescriptor, HandlersLocatorInterface
+from message_bus.handler import HandlerDescriptor, HandlersLocatorInterface, default_registry
+from message_bus.message_bus_config import MessageBusConfig
 from message_bus.message_bus_factory import MessageBusFactory
 from message_bus.message_bus_interface import MessageBusInterface
+from message_bus.transport.transport_factory_interface import TransportFactoryInterface
 from message_bus.worker_factory import WorkerFactory
 from message_bus.worker_interface import WorkerInterface
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+HandlerT = TypeVar("HandlerT")
 
-    from message_bus.envelope import Envelope
-    from message_bus.handler import Handler
-    from message_bus.message_bus_config import MessageBusConfig
-    from message_bus.transport.transport_factory_interface import TransportFactoryInterface
+__all__ = ["injected", "make_injectables"]
 
-__all__ = ["ContainerHandlersLocator", "make_injectables"]
+
+def injected(handler: HandlerT) -> HandlerT:
+    """Declare that ``handler`` takes parameters the container fills.
+
+    Hides the parameters annotated ``Injected[T]`` from anything inspecting
+    the handler afterwards, which is what lets the bus keep requiring a
+    handler to take the message and at most an envelope.
+
+    Apply it *under* :func:`~message_bus.decorator.as_message_handler`, so
+    the shape is already hidden by the time the handler is registered.
+    Nothing is resolved here: the container does not exist yet, and
+    :func:`make_injectables` supplies it later.
+    """
+    hide_annotated_names(handler)  # pyright: ignore[reportArgumentType]
+    return handler
 
 
 def make_injectables(
-    config: MessageBusConfig,
+    config: MessageBusConfig | None = None,
     *,
-    handlers: Mapping[type, type] | None = None,
     transports: Sequence[str] = (),
     factories: Sequence[TransportFactoryInterface] | None = None,
+    handlers: HandlersLocatorInterface | None = None,
 ) -> list[object]:
-    """Return everything a container needs to provide a bus and a worker.
+    """Return what a container needs to provide a bus and a worker.
+
+    A container built with these hands out a ``MessageBusInterface``, and a
+    ``WorkerInterface`` when ``transports`` names any. Handlers declared with
+    :func:`injected` have their parameters filled from the same container.
+
+    **The configuration goes in the container either way.** Pass it here and
+    it is registered for you; leave it out and provide it yourself, which is
+    what you want when it is read from somewhere::
+
+        @injectable
+        def bus_config(url: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConfig:
+            return MessageBusConfig(transports={"jobs": TransportConfig(url)})
+
+    Either way anything else can ask for a ``MessageBusConfig`` and get the
+    same one, and a test can override it like any other injectable.
 
     Args:
-        config: The transports that exist and where messages go.
-        handlers: Message type to the class that handles it. Each class is
-            resolved from the container when a message arrives, so it may
-            take dependencies of its own.
-        transports: The transports a worker should consume. Omit in a
-            publishing process, and ``WorkerInterface`` is simply not
-            registered.
-        factories: Transport factories, if discovery is not wanted or a
+        config: The transports that exist and where messages go. Omit to
+            provide it as an injectable of your own.
+        transports: What a worker should consume. Omit in a publishing
+            process and no worker is registered.
+        factories: Transport factories, when discovery is not wanted or a
             factory needs a collaborator it cannot be discovered with.
+        handlers: A locator, if not the process-wide one that
+            :func:`~message_bus.decorator.as_message_handler` fills.
 
     Returns:
         Injectables to spread into ``create_async_container(injectables=...)``.
     """
-    bound = dict(handlers or {})
-    given = list(factories) if factories is not None else None
 
-    def handlers_locator(container: AsyncContainer) -> HandlersLocatorInterface:
-        return ContainerHandlersLocator(container, bound)
+    def filled(container: AsyncContainer) -> HandlersLocatorInterface:
+        return _FilledHandlers(container, handlers or default_registry())
 
-    def message_bus(registry: HandlersLocatorInterface) -> MessageBusInterface:
-        return MessageBusFactory(config, given, registry).bus()
+    def message_bus(config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
+        return MessageBusFactory(config, factories, filled(container)).bus()
 
-    def worker(registry: HandlersLocatorInterface) -> WorkerInterface:
-        return WorkerFactory(config, given, registry).worker(transports)
+    def worker(config: MessageBusConfig, container: AsyncContainer) -> WorkerInterface:
+        return WorkerFactory(config, factories, filled(container)).worker(transports)
 
-    registered: list[object] = [
-        wireup.injectable(handlers_locator),
-        wireup.injectable(message_bus),
-    ]
+    registered: list[object] = [wireup.injectable(message_bus)]
+    if config is not None:
+        registered.append(wireup.instance(config, as_type=MessageBusConfig))
     if transports:
         registered.append(wireup.injectable(worker))
     return registered
 
 
 @final
-class ContainerHandlersLocator(HandlersLocatorInterface):
-    """Looks handlers up in a container instead of holding them.
+class _FilledHandlers(HandlersLocatorInterface):
+    """Another locator, with the container filling in handler parameters.
 
-    Registration is a mapping of message type to handler *class*. Nothing is
-    built until a message of that type arrives, and it is built inside a
-    scope that closes when the message is finished with — so a handler, or
-    anything it depends on, can be scoped to one message.
+    A decorator rather than a replacement: declaration stays where it was,
+    and a handler that asks the container for nothing passes through
+    untouched.
     """
 
-    __slots__ = ("_bound", "_container")
+    __slots__ = ("_container", "_filled", "_inner")
 
-    def __init__(self, container: AsyncContainer, bound: Mapping[type, type]) -> None:
-        """Resolve the classes in ``bound`` from ``container``, per message."""
+    def __init__(self, container: AsyncContainer, inner: HandlersLocatorInterface) -> None:
+        """Fill handlers from ``inner`` using ``container``."""
         self._container = container
-        self._bound = dict(bound)
+        self._inner = inner
+        self._filled: dict[int, HandlerDescriptor] = {}
 
     @override
     def register(
         self,
         message_type: type,
-        handler: Handler,
+        handler: object,
         name: str | None = None,
     ) -> HandlerDescriptor:
-        """Bind an already-built ``handler``, bypassing the container.
-
-        For a handler that needs nothing injected, or one built by hand.
-        """
-        del name
-        descriptor = HandlerDescriptor.of(handler)
-        self._bound[message_type] = type(handler)
-        return descriptor
+        """Register on the wrapped locator."""
+        return self._inner.register(message_type, handler, name)  # pyright: ignore[reportArgumentType]
 
     @override
     def handlers_for(self, message_type: type) -> tuple[HandlerDescriptor, ...]:
-        """Return a descriptor per bound class, most specific first."""
-        found: list[HandlerDescriptor] = []
-        seen: set[type] = set()
-        for base in message_type.__mro__:
-            handler_type = self._bound.get(base)
-            if handler_type is None or handler_type in seen:
-                continue
-            seen.add(handler_type)
-            found.append(self._descriptor_for(handler_type))
-        return tuple(found)
+        """Return the wrapped locator's handlers, each able to be filled."""
+        return tuple(self._fill(d) for d in self._inner.handlers_for(message_type))
 
     @override
     def message_types(self) -> tuple[type, ...]:
-        """Return every message type with a handler bound."""
-        return tuple(self._bound)
+        """Return every message type the wrapped locator knows."""
+        return self._inner.message_types()
 
     @override
     def bindings(self) -> tuple[tuple[type, HandlerDescriptor], ...]:
-        """Return every ``(message_type, handler)`` pair, for wiring."""
-        return tuple(
-            (message_type, self._descriptor_for(handler_type))
-            for message_type, handler_type in self._bound.items()
+        """Return every ``(message_type, handler)`` pair, filled."""
+        return tuple((t, self._fill(d)) for t, d in self._inner.bindings())
+
+    def _fill(self, descriptor: HandlerDescriptor) -> HandlerDescriptor:
+        known = self._filled.get(id(descriptor.handler))
+        if known is not None:
+            return known
+        fill = wireup.inject_from_container(self._container)
+        made = HandlerDescriptor(
+            handler=fill(descriptor.handler),
+            name=descriptor.name,
+            wants_envelope=descriptor.wants_envelope,
         )
-
-    def _descriptor_for(self, handler_type: type) -> HandlerDescriptor:
-        async def resolve_and_call(message: object, envelope: Envelope | None = None) -> None:
-            async with self._container.enter_scope() as scope:
-                # basedpyright reads scope.get as returning Any and wants this
-                # narrowed; ty resolves it and calls the cast redundant.
-                built = cast("object", await scope.get(handler_type))  # ty: ignore[redundant-cast]
-                if built is None:
-                    raise UnresolvableHandlerError(handler_type)
-                handler = cast("Handler", built)
-                await (handler(message) if envelope is None else handler(message, envelope))
-
-        return HandlerDescriptor.of_type(handler_type, resolve_and_call)
+        self._filled[id(descriptor.handler)] = made
+        return made

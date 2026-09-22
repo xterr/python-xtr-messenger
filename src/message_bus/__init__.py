@@ -24,7 +24,6 @@ from .exception import (
     UnknownTransportError,
     UnknownTransportNameError,
     UnknownTransportOptionError,
-    UnresolvableHandlerError,
 )
 from .handler import (
     Handler,
@@ -147,7 +146,6 @@ __all__ = [
     "UnknownTransportError",
     "UnknownTransportNameError",
     "UnknownTransportOptionError",
-    "UnresolvableHandlerError",
     "UnsupportedDsnError",
     "Worker",
     "WorkerFactory",

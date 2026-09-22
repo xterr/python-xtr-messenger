@@ -332,48 +332,28 @@ transports should not: a whole transport is driven by the library's `Worker`.
 
 ## Wiring with a container
 
-Handlers usually need things — a database session, a client, a unit of work. Every
-collaborator here is a constructor argument and every contract is a `@runtime_checkable`
-Protocol, so a container can own the whole graph. Nothing requires one.
+Handlers usually need things — a database session, a client, a unit of work. Every collaborator
+here is a constructor argument and every contract is a `@runtime_checkable` Protocol, so a
+container can own the whole graph. Nothing requires one.
 
-With the `wireup` extra, one call registers everything:
+With the `wireup` extra there are two things to write. A handler stays a plain function declared
+the usual way, and anything it needs beyond the message is a parameter the container fills:
 
 ```python
-# app/bus.py
-from collections.abc import AsyncIterator
+# app/handlers.py
+from wireup import Injected
 
-from wireup import injectable
-
-from message_bus import MessageBusConfig, TransportConfig
-from message_bus.integration.wireup import make_injectables
+from message_bus import as_message_handler
+from message_bus.integration.wireup import injected
 
 
-@injectable(lifetime="scoped")
-async def session(pool: Pool) -> AsyncIterator[Session]:
-    async with pool.begin() as opened:
-        yield opened
-
-
-@injectable(lifetime="scoped")
-class IngestHandler:
-    def __init__(self, db: Session) -> None:      # injected, per message
-        self._db = db
-
-    async def __call__(self, message: IngestDocument) -> None:
-        await self._db.record(message.document_id)
-
-
-CONFIG = MessageBusConfig(
-    transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
-    routing={IngestDocument: "jobs"},
-)
-
-INJECTABLES = make_injectables(
-    CONFIG,
-    handlers={IngestDocument: IngestHandler},
-    transports=["jobs"],          # omit in a publishing process
-)
+@as_message_handler(IngestDocument)
+@injected
+async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
+    await db.record(message.document_id)
 ```
+
+And the wiring, where the container is built:
 
 ```python
 # app/worker.py
@@ -381,12 +361,20 @@ import asyncio
 
 import wireup
 
-from app import bus
-from message_bus import WorkerInterface
+from app import handlers, services
+from message_bus import MessageBusConfig, TransportConfig, WorkerInterface
+from message_bus.integration.wireup import make_injectables
+
+CONFIG = MessageBusConfig(
+    transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
+    routing={IngestDocument: "jobs"},
+)
 
 
 async def main() -> None:
-    container = wireup.create_async_container(injectables=[bus, *bus.INJECTABLES])
+    container = wireup.create_async_container(
+        injectables=[services, handlers, *make_injectables(CONFIG, transports=["jobs"])],
+    )
     try:
         worker = await container.get(WorkerInterface)
         await worker.run()
@@ -397,36 +385,47 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-A publishing process asks for `MessageBusInterface` instead and gets a bus wired to the same
-configuration.
+A publishing process asks for `MessageBusInterface` instead, and omits `transports` — then no
+worker is registered.
 
-**Handlers are built per message, inside a scope.** A handler declared `lifetime="scoped"` — or
-holding anything that is — gets a fresh instance for every message, and whatever it opened is
-released when that message finishes. The session above is a real transaction per message, and
-the generator's `finally` runs whether the handler succeeded or raised.
+`injected` runs at import, where it can only hide the injected parameters: the container does
+not exist yet, and the bus would otherwise reject a handler for declaring a parameter it cannot
+supply. `make_injectables` runs where the container does exist, and fills them. That is the
+whole surface.
+
+**A scoped dependency is one per message.** wireup opens a scope around each handler call on its
+own, so a `lifetime="scoped"` session is built when the message arrives and released when it
+finishes — including on failure. A singleton stays shared by every message; scoping describes
+what a message should not share, not what a handler must be.
+
+### Where the configuration goes
+
+In the container, either way. Hand it to `make_injectables` and it is registered for you, or
+provide it yourself when it is read from somewhere:
+
+```python
+@injectable
+def bus_config(url: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConfig:
+    return MessageBusConfig(transports={"jobs": TransportConfig(url)})
+
+
+INJECTABLES = make_injectables(transports=["jobs"])   # no config argument
+```
+
+Either way `container.get(MessageBusConfig)` returns it, anything else can ask for the same one,
+and a test overrides it like any other injectable.
 
 <details>
-<summary><b>Three things to know</b></summary>
+<summary><b>Supplying a factory that needs a collaborator</b></summary>
 
-**Do not mix `@as_message_handler` with the container.** The decorator writes to a process-wide
-registry at import time, which a container cannot reach into. Declaring into one registry and
-resolving from another fails silently — nothing handles the message, and nothing says so. Under
-a container, bind classes in `handlers={...}` and skip the decorator.
-
-**A handler's shape is checked while wiring**, from the class, so one the bus cannot call is
-rejected before any message arrives — not on the first delivery in production.
-
-**A class bound but never registered as an injectable cannot be caught by wireup's validation.**
-The locator resolves by class when a message arrives, which is runtime behaviour rather than a
-graph edge. It surfaces per message as a rejection carrying the reason, because the worker
-refuses to die on one message.
+A discovered transport factory is built with no arguments, so one needing a serializer or a
+private registry has to be constructed by you:
 
 ```python
 INJECTABLES = make_injectables(
     CONFIG,
-    handlers={IngestDocument: IngestHandler},
     transports=["jobs"],
-    factories=[AmqpTransportFactory(serializer=mine)],   # a factory needing a collaborator
+    factories=[AmqpTransportFactory(serializer=mine)],
 )
 ```
 

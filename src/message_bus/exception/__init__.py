@@ -19,7 +19,6 @@ from .unknown_message_name_error import UnknownMessageNameError
 from .unknown_transport_error import UnknownTransportError
 from .unknown_transport_name_error import UnknownTransportNameError
 from .unknown_transport_option_error import UnknownTransportOptionError
-from .unresolvable_handler_error import UnresolvableHandlerError
 from .unsupported_dsn_error import UnsupportedDsnError
 
 __all__ = [
@@ -36,6 +35,5 @@ __all__ = [
     "UnknownTransportError",
     "UnknownTransportNameError",
     "UnknownTransportOptionError",
-    "UnresolvableHandlerError",
     "UnsupportedDsnError",
 ]
