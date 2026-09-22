@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.omo
+.opencode
+.idea
+
+# Virtual environments
+.venv
+
+# Agent scratch space
+.tmp/
+.ruff_cache/

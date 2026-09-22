@@ -1,0 +1,72 @@
+"""Broker construction and connection lifecycle.
+
+Constructing a broker performs no I/O — a connection is only opened by
+``startup()``. That is why an application can safely build its broker at
+module level, which is also what the taskiq worker CLI needs when it
+imports a ``module:attribute`` path.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import anyio
+
+from message_bus.exception import MissingTaskRouteError
+from message_bus.message_registry import name_of
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from taskiq import AsyncBroker
+
+__all__ = [
+    "MissingTaskRouteError",
+    "assert_routes_registered",
+    "ensure_started",
+]
+
+_started: set[int] = set()
+_start_lock = anyio.Lock()
+
+
+async def ensure_started(broker: AsyncBroker) -> None:
+    """Open the broker's connection once, for publishing.
+
+    Publishing from a process that never called ``startup()`` fails, so a
+    producer has to open the connection itself. Three things matter here:
+
+    * In a worker the receiver has already started the broker. Starting it
+      again re-fires the worker startup events, duplicating whatever they
+      set up, so that check comes first.
+    * The flag is per broker instance, so an application with two brokers
+      starts each of them.
+    * The lock makes concurrent first publishes safe.
+    """
+    if broker.is_worker_process or id(broker) in _started:
+        return
+    async with _start_lock:
+        if id(broker) in _started:
+            return
+        await broker.startup()
+        _started.add(id(broker))
+
+
+def assert_routes_registered(broker: AsyncBroker, message_types: Iterable[type]) -> None:
+    """Fail unless every message type has a task registered under its name.
+
+    Call this at worker startup. Without it, a handler module that was never
+    imported shows up as messages quietly accumulating and never running.
+
+    Raises:
+        MissingTaskRouteError: If any message type has no matching task.
+    """
+    registered = tuple(broker.get_all_tasks())
+    missing = tuple(name for name in (name_of(t) for t in message_types) if name not in registered)
+    if missing:
+        raise MissingTaskRouteError(missing, registered)
+
+
+def forget_started(broker: AsyncBroker) -> None:
+    """Drop the started flag for ``broker`` — for tests."""
+    _started.discard(id(broker))

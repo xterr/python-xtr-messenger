@@ -1,0 +1,196 @@
+[project]
+name = "xtr-message-bus"
+version = "0.1.0"
+description = "A Symfony Messenger-style message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+keywords = ["message-bus", "messenger", "middleware", "envelope", "taskiq", "amqp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = [
+    "msgspec>=0.18",
+    "typing-extensions>=4.4",
+]
+
+[project.optional-dependencies]
+pydantic = [
+    "pydantic>=2.0",
+]
+taskiq = [
+    "taskiq>=0.12.4",
+    "anyio>=4.0",
+    "typing-extensions>=4.4",
+]
+amqp = [
+    "taskiq>=0.12.4",
+    "taskiq-aio-pika>=0.6.0",
+    "anyio>=4.0",
+    "typing-extensions>=4.4",
+]
+
+# Transports advertise themselves here, keyed by the DSN scheme they serve so
+# only the matching one is ever imported. A third-party distribution adds its
+# own by declaring the same group; nothing in this package needs to change.
+[project.entry-points."message_bus.transport_factories"]
+sync = "message_bus.transport.sync:SyncTransportFactory"
+in-memory = "message_bus.transport.in_memory:InMemoryTransportFactory"
+amqp = "message_bus.bridge.amqp:AmqpTransportFactory"
+amqps = "message_bus.bridge.amqp:AmqpTransportFactory"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.21",
+    "ruff>=0.8",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "anyio>=4.0",
+    "taskiq>=0.12.4",
+    "taskiq-aio-pika>=0.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/message_bus"]
+
+# ─────────────────────────────────────────────────────────────────
+# basedpyright — typeCheckingMode = "all" sets every report flag to error
+# ─────────────────────────────────────────────────────────────────
+[tool.basedpyright]
+typeCheckingMode = "all"
+pythonVersion = "3.11"
+pythonPlatform = "All"
+include = ["src", "tests"]
+exclude = ["**/__pycache__", "**/.venv", "**/build", "**/dist", ".tmp"]
+
+reportUnusedCallResult = "warning"
+reportUnnecessaryTypeIgnoreComment = "error"
+reportUnusedVariable = "error"
+reportMissingParameterType = "error"
+reportPrivateUsage = "error"
+
+
+# MiddlewareInterface and StackInterface describe each other: a middleware is
+# handed a stack, and a stack yields a middleware. The imports are
+# TYPE_CHECKING-only, so no cycle exists at runtime — only in the static graph.
+[[tool.basedpyright.executionEnvironments]]
+root = "src/message_bus/middleware"
+reportImportCycles = "none"
+
+# taskiq exposes no public accessor for a broker's declared queues.
+# declared_queues() wraps that gap in one place so nothing else has to.
+[[tool.basedpyright.executionEnvironments]]
+root = "src/message_bus/bridge/amqp/amqp_broker.py"
+reportPrivateUsage = "none"
+
+# codec.py is the runtime-reflection boundary (json.loads, getattr, isinstance
+# on object). Narrowing `object` to a container always yields `list[Unknown]`,
+# which no annotation overrides. Scoped here only; every other module keeps them.
+[[tool.basedpyright.executionEnvironments]]
+root = "src/message_bus/transport/serialization/json_value.py"
+reportAny = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+
+# defstruct's field tuples are typed loosely in msgspec's stubs, and the
+# annotations feeding them come from get_type_hints, which returns Any.
+# Scoped here only; every other module keeps these on.
+[[tool.basedpyright.executionEnvironments]]
+root = "src/message_bus/transport/serialization/codec/dataclass_codec.py"
+reportUnknownArgumentType = "none"
+reportAny = "none"
+
+# ─────────────────────────────────────────────────────────────────
+# ruff — select = ["ALL"], minimal justified ignores
+# ─────────────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Formatter conflicts (ruff documents these)
+    "COM812",
+    "ISC001",
+    # Mutually-exclusive docstring conventions; keep the modern one
+    "D203",
+    "D213",
+    # Project-specific noise
+    "CPY001",
+    "FBT001",
+    "FBT002",
+    "TD002",
+    "TD003",
+    "FIX002",
+    # Exceptions compose their own messages from typed fields; the string at a
+    # raise site is a `reason` data field. See message_bus/exception.py.
+    "TRY003",
+    "EM101",
+    "EM102",
+]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+# taskiq resolves task annotations at runtime, so `Context` must be a real
+# import here, not a TYPE_CHECKING one.
+"src/message_bus/taskiq/handler.py" = ["TC001", "TC002", "TC003"]
+"tests/**/*.py" = [
+    "S101",    # assert is the point of pytest
+    "S603",    # a fresh interpreter is the only way to assert a module was never imported
+    "ARG",     # fixtures look unused
+    "PLR2004", # magic numbers in test data
+    "SLF001",  # tests reach into privates
+    "D",       # test names are the docs
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+# Without this, isort classifies the broker libraries as first-party.
+[tool.ruff.lint.isort]
+known-third-party = ["taskiq", "taskiq_aio_pika", "aio_pika"]
+
+# Message dataclasses are introspected at runtime (get_type_hints), so their
+# field imports must stay out of TYPE_CHECKING blocks.
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-decorators = ["dataclasses.dataclass"]
+
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+# ─────────────────────────────────────────────────────────────────
+# pytest
+# ─────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["src"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

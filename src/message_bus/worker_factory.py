@@ -1,0 +1,110 @@
+"""Building what a worker process runs."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, final
+
+from .exception import NotConsumableError, UnknownTransportNameError
+from .message_bus_factory import MessageBusFactory
+from .transport.receiver.chained_receiver import ChainedReceiver
+from .transport.receiver.receiver_interface import ReceiverInterface
+from .transport.transport_factory import TransportFactory
+from .worker import Worker
+from .worker_providing_interface import WorkerProvidingInterface
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
+    from .handler import HandlersLocatorInterface
+    from .message_bus_config import MessageBusConfig
+    from .message_bus_interface import MessageBusInterface
+    from .transport.sender import SenderInterface
+    from .transport.transport_config import TransportConfig
+    from .transport.transport_factory_interface import TransportFactoryInterface
+    from .worker_interface import WorkerInterface
+
+__all__ = ["WorkerFactory"]
+
+
+@final
+class WorkerFactory:
+    """Builds what a worker process runs.
+
+    One worker serves the transports it names and nothing else, so a
+    deployment can run a process per queue. The result is ready to run: the
+    handlers declared with
+    :func:`~message_bus.decorator.as_message_handler` are already
+    reachable from the bus it dispatches through.
+
+    What comes back is a :class:`~message_bus.worker_interface.WorkerInterface`, never
+    the broker underneath. That is what keeps the broker replaceable: an
+    entrypoint says ``await worker.run()`` and never learns whether it got
+    the library's own receive loop or one a broker library brought with it.
+    """
+
+    __slots__ = ("_bus", "_config", "_handlers", "_transports")
+
+    def __init__(
+        self,
+        config: MessageBusConfig,
+        factories: Sequence[TransportFactoryInterface] | None = None,
+        handlers: HandlersLocatorInterface | None = None,
+        bus: MessageBusInterface | None = None,
+    ) -> None:
+        """Build from ``config``; ``bus`` overrides the one built for handling.
+
+        ``handlers`` configures the bus this worker dispatches through. It
+        does **not** reach transport factories, which discovery builds with
+        no arguments — an adapter that registers handlers with the broker
+        itself, as the AMQP one does, will use the process-wide registry
+        regardless. Give a private registry to the factory instead::
+
+            WorkerFactory(config, [AmqpTransportFactory(handlers=private)])
+        """
+        self._config = config
+        self._transports = TransportFactory(factories)
+        self._handlers = handlers
+        self._bus = bus
+
+    def worker(self, names: Sequence[str]) -> WorkerInterface:
+        """Build the worker for exactly the named transports.
+
+        Import the modules that declare your handlers first — a handler that
+        has not been declared cannot be found.
+
+        Raises:
+            UnknownTransportNameError: If a name is not configured.
+            UnsupportedDsnError: If no factory recognises their DSN.
+        """
+        group = self._select(names)
+        factory = self._transports.serving(group)
+        bus = self._dispatcher()
+        if isinstance(factory, WorkerProvidingInterface):
+            return factory.worker(group, bus)
+        return Worker(bus, _receiver_of(factory.create(group)))
+
+    def _dispatcher(self) -> MessageBusInterface:
+        if self._bus is not None:
+            return self._bus
+        # The composite is itself a factory, so the bus takes it as one.
+        return MessageBusFactory(self._config, [self._transports], self._handlers).bus(handles=True)
+
+    def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
+        transports = self._config.transports
+        missing = tuple(name for name in names if name not in transports)
+        if missing:
+            raise UnknownTransportNameError(missing, tuple(transports))
+        return {name: transports[name] for name in names}
+
+
+def _receiver_of(built: Mapping[str, SenderInterface]) -> ReceiverInterface:
+    """Return the receive half of what a factory built.
+
+    Raises:
+        NotConsumableError: If a transport sends but cannot be consumed,
+            which means its adapter should have provided a worker instead.
+    """
+    receivers = [made for made in built.values() if isinstance(made, ReceiverInterface)]
+    if len(receivers) != len(built):
+        raise NotConsumableError(tuple(built), "transport")
+    return receivers[0] if len(receivers) == 1 else ChainedReceiver(receivers)
