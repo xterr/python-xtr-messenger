@@ -6,12 +6,14 @@ import sys
 
 import pytest
 
+import message_bus
 from message_bus import (
     Dsn,
     MessageBusConfig,
     MessageBusFactory,
     TransportConfig,
     UnsupportedDsnError,
+    exception,
 )
 from message_bus.transport import transport_factory_discovery as discovery
 from message_bus.transport.transport_factory_discovery import (
@@ -120,3 +122,14 @@ def test_an_explicit_factory_list_bypasses_discovery_entirely() -> None:
 
     with pytest.raises(UnsupportedDsnError, match="no transport factory"):
         _ = MessageBusFactory(config, []).bus()
+
+
+def test_every_error_the_library_raises_is_catchable_from_the_root() -> None:
+    """Two were not, so catching them meant a different import than the rest.
+
+    All fourteen live in message_bus.exception; nothing distinguished the two
+    that were missing except an oversight.
+    """
+    unreachable = [name for name in exception.__all__ if name not in message_bus.__all__]
+
+    assert unreachable == []

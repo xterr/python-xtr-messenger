@@ -1,24 +1,59 @@
+<div align="center">
+
 # xtr-message-bus
 
-A [Symfony Messenger](https://symfony.com/doc/current/messenger.html)-style message bus for Python.
+**A [Symfony Messenger](https://symfony.com/doc/current/messenger.html)-style message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
-Dispatch wraps a message in an **envelope** and walks it through a **middleware chain**.
-MiddlewareInterface records what it did by appending a **stamp**. **Routing** maps a message type to
-one or more named **transports**.
+<img alt="python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A5%203.11-3776AB?logo=python&logoColor=white">
+<img alt="core dependencies: 2" src="https://img.shields.io/badge/core%20deps-2-3FB950">
+<img alt="typed" src="https://img.shields.io/badge/typed-ty%20%2B%20basedpyright-1f6feb">
+<img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue">
 
-Transports that need a driver live behind an extra.
+</div>
 
-```bash
-uv add xtr-message-bus                    # core: sync + in-memory transports
-uv add "xtr-message-bus[pydantic]"        # message validation
-uv add "xtr-message-bus[amqp]"            # RabbitMQ via taskiq
+---
+
+## Why?
+
+Publishing a message should not drag a broker into your import graph, and moving a message
+onto a queue should not mean rewriting the code that sends it.
+
+Dispatch wraps a message in an **envelope** and walks it through a **middleware chain**. Each
+middleware records what it did by appending a **stamp**. A **routing table** maps a message
+type to one or more named **transports**. Nothing at the dispatch site knows which.
+
+- 🪶 **Two core dependencies** — `msgspec` and `typing-extensions`. A broker is an extra.
+- 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
+- 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
+- 🧩 **Protocol-based** — every collaborator is a constructor argument, so a DI container can own the graph.
+- 📨 **Dataclasses or pydantic** — both on one bus, strict on the wire either way.
+
+```python
+await bus.dispatch(IngestDocument(document_id=doc.id))
 ```
+
+Where that goes is configuration. Whether it happens in-process or on RabbitMQ is a DSN.
+
+## Install
+
+```sh
+uv add xtr-message-bus                    # sync:// and in-memory://
+uv add "xtr-message-bus[amqp]"            # + RabbitMQ
+uv add "xtr-message-bus[pydantic]"        # + pydantic messages
+```
+
+| Extra | Brings | For |
+| --- | --- | --- |
+| *(none)* | `msgspec`, `typing-extensions` | `sync://`, `in-memory://`, the whole core |
+| `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
+| `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
+| `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
 
 Requires Python 3.11+.
 
-## Quickstart
+## Quick start
 
-A message is a plain frozen dataclass carrying identifiers. `@as_message` declares it, and its
+A message is a frozen dataclass carrying identifiers. `@as_message` declares it, and its
 properties live on the class:
 
 ```python
@@ -35,53 +70,44 @@ class IngestDocument:
     tenant_id: UUID
 ```
 
-`name` is the contract between producer and consumer, and the only thing they need to share.
-It defaults to `module:QualName`, which changes if the class moves — pin an explicit,
-versioned name for anything that outlives a deploy.
+`name` is the contract between producer and consumer, and the only thing they share. It
+defaults to `module:QualName`, which changes if the class moves — pin an explicit, versioned
+name for anything that outlives a deploy.
 
-`transport` declares where the message goes when no routing table entry matches, so a message
-can carry a sane default instead of every application repeating it:
+A handler is a function that imports nothing but the message:
 
 ```python
-@as_message(name="ingest.document.v1", transport="async")
-@dataclass(frozen=True, slots=True)
-class IngestDocument: ...
+from message_bus import as_message_handler
+
+
+@as_message_handler(IngestDocument)
+async def ingest(message: IngestDocument) -> None:
+    ...
 ```
 
-Compose the bus once, at startup:
+Describe the transports and where messages go, then build a bus:
 
 ```python
-from message_bus import (
-    HandlersLocator,
-    MessageBus,
-    SendersLocator,
-    SendMessageMiddleware,
-    SyncTransport,
+from message_bus import MessageBusConfig, MessageBusFactory, TransportConfig
+
+CONFIG = MessageBusConfig(
+    transports={"sync": TransportConfig("sync://")},
+    routing={IngestDocument: "sync"},
 )
 
-registry = HandlersLocator()
-table = SendersLocator({IngestDocument: "sync"}, {"sync": SyncTransport(registry)})
-bus = MessageBus([SendMessageMiddleware(table)])
+bus = MessageBusFactory(CONFIG).bus()
+await bus.dispatch(IngestDocument(document_id=doc_id, tenant_id=tenant_id))
 ```
 
-Publish from anywhere that can reach the bus:
-
-```python
-await bus.dispatch(IngestDocument(document_id=doc.id, tenant_id=tenant.id))
-```
-
-Moving that message onto a real queue later is a change to the routing table. Nothing at the
-dispatch site changes.
+Moving that message onto RabbitMQ later is one line of configuration. The dispatch site does
+not change.
 
 ## Configuring transports
 
-Configuration is inert data describing which transports exist and where messages go — the
-Python reading of Symfony's `framework.messenger` section. It builds nothing; a
-`MessageBusFactory` does that.
+Configuration is inert data — the Python reading of Symfony's `framework.messenger` section.
+It builds nothing; a factory does.
 
 ```python
-from message_bus import MessageBusConfig, TransportConfig
-
 CONFIG = MessageBusConfig(
     transports={
         "high": TransportConfig(AMQP_URL, queue="jobs_high"),
@@ -92,42 +118,53 @@ CONFIG = MessageBusConfig(
     routing={
         UrgentJob: "high",
         AuditRecorded: ["low", "test"],   # fan out
-        "*": "low",                        # catch-all
+        "*": "low",                       # catch-all
     },
 )
-
-bus = MessageBusFactory(CONFIG).bus()
 ```
 
-Two factories build from it, because a publishing process and a worker are different
-deployments: `MessageBusFactory(config).bus()` and `WorkerFactory(config).worker([...])`.
-Each has exactly one public method. You change *what* they build by giving them different
-transport factories, not by reaching into the steps.
-
-A DSN selects the adapter and carries its options. Transports that differ only in their query
+A DSN selects the adapter and carries its settings. Transports differing only in their query
 string address the same server, so they share one connection.
 
 | DSN | Transport |
-|---|---|
+| --- | --- |
 | `sync://` | Handles in the calling process |
-| `in-memory://` | Records; `?serialize=true` round-trips through the serializer |
-| `amqp://…`, `amqps://…` | RabbitMQ via taskiq; `?queue=…` names the queue |
+| `in-memory://` | Records what was dispatched; `?serialize=true` round-trips it |
+| `amqp://…`, `amqps://…` | RabbitMQ via taskiq |
 
-## Running work in a worker
-
-Handlers are declared where the business logic lives, importing no broker:
+Settings go in the query string or in `options`, whichever suits — a DSN travels in one
+environment variable, `options` survives review once there are several. `options` wins.
 
 ```python
-# app/handlers/ingest.py
-from message_bus import as_message_handler
-from app.messages import IngestDocument
-
-
-@as_message_handler(IngestDocument)
-async def ingest(message: IngestDocument) -> None: ...
+TransportConfig(
+    "amqp://user:pass@rabbit:5672/?queue=jobs&max_attempts=10",
+    options={"prefetch_count": "50", "dead_letter_queue": "jobs.dlq"},
+)
 ```
 
-The worker entrypoint names the transports it serves, and is an ordinary Python program:
+<details>
+<summary><b>All 25 settings an <code>amqp://</code> transport accepts</b></summary>
+
+| Group | Settings |
+| --- | --- |
+| Retries | `max_attempts`, `base_delay_seconds`, `dead_letter_queue` |
+| Exchange | `exchange`, `exchange_type`, `exchange_durable`, `exchange_auto_delete` |
+| Queue | `queue`, `queue_type`, `queue_durable`, `queue_auto_delete`, `queue_exclusive`, `queue_max_priority`, `routing_key` |
+| Connection | `heartbeat`, `connect_timeout`, `connection_name`, `frame_max`, `channel_max` |
+| TLS | `cacert`, `cert`, `key`, `verify` |
+| Consumption | `prefetch_count`, `auto_setup` |
+
+An unrecognised setting is **refused**, naming what the scheme does accept. A typo in
+configuration is always a mistake, and one that is ignored leaves a transport running on
+defaults nobody chose.
+
+Credentials are not settings — a URL already expresses them, so they stay in the DSN.
+
+</details>
+
+## Running a worker
+
+A worker entrypoint is an ordinary Python program that names the transports it serves:
 
 ```python
 # app/worker_high.py
@@ -138,45 +175,32 @@ import app.handlers.ingest  # noqa: F401 — importing declares the handler
 from app.bus import CONFIG
 from message_bus import WorkerFactory
 
-worker = WorkerFactory(CONFIG).worker(["high"])   # consumes jobs_high, nothing else
+worker = WorkerFactory(CONFIG).worker(["high"])
 
 asyncio.run(worker.run())
 ```
 
-```bash
+```sh
 uv run python -m app.worker_high
 ```
 
-What comes back is a `WorkerInterface`, never the broker underneath — so the entrypoint sets up
-logging and configuration like the rest of your application, and does not change if the transport
-is swapped for one built on something other than taskiq.
+What comes back is a `WorkerInterface`, never the broker underneath. Point one process at
+`["high"]` and another at `["low"]` and each consumes its own workload.
 
-Run one process per workload by pointing each at different transports — `WorkerFactory(CONFIG).worker(["low"])`
-gives a worker that never sees `jobs_high`. The producer, meanwhile, gets one broker that knows
-every queue it publishes to.
+Most transports are driven by the library's own loop. A broker that brings its own worker —
+taskiq does — supplies it instead, and the entrypoint above cannot tell.
 
-The producer never imports `app.handlers`: the task is addressed by the message's name, so
-there is no route table to keep in sync and nothing to drift.
+### Who retries
 
-Check at startup that everything you publish has somewhere to land. Publishing to AMQP does
-**not** fail for an unregistered name — the message is accepted and silently never consumed:
+The loop makes **exactly one attempt per message** and never retries. Redelivery is something
+only a transport can do correctly: it owns the delivery count, the backoff state and the
+dead-letter destination. A message that fails is rejected, carrying an `ErrorDetailsStamp`
+saying why, and the transport decides what happens next. One undeliverable message does not
+stop the worker.
 
-```python
-assert_routes_registered(worker.broker, [IngestDocument, AnalyseDocument])
-```
-
-`worker.broker` is the taskiq broker the AMQP worker wraps, exposed for inspection like this.
-Application code should depend on `WorkerInterface` instead — that is what keeps it free of
-taskiq.
-
-### Retries and dead-lettering
-
-The AMQP transport wires a retry ladder and real dead-lettering. When attempts run out the
-message is republished to `taskiq.dlq` in its original wire format, so it can be inspected and
-replayed. (taskiq alone acknowledges an exhausted message, which means RabbitMQ never
-dead-letters it and the work is simply lost.)
-
-A handler can see which attempt it is on:
+On AMQP that means a retry ladder and real dead-lettering. When attempts run out the message
+is republished to `taskiq.dlq` in its original wire format, so it can be inspected and
+replayed. A handler can see which attempt it is on:
 
 ```python
 from message_bus import Envelope, RedeliveryStamp
@@ -185,14 +209,47 @@ from message_bus import Envelope, RedeliveryStamp
 @as_message_handler(IngestDocument)
 async def ingest(message: IngestDocument, envelope: Envelope) -> None:
     attempt = envelope.last(RedeliveryStamp)
-    is_final = attempt is not None and attempt.retry_count >= MAX_ATTEMPTS - 1
 ```
+
+## Adding behaviour
+
+Every dispatch-side concern is middleware, so adding one changes no existing code:
+
+```python
+class RejectOutOfHours:
+    async def handle(self, envelope, stack, /):
+        if not within_business_hours():
+            return envelope          # short-circuit: nothing downstream runs
+        return await stack.next().handle(envelope, stack)
+```
+
+Two rules carry the producer/consumer split:
+
+- An envelope that arrived **from** a transport carries a `ReceivedStamp` and is never routed
+  again, so a consumer cannot re-publish what it consumes.
+- Once a sender accepts an envelope the chain **short-circuits**. A message with a transport
+  configured is handed off, not also handled locally.
+
+Routing resolves most specific first: a `TransportNamesStamp` on the envelope, then the table
+walking the message's bases, then `"*"`, then whatever the message declared. Handler lookup
+walks the same hierarchy the same way, so a handler on a marker class still fires for a
+subclass that has one of its own.
 
 ## Validating messages
 
-Dataclass messages are checked for **shape**: a missing, unexpected, or wrongly typed field
-raises `MessageDecodingFailedError` at the boundary rather than arriving half-built in a handler.
-Decoding never coerces — `"3"` is not accepted where an `int` is declared.
+Dataclass messages are checked for **shape** by msgspec: a missing or wrongly typed field
+raises `MessageDecodingFailedError` at the boundary rather than arriving half-built. Decoding
+never coerces — `"3"` is not accepted where an `int` is declared.
+
+A field the message does not declare is **ignored**, which is what lets a producer add one
+without redeploying every consumer first. Where both sides ship together and a stray field
+means a typo, ask for the other behaviour:
+
+```python
+from message_bus import DataclassCodec, JsonSerializer
+
+strict = JsonSerializer(codecs=[DataclassCodec(forbid_unknown_fields=True)])
+```
 
 For rules a type cannot express, model the message with pydantic. Install the extra and it is
 picked up automatically; both styles work on the same bus.
@@ -211,218 +268,235 @@ class IssueInvoice(BaseModel):
     amount: Annotated[Decimal, Field(gt=0)]
 ```
 
-Validation runs on decode, where untrusted input arrives. Failures surface as
-`MessageDecodingFailedError` — callers never import pydantic to catch them.
-
-Strictness stays the model's own business: set `ConfigDict(strict=True)` if you want it.
-Forcing it would break validators written to normalise their input.
-
-Supported dataclass field types: `str`, `int`, `float`, `bool`, `None`, `UUID`, `datetime`,
-`date`, `Decimal`, `Enum`, `list[T]`, `tuple[T, ...]`, `dict[str, T]`, `T | None`, and nested
-dataclasses. Anything richer belongs in a pydantic model or a custom `SerializerInterface`.
-
 > Message annotations are resolved at runtime. If you lint with ruff, set
 > `runtime-evaluated-decorators = ["dataclasses.dataclass"]` so field imports are not moved
 > into `TYPE_CHECKING` blocks.
 
-## Adding behaviour
-
-Every dispatch-side concern is middleware, so adding one changes no existing code:
-
-```python
-class RejectOutOfHours:
-    async def handle(self, envelope, stack, /):
-        if not within_business_hours():
-            return envelope  # short-circuit: nothing downstream runs
-        return await stack.next().handle(envelope, stack)
-
-
-bus = MessageBus([LoggingMiddleware(), RejectOutOfHours(), SendMessageMiddleware(table)])
-```
-
-Routing resolves most specific first: a `TransportNamesStamp` on the envelope, then the
-routing table walking the message's bases, then the `"*"` catch-all, then whatever the message
-declared via `@as_message(transport=...)`. The table always wins over the message's own
-declaration, so an application can re-route a message it does not own.
-
-Two rules carry the producer/consumer split, and they are worth knowing:
-
-- An envelope that arrived **from** a transport carries a `ReceivedStamp` and is never routed
-  again, so a consumer cannot re-publish what it consumes.
-- Once a sender accepts an envelope, the chain **short-circuits**. A message with a transport
-  configured is handed off, not also handled locally.
-
 ## Transports
 
 | Transport | Lives in | Needs | Use for |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `SyncTransport` | `transport/sync/` | — | Handling in-process; local development |
 | `InMemoryTransport` | `transport/in_memory/` | — | Tests: records what was dispatched, and can be consumed |
 | `TaskiqSender` | `bridge/taskiq/` | `[taskiq]` | Publishing via **any** taskiq broker |
 | `TaskiqWorker` | `bridge/taskiq/` | `[taskiq]` | Consuming via taskiq's own worker |
 | `create_amqp_broker` | `bridge/amqp/` | `[amqp]` | RabbitMQ, with retries and dead-lettering |
 
-Each transport is a package holding the transport and its factory, as Symfony groups
-`Transport/Sync/` and `Transport/InMemory/`.
-
 The tree encodes what each piece costs to import:
 
 ```
-transport/          no dependency at all — sync, in_memory, the contracts
-bridge/taskiq/      [taskiq]  — broker-agnostic: publish, consume, bind handlers
-bridge/amqp/        [amqp]    — RabbitMQ only: connection, retry ladder, dead-lettering
+transport/          nothing    — sync, in_memory, the contracts
+bridge/taskiq/      [taskiq]   — broker-agnostic: publish, consume, bind handlers
+bridge/amqp/        [amqp]     — RabbitMQ only: connection, retry ladder, dead-lettering
 ```
 
-`transport/` versus `bridge/` is the line Symfony draws by keeping AMQP in
-`Bridge/Amqp/Transport/` rather than beside the others: **everything under `transport/` imports
-with no optional dependency installed**, so an application speaking only `sync://` never pays
-to import a broker library.
+Everything under `transport/` imports with no extra installed — the same line Symfony draws by
+keeping AMQP in `Bridge/Amqp/` rather than beside the others. Nothing in `bridge/taskiq/` names
+a broker driver, so `[taskiq]` is usable on its own for Redis, NATS or an in-memory broker.
+Tests enforce all three claims.
 
-`bridge/taskiq/` versus `bridge/amqp/` is the same idea one level down. Nothing in the taskiq
-layer names a broker driver, so `[taskiq]` is installable and usable on its own — a sender and
-worker over Redis, NATS or an in-memory broker need no RabbitMQ. The dependency runs one way,
-AMQP onto taskiq and never back, so a second broker is a package beside `bridge/amqp/` and no
-change within it. Tests enforce all three claims.
+### Writing your own
 
-`InMemoryTransport(serializer=JsonSerializer())` round-trips every message through
-encode/decode on the way in, which catches an unserializable field in a unit test rather than
-in production.
-
-### The two halves
-
-A transport sends, receives, or both. The contracts mirror Symfony's:
-
-```python
-class SenderInterface(Protocol):
-    async def send(self, envelope: Envelope) -> Envelope: ...
-
-class ReceiverInterface(Protocol):
-    def get(self) -> AsyncIterator[Envelope]: ...
-    async def ack(self, envelope: Envelope) -> None: ...
-    async def reject(self, envelope: Envelope) -> None: ...
-
-class TransportInterface(SenderInterface, ReceiverInterface, Protocol): ...
-```
-
-`get` is an async iterator rather than Symfony's polled `iterable`. Symfony polls because PHP
-has no persistent async runtime to hold a subscription open; Python does, so this maps onto how
-brokers actually deliver, and cancelling the task is graceful shutdown.
-
-Adding a transport means implementing `TransportFactoryInterface`:
+Implement two methods and advertise one entry point:
 
 ```python
 class TransportFactoryInterface(Protocol):
     def supports(self, dsn: Dsn) -> bool: ...
     def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]: ...
-    def worker(self, group: Mapping[str, TransportConfig], bus: MessageBusInterface) -> WorkerInterface: ...
 ```
 
-`create` builds the sending half; `worker` builds what a worker process runs. `worker` never
-returns `None` — a transport with no backlog returns a worker that finishes immediately, so an
-entrypoint can name any mix of transports without special-casing.
+```toml
+[project.entry-points."message_bus.transport_factories"]
+kafka = "my_package.kafka:KafkaTransportFactory"
+```
 
-How the worker consumes is the adapter's business. Drive `Worker` over your own receive half,
-or wrap a worker your broker library already provides, as the AMQP adapter does with taskiq's.
-Both present the same `WorkerInterface`.
+The entry point **name is the DSN scheme**, which is what keeps discovery lazy: only the module
+serving a scheme in use is imported.
 
-Pass your own to `MessageBusFactory(config, factories=[...])`.
+Settings reach a factory through its method arguments — each `TransportConfig` carries them —
+because settings belong to a transport, not to a factory. One discovered `amqp://` factory
+serves two transports pointing at different queues with different retry policies.
 
-## Replacing what the library composes
-
-Nothing is welded shut. Every collaborator the library would otherwise pick for you is a
-constructor argument, and the assembly steps are public.
+A *collaborator* cannot arrive that way. A serializer or a private handlers registry is an
+object, not a string, so supplying one means passing the factory yourself:
 
 ```python
-# a handlers locator of your own, instead of the process-wide default
-MessageBusFactory(config, [SyncTransportFactory(handlers=my_locator)]).bus()
-
-# your serializer, everywhere a transport encodes
-MessageBusFactory(config, [AmqpTransportFactory(serializer=my_serializer)]).bus()
-
-# your own scheme, alongside the ones that ship
-MessageBusFactory(config, [MyTransportFactory(), *default_factories()]).bus()
-
-# a worker driving your own receive half
-Worker(my_bus, my_receiver)
-
-# or skip the convenience entirely and compose everything yourself
-MessageBus([*my_middleware, SendMessageMiddleware(SendersLocator(routing, senders), require_sender=True)])
+MessageBusFactory(CONFIG, [AmqpTransportFactory(serializer=mine)]).bus()
 ```
 
-| Want to replace | How |
-|---|---|
-| Where handlers are looked up | `SyncTransportFactory(handlers=...)`, `AmqpTransportFactory(handlers=...)` |
-| How messages are encoded | `JsonSerializer(codecs=...)`, or any `SerializerInterface` passed to a factory |
-| How one message type is encoded | Your own `MessageCodecInterface` in `JsonSerializer(codecs=[...])` |
-| Where a message goes | `SendersLocator`, or any `SendersLocatorInterface` |
-| How the bus is assembled | Build `SendersLocator` + `MessageBus` directly |
-| A transport, or a whole scheme | Your own `TransportInterface` / `TransportFactoryInterface` |
-| What a worker process runs | Your own `WorkerInterface`, or `Worker(bus, receiver)` |
-| Retry and dead-letter policy | `AmqpTransportFactory(reliability=Reliability(...))` |
-| The middleware chain | `MessageBus([...])` directly |
+If your broker owns its own consume loop, also implement `WorkerProvidingInterface`. Most
+transports should not: a whole transport is driven by the library's `Worker`.
 
-The factories and `default_factories()` are conveniences layered on those pieces, not gates
-in front of them — every one is constructible on its own.
+## Wiring with a container
 
-> **A private handlers registry has to go to the factory, not the bus.**
-> `MessageBusFactory(config, handlers=...)` and `WorkerFactory(config, handlers=...)` configure
-> the *bus*. Transports that resolve handlers themselves — `sync://`, and the AMQP adapter,
-> which registers them with the broker — are built by discovery with no arguments, so they read
-> the process-wide registry regardless. Pass the registry to the factory instead:
-> `WorkerFactory(config, [AmqpTransportFactory(handlers=private)])`. For AMQP,
-> `assert_routes_registered` catches the mistake at startup.
+Every collaborator is a constructor argument and every contract is a `@runtime_checkable`
+Protocol, so a DI container can own the whole graph. Nothing here requires one.
+
+Here it is with [wireup](https://github.com/maldoinc/wireup) (2.x). Handlers become objects,
+which is what lets them take dependencies:
+
+```python
+# app/bus.py
+from wireup import injectable
+
+from message_bus import (
+    HandlersLocator,
+    HandlersLocatorInterface,
+    MessageBusConfig,
+    MessageBusFactory,
+    MessageBusInterface,
+    TransportConfig,
+)
+
+
+@injectable
+class IngestHandler:
+    def __init__(self, documents: DocumentService) -> None:
+        self._documents = documents
+
+    async def __call__(self, message: IngestDocument) -> None:
+        await self._documents.ingest(message.document_id)
+
+
+@injectable
+def message_bus_config() -> MessageBusConfig:
+    return MessageBusConfig(
+        transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
+        routing={IngestDocument: "jobs"},
+    )
+
+
+@injectable
+def handlers(ingest: IngestHandler) -> HandlersLocatorInterface:
+    registry = HandlersLocator()
+    registry.register(IngestDocument, ingest)
+    return registry
+
+
+@injectable
+def message_bus(
+    config: MessageBusConfig,
+    registry: HandlersLocatorInterface,
+) -> MessageBusInterface:
+    return MessageBusFactory(config, handlers=registry).bus()
+```
+
+A route, or anything else, then asks for `MessageBusInterface` and gets a bus it can publish
+through. A worker entrypoint resolves one and runs it:
+
+```python
+# app/worker.py
+import asyncio
+
+import wireup
+
+from app import bus as bus_module
+from message_bus import WorkerInterface
+
+
+async def main() -> None:
+    container = wireup.create_async_container(injectables=[bus_module])
+    try:
+        worker = await container.get(WorkerInterface)
+        await worker.run()
+    finally:
+        await container.close()
+
+
+asyncio.run(main())
+```
+
+<details>
+<summary><b>Two things to know</b></summary>
+
+**`@as_message_handler` writes to a process-wide registry.** That is deliberate — declaration
+happens at import, as a side effect of defining the function, and needs somewhere to
+accumulate. A container cannot reach into it. Under a container, skip the decorator and
+`register()` container-built handlers instead, as above; the two approaches do not mix, because
+declaring into one registry and resolving from another fails silently.
+
+**A discovered factory is built with no arguments.** So a factory needing a collaborator — a
+private registry, your serializer — must be constructed by you and passed in. On AMQP that
+matters, because handlers are registered with the broker by the factory:
+
+```python
+@injectable
+def worker(
+    config: MessageBusConfig,
+    registry: HandlersLocatorInterface,
+) -> WorkerInterface:
+    return WorkerFactory(
+        config,
+        [AmqpTransportFactory(handlers=registry)],   # the factory needs it too
+        handlers=registry,
+    ).worker(["jobs"])
+```
+
+`assert_routes_registered(worker.broker, [IngestDocument])` at startup catches the mistake:
+publishing to AMQP does not fail for an unregistered name — the message is accepted and
+silently never consumed.
+
+</details>
 
 ## Mapping to Symfony Messenger
 
 | Symfony | Here |
-|---|---|
+| --- | --- |
 | `MessageBusInterface`, `MessageBus` | `MessageBusInterface`, `MessageBus` |
 | `Envelope`, `StampInterface` | `Envelope`, `StampInterface` |
 | `NonSendableStampInterface` | `NonSendableStampInterface` |
 | `MiddlewareInterface`, `StackInterface` | `MiddlewareInterface`, `StackInterface` |
-| `SenderInterface` | `SenderInterface` |
-| `ReceiverInterface` | `ReceiverInterface` (`get` is an async iterator) |
-| `TransportInterface` | `TransportInterface` |
+| `SenderInterface`, `ReceiverInterface` | same — `get()` is an async iterator |
+| `TransportInterface`, `TransportFactory` | `TransportInterface`, `TransportFactory` |
 | `SendersLocatorInterface` | `SendersLocatorInterface`, `SendersLocator` |
+| `SendMessageMiddleware`, `HandleMessageMiddleware` | same |
 | `#[AsMessage(transport: ...)]` | `@as_message(name=..., transport=...)` |
-| `SendMessageMiddleware` | `SendMessageMiddleware` |
-| `HandleMessageMiddleware` | `HandleMessageMiddleware` |
-| `SerializerInterface` | `SerializerInterface`, `JsonSerializer` |
-| `Symfony\Component\Messenger\Transport\Serialization` | `transport/serialization/` |
 | `#[AsMessageHandler]` | `@as_message_handler` |
-| `sync://`, `in-memory://` | `SyncTransport`, `InMemoryTransport` |
-| `TransportFactoryInterface` | `TransportFactoryInterface` |
+| `SerializerInterface` | `SerializerInterface`, `JsonSerializer` |
 | `framework.messenger` config | `MessageBusConfig`, `TransportConfig` |
 | `Worker` | `Worker`, `WorkerInterface` |
 | `messenger:consume <transports>` | `WorkerFactory.worker([...])`, then `await worker.run()` |
 
-Stamps shipped, one class per module under `message_bus/stamp/`: `BusNameStamp`, `SentStamp`, `TransportMessageIdStamp`, `DelayStamp`,
-`RedeliveryStamp`, `ReceivedStamp`, `HandledStamp`, `ErrorDetailsStamp`, `TransportNamesStamp`, `AckReceiptStamp`.
+`get()` returns an async iterator rather than Symfony's polled `iterable`: Symfony polls
+because PHP has no persistent async runtime, Python does, and cancelling the task is graceful
+shutdown.
 
-### Who retries
+## Layout
 
-The `Worker` loop makes **exactly one attempt per message** and never retries. Redelivery is
-something only a transport can do correctly — it owns the delivery count, the backoff state and
-the dead-letter destination — so a message that fails is rejected and the transport decides what
-happens next. A retry in the loop would not replace that, it would run underneath it, and every
-failure would be attempted the product of both policies.
-
-A failure is not lost either way: the rejected envelope carries an `ErrorDetailsStamp` saying
-what went wrong, so whatever the transport does with a rejection carries the reason with it.
-One undeliverable message does not stop the worker.
-
-### Deliberately not here yet
-
-The full `HandlersLocator` with priorities and per-transport filtering; retry strategies as a
-library concern (the broker owns them); a failure transport beyond the DLQ; batch handlers;
-message deduplication; and multiple buses.
+```
+message_bus/
+├── envelope.py              the message plus its stamps
+├── message_registry.py      what @as_message declared: names, default transports
+├── message_bus.py           the loop — wrap, then walk the middleware chain
+├── worker.py                the other loop — collect, dispatch, ack or reject
+├── decorator/               @as_message, @as_message_handler
+├── handler/                 which function handles which message
+├── middleware/              routing, handling, logging, the chain cursor
+├── stamp/                   one class per module
+├── transport/
+│   ├── sender/              SenderInterface, SendersLocator
+│   ├── receiver/            ReceiverInterface, ChainedReceiver
+│   ├── sync/  in_memory/    a transport and its factory, each
+│   └── serialization/       the wire format, and codec/ for message shapes
+└── bridge/
+    ├── taskiq/              broker-agnostic publish and consume
+    └── amqp/                RabbitMQ on top of it
+```
 
 ## Development
 
-```bash
+```sh
 uv sync --all-extras
 uv run ruff check src tests
 uv run ruff format --check src tests
+uv run ty check
 uv run basedpyright src tests
 uv run pytest
 ```
+
+Two type checkers on purpose — they disagree often enough to be worth both, and `ty` has
+already caught a crash `basedpyright` accepted.
+
+## License
+
+[MIT](LICENSE) © xterr

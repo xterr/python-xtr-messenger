@@ -5,6 +5,7 @@ description = "A Symfony Messenger-style message bus for Python: envelopes, stam
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+license-files = ["LICENSE"]
 keywords = ["message-bus", "messenger", "middleware", "envelope", "taskiq", "amqp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
