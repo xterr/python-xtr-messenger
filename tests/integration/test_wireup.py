@@ -284,3 +284,26 @@ async def test_a_publisher_needs_no_handlers_at_all() -> None:
 
     assert sent is not None
     await container.close()
+
+
+@final
+class ObjectHandler:
+    """A handler that is an object, with an injected parameter on __call__."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, message: IngestDocument, db: Injected[str]) -> None:
+        del db
+        self.calls += 1
+
+
+def test_a_handler_that_is_an_object_is_hidden_the_same_way() -> None:
+    """An instance has no __globals__; its __call__ does."""
+    registry = HandlersLocator()
+    handler = ObjectHandler()
+
+    descriptor = registry.register(IngestDocument, handler)
+
+    assert descriptor.wants_envelope is False
+    assert descriptor.name == "ObjectHandler"

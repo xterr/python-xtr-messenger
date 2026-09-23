@@ -122,10 +122,18 @@ def _container_hook() -> Callable[[Handler], None] | None:
 
 
 def _hide_container_parameters(handler: Handler) -> None:
-    """Hide the parameters a container fills, so the bus does not see them."""
+    """Hide the parameters a container fills, so the bus does not see them.
+
+    Applied to whatever carries the signature, which for a handler that is
+    an object is its ``__call__`` — an instance has no ``__globals__`` for
+    the container to read annotations against.
+    """
     hide = _container_hook()
-    if hide is not None:
-        hide(handler)
+    if hide is None:
+        return
+    target = _annotated(handler)
+    if hasattr(target, "__globals__"):
+        hide(cast("Handler", target))
 
 
 def _own_call_of(handler_type: type) -> Handler | None:
