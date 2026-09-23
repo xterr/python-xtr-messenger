@@ -336,8 +336,7 @@ Handlers usually need things — a database session, a client, a unit of work. E
 here is a constructor argument and every contract is a `@runtime_checkable` Protocol, so a
 container can own the whole graph. Nothing requires one.
 
-With the `wireup` extra there are two things to write. A handler stays a plain function declared
-the usual way, and anything it needs beyond the message is a parameter the container fills:
+With the `wireup` extra, a handler declares what it needs as a parameter:
 
 ```python
 # app/handlers.py
@@ -356,7 +355,7 @@ registration recognises it whenever wireup is installed — the parameters it ma
 of the shape the bus calls, so they are hidden from it automatically. With no wireup installed
 there is nothing to hide and nothing changes.
 
-And the wiring, where the container is built:
+Then one call, at start-up, after the modules declaring handlers have been imported:
 
 ```python
 # app/worker.py
@@ -364,23 +363,17 @@ import asyncio
 
 import wireup
 
-from app import handlers, services
-from message_bus import MessageBusConfig, TransportConfig, WorkerInterface
-from message_bus.integration.wireup import make_injectables
-
-CONFIG = MessageBusConfig(
-    transports={"jobs": TransportConfig(AMQP_URL, queue="jobs")},
-    routing={IngestDocument: "jobs"},
-)
+from app import handlers, services  # noqa: F401 — importing declares the handlers
+from message_bus import WorkerFactory
+from message_bus.integration.wireup import setup
 
 
 async def main() -> None:
-    container = wireup.create_async_container(
-        injectables=[services, handlers, *make_injectables(CONFIG, transports=["jobs"])],
-    )
+    container = wireup.create_async_container(injectables=[services])
+    setup(container)
+
     try:
-        worker = await container.get(WorkerInterface)
-        await worker.run()
+        await WorkerFactory(CONFIG).worker(["jobs"]).run()
     finally:
         await container.close()
 
@@ -388,60 +381,37 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-A publishing process asks for `MessageBusInterface` instead, and omits `transports` — then no
-worker is registered.
+That is the whole integration: one function. The bus and the worker are built the ordinary way
+and know nothing about a container.
 
-Two ways in, depending on who builds the bus. `make_injectables` has the container hand one
-out, as above. `setup(container, config)` wires the container into your handlers and leaves you
-to build a bus the ordinary way:
-
-```python
-container = wireup.create_async_container(injectables=[services, handlers])
-setup(container)
-
-bus = MessageBusFactory(CONFIG).bus()
-worker = WorkerFactory(CONFIG).worker(["jobs"])
-```
-
-`setup` takes no configuration: a `MessageBusConfig` says which transports exist and where
+`setup` takes no configuration — a `MessageBusConfig` says which transports exist and where
 messages go, a container says what a handler can be given, and the two have nothing to say to
 each other. Calling it twice is harmless.
 
 **A scoped dependency is one per message.** wireup opens a scope around each handler call on its
 own, so a `lifetime="scoped"` session is built when the message arrives and released when it
-finishes — including on failure. A singleton stays shared by every message; scoping describes
+finishes, including on failure. A singleton stays shared by every message; scoping describes
 what a message should not share, not what a handler must be.
 
-### Where the configuration goes
+<details>
+<summary><b>Having the container hand out a bus</b></summary>
 
-In the container, either way. Hand it to `make_injectables` and it is registered for you, or
-provide it yourself when it is read from somewhere:
+There is no helper for this, because it is the same two lines and better in front of you:
 
 ```python
 @injectable
-def bus_config(url: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConfig:
-    return MessageBusConfig(transports={"jobs": TransportConfig(url)})
+def message_bus(config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
+    setup(container)
+    return MessageBusFactory(config).bus()
 
 
-INJECTABLES = make_injectables(transports=["jobs"])   # no config argument
-```
-
-Either way `container.get(MessageBusConfig)` returns it, anything else can ask for the same one,
-and a test overrides it like any other injectable.
-
-<details>
-<summary><b>Supplying a factory that needs a collaborator</b></summary>
-
-A discovered transport factory is built with no arguments, so one needing a serializer or a
-private registry has to be constructed by you:
-
-```python
-INJECTABLES = make_injectables(
-    CONFIG,
-    transports=["jobs"],
-    factories=[AmqpTransportFactory(serializer=mine)],
+container = wireup.create_async_container(
+    injectables=[services, message_bus, wireup.instance(CONFIG, as_type=MessageBusConfig)],
 )
 ```
+
+Registering `CONFIG` as an instance puts it in the graph, so anything else can ask for a
+`MessageBusConfig` and a test can override it like any other injectable.
 
 </details>
 

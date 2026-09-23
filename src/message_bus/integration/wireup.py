@@ -46,8 +46,6 @@ describes what a message should not share, not what a handler must be.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import wireup
 from wireup import AsyncContainer
 
@@ -56,73 +54,10 @@ from message_bus.handler import (
     HandlersLocator,
     default_registry,
 )
-from message_bus.message_bus_config import MessageBusConfig
-from message_bus.message_bus_factory import MessageBusFactory
-from message_bus.message_bus_interface import MessageBusInterface
-from message_bus.transport.transport_factory_interface import TransportFactoryInterface
-from message_bus.worker_factory import WorkerFactory
-from message_bus.worker_interface import WorkerInterface
 
-__all__ = ["make_injectables", "setup"]
+__all__ = ["setup"]
 
 _FILLED = "_message_bus_filled"
-
-
-def make_injectables(
-    config: MessageBusConfig | None = None,
-    *,
-    transports: Sequence[str] = (),
-    factories: Sequence[TransportFactoryInterface] | None = None,
-    handlers: HandlersLocator | None = None,
-) -> list[object]:
-    """Return what a container needs to provide a bus and a worker.
-
-    A container built with these hands out a ``MessageBusInterface``, and a
-    ``WorkerInterface`` when ``transports`` names any. Handlers are wired to
-    the same container, so :func:`setup` need not be called as well.
-
-    Use this when you would rather ask the container for a bus than build
-    one; use :func:`setup` when your application builds it.
-
-    **The configuration goes in the container either way.** Pass it here and
-    it is registered for you; leave it out and provide it yourself, which is
-    what you want when it is read from somewhere::
-
-        @injectable
-        def bus_config(url: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConfig:
-            return MessageBusConfig(transports={"jobs": TransportConfig(url)})
-
-    Either way anything else can ask for a ``MessageBusConfig`` and get the
-    same one, and a test can override it like any other injectable.
-
-    Args:
-        config: The transports that exist and where messages go. Omit to
-            provide it as an injectable of your own.
-        transports: What a worker should consume. Omit in a publishing
-            process and no worker is registered.
-        factories: Transport factories, when discovery is not wanted or a
-            factory needs a collaborator it cannot be discovered with.
-        handlers: A locator, if not the process-wide one that
-            :func:`~message_bus.decorator.as_message_handler` fills.
-
-    Returns:
-        Injectables to spread into ``create_async_container(injectables=...)``.
-    """
-
-    def message_bus(config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
-        setup(container, handlers)
-        return MessageBusFactory(config, factories, handlers).bus()
-
-    def worker(config: MessageBusConfig, container: AsyncContainer) -> WorkerInterface:
-        setup(container, handlers)
-        return WorkerFactory(config, factories, handlers).worker(transports)
-
-    registered: list[object] = [wireup.injectable(message_bus)]
-    if config is not None:
-        registered.append(wireup.instance(config, as_type=MessageBusConfig))
-    if transports:
-        registered.append(wireup.injectable(worker))
-    return registered
 
 
 def setup(container: AsyncContainer, handlers: HandlersLocator | None = None) -> None:
@@ -137,10 +72,6 @@ def setup(container: AsyncContainer, handlers: HandlersLocator | None = None) ->
 
         bus = MessageBusFactory(CONFIG).bus()
         worker = WorkerFactory(CONFIG).worker(["jobs"])
-
-    Use this when your application builds the bus. Use
-    :func:`make_injectables` instead when you would rather the container hand
-    one out.
 
     There is no configuration argument. A ``MessageBusConfig`` says which
     transports exist and where messages go; a container says what a handler

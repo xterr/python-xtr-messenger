@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import sys
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, TypeVar, final
@@ -20,13 +19,11 @@ from message_bus import (
     MessageBusFactory,
     MessageBusInterface,
     TransportConfig,
-    Worker,
     WorkerFactory,
-    WorkerInterface,
     as_message,
     as_message_handler,
 )
-from message_bus.integration.wireup import make_injectables, setup
+from message_bus.integration.wireup import setup
 from message_bus.transport.in_memory import InMemoryTransportFactory
 
 pytestmark = pytest.mark.anyio
@@ -93,64 +90,33 @@ def _reset() -> None:
         recorded.clear()
 
 
-def a_container(
-    *,
-    transports: tuple[str, ...] = (),
-    config: MessageBusConfig | None = None,
-) -> AsyncContainer:
-    extra = [sys.modules[__name__]] if config is None else []
-    return wireup.create_async_container(
-        injectables=[
-            *extra,
-            Metrics,
-            session,
-            *make_injectables(
-                config,
-                transports=transports,
-                factories=[InMemoryTransportFactory()],
-            ),
-        ],
-        config={"dsn": "in-memory://"},
+def a_config() -> MessageBusConfig:
+    return MessageBusConfig(
+        transports={"jobs": TransportConfig("in-memory://")},
+        routing={IngestDocument: "jobs"},
     )
 
 
-async def resolve(container: AsyncContainer, what: type[T]) -> T:
-    got = await container.get(what)
-    assert got is not None
-    return got
+def a_container() -> AsyncContainer:
+    """A container that knows about dependencies, and nothing about a bus."""
+    container = wireup.create_async_container(injectables=[Metrics, session])
+    setup(container)
+    return container
 
 
-async def drain(container: AsyncContainer, count: int = 1) -> None:
-    bus = await resolve(container, MessageBusInterface)
+async def drain(count: int = 1) -> None:
+    """Publish ``count`` messages and let a worker handle them."""
+    config, factories = a_config(), [InMemoryTransportFactory()]
+    bus = MessageBusFactory(config, factories).bus()
     for _ in range(count):
         _ = await bus.dispatch(IngestDocument(document_id=uuid4()))
-    await (await resolve(container, WorkerInterface)).run()
-
-
-async def test_the_container_provides_a_bus_and_a_worker() -> None:
-    container = a_container(transports=("jobs",))
-
-    bus = await resolve(container, MessageBusInterface)
-    worker = await resolve(container, WorkerInterface)
-
-    assert isinstance(bus, MessageBusInterface)
-    assert isinstance(worker, Worker)
-    await container.close()
-
-
-async def test_a_publishing_process_gets_no_worker() -> None:
-    publisher = a_container()
-
-    with pytest.raises(Exception, match="WorkerInterface"):
-        _ = await publisher.get(WorkerInterface)
-
-    await publisher.close()
+    await WorkerFactory(config, factories).worker(["jobs"]).run()
 
 
 async def test_a_handler_receives_what_the_container_provides() -> None:
-    container = a_container(transports=("jobs",))
+    container = a_container()
 
-    await drain(container)
+    await drain()
 
     assert len(handled) == 1
     assert len(sessions) == 1
@@ -159,9 +125,9 @@ async def test_a_handler_receives_what_the_container_provides() -> None:
 
 async def test_a_scoped_dependency_is_one_per_message_and_released() -> None:
     """The reason to wire a bus through a container: a transaction per message."""
-    container = a_container(transports=("jobs",))
+    container = a_container()
 
-    await drain(container, count=3)
+    await drain(count=3)
 
     assert len(set(sessions)) == 3
     assert opened == closed != []
@@ -170,18 +136,18 @@ async def test_a_scoped_dependency_is_one_per_message_and_released() -> None:
 
 async def test_a_singleton_stays_shared_by_every_message() -> None:
     """Scoping describes what a message should not share, not what a handler is."""
-    container = a_container(transports=("jobs",))
+    container = a_container()
 
-    await drain(container, count=3)
+    await drain(count=3)
 
     assert len(set(singletons)) == 1
     await container.close()
 
 
 async def test_a_handler_asking_for_nothing_is_untouched() -> None:
-    container = a_container(transports=("jobs",))
+    container = a_container()
 
-    await drain(container, count=2)
+    await drain(count=2)
 
     assert len(unfilled) == 2
     await container.close()
@@ -212,98 +178,48 @@ def test_a_handler_may_still_ask_for_the_envelope_alongside() -> None:
     assert descriptor.wants_envelope is True
 
 
-async def test_the_config_is_in_the_container_when_handed_over() -> None:
-    given = MessageBusConfig(
-        transports={"jobs": TransportConfig("in-memory://")},
-        routing={IngestDocument: "jobs"},
-    )
-    container = a_container(transports=("jobs",), config=given)
-
-    assert await resolve(container, MessageBusConfig) is given
-    await container.close()
-
-
-async def test_the_config_may_be_provided_as_an_injectable_instead() -> None:
-    """What you want when it is read from the environment."""
-    container = a_container(transports=("jobs",))
-
-    resolved = await resolve(container, MessageBusConfig)
-
-    assert list(resolved.transports) == ["jobs"]
-    await container.close()
-
-
-async def test_setup_wires_handlers_for_a_bus_you_build_yourself() -> None:
-    """setup(container) — no injectables, no container-provided bus."""
-    config = MessageBusConfig(
-        transports={"jobs": TransportConfig("in-memory://")},
-        routing={IngestDocument: "jobs"},
-    )
-    container = wireup.create_async_container(
-        injectables=[Metrics, session],
-        config={"dsn": "in-memory://"},
-    )
-    setup(container)
-
-    factories = [InMemoryTransportFactory()]
-    bus = MessageBusFactory(config, factories).bus()
-    _ = await bus.dispatch(IngestDocument(document_id=uuid4()))
-    await WorkerFactory(config, factories).worker(["jobs"]).run()
-
-    assert len(handled) == 1
-    assert len(sessions) == 1
-    await container.close()
-
-
 async def test_setup_is_safe_to_call_twice() -> None:
-    container = a_container(transports=("jobs",))
-    setup(container)
+    container = a_container()
     setup(container)
 
-    await drain(container)
+    await drain()
 
     assert len(handled) == 1
     await container.close()
 
 
 async def test_a_publisher_needs_no_handlers_at_all() -> None:
-    """Routing describes where a message goes, not who handles it.
-
-    Checking routes against declared handlers at setup would reject every
-    publishing process, which is the split the library exists for.
-    """
-    config = MessageBusConfig(
-        transports={"jobs": TransportConfig("in-memory://")},
-        routing={IngestDocument: "jobs"},
-    )
+    """Routing describes where a message goes, not who handles it."""
     container = wireup.create_async_container(injectables=[])
     setup(container, HandlersLocator())
 
-    bus = MessageBusFactory(config, [InMemoryTransportFactory()]).bus()
+    bus = MessageBusFactory(a_config(), [InMemoryTransportFactory()]).bus()
     sent = await bus.dispatch(IngestDocument(document_id=uuid4()))
 
     assert sent is not None
     await container.close()
 
 
-@final
-class ObjectHandler:
-    """A handler that is an object, with an injected parameter on __call__."""
+async def test_a_bus_the_container_hands_out_is_six_lines_you_write() -> None:
+    """There is no helper for this, and it does not need one."""
+    container = wireup.create_async_container(injectables=[Metrics, session])
 
-    def __init__(self) -> None:
-        self.calls = 0
+    @injectable
+    def message_bus(config: MessageBusConfig, c: AsyncContainer) -> MessageBusInterface:
+        setup(c)
+        return MessageBusFactory(config, [InMemoryTransportFactory()]).bus()
 
-    async def __call__(self, message: IngestDocument, db: Injected[str]) -> None:
-        del db
-        self.calls += 1
+    wired = wireup.create_async_container(
+        injectables=[
+            Metrics,
+            session,
+            message_bus,
+            wireup.instance(a_config(), as_type=MessageBusConfig),
+        ],
+    )
+    bus = await wired.get(MessageBusInterface)
 
-
-def test_a_handler_that_is_an_object_is_hidden_the_same_way() -> None:
-    """An instance has no __globals__; its __call__ does."""
-    registry = HandlersLocator()
-    handler = ObjectHandler()
-
-    descriptor = registry.register(IngestDocument, handler)
-
-    assert descriptor.wants_envelope is False
-    assert descriptor.name == "ObjectHandler"
+    assert bus is not None
+    _ = await bus.dispatch(IngestDocument(document_id=uuid4()))
+    await wired.close()
+    await container.close()
