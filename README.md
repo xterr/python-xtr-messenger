@@ -341,21 +341,20 @@ the usual way, and anything it needs beyond the message is a parameter the conta
 
 ```python
 # app/handlers.py
-from wireup import Injected                                   # wireup's annotation
+from wireup import Injected
+
 from message_bus import as_message_handler
-from message_bus.integration.wireup import takes_injected     # this library's decorator
 
 
 @as_message_handler(IngestDocument)
-@takes_injected
 async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
     await db.record(message.document_id)
 ```
 
-Two different things, and both are needed. `Injected[Session]` is wireup's, marking *which*
-parameter it should fill. `takes_injected` is this library's, telling the bus the handler has
-some — without it, registration rejects `ingest` for declaring a parameter the bus cannot
-supply.
+Nothing from this library appears there. `Injected[Session]` is wireup's own annotation, and
+registration recognises it whenever wireup is installed — the parameters it marks are not part
+of the shape the bus calls, so they are hidden from it automatically. With no wireup installed
+there is nothing to hide and nothing changes.
 
 And the wiring, where the container is built:
 
@@ -392,10 +391,21 @@ asyncio.run(main())
 A publishing process asks for `MessageBusInterface` instead, and omits `transports` — then no
 worker is registered.
 
-`takes_injected` runs at import, where it can only hide the injected parameters: the container does
-not exist yet, and the bus would otherwise reject a handler for declaring a parameter it cannot
-supply. `make_injectables` runs where the container does exist, and fills them. That is the
-whole surface.
+Two ways in, depending on who builds the bus. `make_injectables` has the container hand one
+out, as above. `setup(container, config)` wires the container into your handlers and leaves you
+to build a bus the ordinary way:
+
+```python
+container = wireup.create_async_container(injectables=[services, handlers])
+setup(container)
+
+bus = MessageBusFactory(CONFIG).bus()
+worker = WorkerFactory(CONFIG).worker(["jobs"])
+```
+
+`setup` takes no configuration: a `MessageBusConfig` says which transports exist and where
+messages go, a container says what a handler can be given, and the two have nothing to say to
+each other. Calling it twice is harmless.
 
 **A scoped dependency is one per message.** wireup opens a scope around each handler call on its
 own, so a `lifetime="scoped"` session is built when the message arrives and released when it

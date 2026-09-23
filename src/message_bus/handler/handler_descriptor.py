@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
+from functools import cache
 from typing import TYPE_CHECKING, TypeAlias, cast, get_type_hints
 
 from message_bus.envelope import Envelope
@@ -35,6 +36,7 @@ class HandlerDescriptor:
             HandlerSignatureError: If the parameters are not a shape the bus
                 can call.
         """
+        _hide_container_parameters(handler)
         return cls(
             handler=handler,
             name=name or _name_of(handler),
@@ -60,6 +62,8 @@ class HandlerDescriptor:
                 can call.
         """
         call = _own_call_of(handler_type)
+        if call is not None:
+            _hide_container_parameters(call)
         if call is None:
             raise HandlerSignatureError(handler_type.__qualname__, ())
         declared = tuple(inspect.signature(call).parameters)[1:]
@@ -95,6 +99,33 @@ def _annotated(handler: Handler) -> object:
         return handler
     call = getattr(type(handler), "__call__", None)  # noqa: B004
     return call if call is not None else handler
+
+
+@cache
+def _container_hook() -> Callable[[Handler], None] | None:
+    """Return the installed container's way of hiding what it fills, if any.
+
+    A dependency-injection container lets a handler declare parameters it
+    supplies. Those are not part of the shape the bus calls, so they have to
+    be hidden before the signature is read or every such handler would be
+    rejected for declaring a parameter the bus cannot pass.
+
+    Detected rather than required, the same way a pydantic codec is: with no
+    container installed there are no container parameters to hide, so this
+    cannot change behaviour.
+    """
+    try:
+        from wireup.ioc.util import hide_annotated_names  # noqa: PLC0415
+    except ImportError:
+        return None
+    return hide_annotated_names
+
+
+def _hide_container_parameters(handler: Handler) -> None:
+    """Hide the parameters a container fills, so the bus does not see them."""
+    hide = _container_hook()
+    if hide is not None:
+        hide(handler)
 
 
 def _own_call_of(handler_type: type) -> Handler | None:

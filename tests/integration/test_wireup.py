@@ -17,14 +17,16 @@ from message_bus import (
     Envelope,
     HandlersLocator,
     MessageBusConfig,
+    MessageBusFactory,
     MessageBusInterface,
     TransportConfig,
     Worker,
+    WorkerFactory,
     WorkerInterface,
     as_message,
     as_message_handler,
 )
-from message_bus.integration.wireup import make_injectables, takes_injected
+from message_bus.integration.wireup import make_injectables, setup
 from message_bus.transport.in_memory import InMemoryTransportFactory
 
 pytestmark = pytest.mark.anyio
@@ -65,7 +67,6 @@ async def session() -> AsyncIterator[str]:
 
 
 @as_message_handler(IngestDocument)
-@takes_injected
 async def ingest(message: IngestDocument, db: Injected[str], m: Injected[Metrics]) -> None:
     handled.append(message.document_id)
     sessions.append(db)
@@ -186,15 +187,18 @@ async def test_a_handler_asking_for_nothing_is_untouched() -> None:
     await container.close()
 
 
-def test_takes_injected_hides_the_parameters_from_the_bus() -> None:
-    """Otherwise registration rejects a handler for a parameter it declares."""
+def test_container_parameters_are_hidden_from_the_bus_automatically() -> None:
+    """No decorator of ours: registration recognises wireup's annotation.
+
+    Otherwise it would reject the handler for declaring a parameter the bus
+    cannot pass.
+    """
     assert tuple(inspect.signature(ingest).parameters) == ("message",)
 
 
 def test_a_handler_may_still_ask_for_the_envelope_alongside() -> None:
     registry = HandlersLocator()
 
-    @takes_injected
     async def with_envelope(
         message: IngestDocument,
         envelope: Envelope,
@@ -226,4 +230,57 @@ async def test_the_config_may_be_provided_as_an_injectable_instead() -> None:
     resolved = await resolve(container, MessageBusConfig)
 
     assert list(resolved.transports) == ["jobs"]
+    await container.close()
+
+
+async def test_setup_wires_handlers_for_a_bus_you_build_yourself() -> None:
+    """setup(container) — no injectables, no container-provided bus."""
+    config = MessageBusConfig(
+        transports={"jobs": TransportConfig("in-memory://")},
+        routing={IngestDocument: "jobs"},
+    )
+    container = wireup.create_async_container(
+        injectables=[Metrics, session],
+        config={"dsn": "in-memory://"},
+    )
+    setup(container)
+
+    factories = [InMemoryTransportFactory()]
+    bus = MessageBusFactory(config, factories).bus()
+    _ = await bus.dispatch(IngestDocument(document_id=uuid4()))
+    await WorkerFactory(config, factories).worker(["jobs"]).run()
+
+    assert len(handled) == 1
+    assert len(sessions) == 1
+    await container.close()
+
+
+async def test_setup_is_safe_to_call_twice() -> None:
+    container = a_container(transports=("jobs",))
+    setup(container)
+    setup(container)
+
+    await drain(container)
+
+    assert len(handled) == 1
+    await container.close()
+
+
+async def test_a_publisher_needs_no_handlers_at_all() -> None:
+    """Routing describes where a message goes, not who handles it.
+
+    Checking routes against declared handlers at setup would reject every
+    publishing process, which is the split the library exists for.
+    """
+    config = MessageBusConfig(
+        transports={"jobs": TransportConfig("in-memory://")},
+        routing={IngestDocument: "jobs"},
+    )
+    container = wireup.create_async_container(injectables=[])
+    setup(container, HandlersLocator())
+
+    bus = MessageBusFactory(config, [InMemoryTransportFactory()]).bus()
+    sent = await bus.dispatch(IngestDocument(document_id=uuid4()))
+
+    assert sent is not None
     await container.close()

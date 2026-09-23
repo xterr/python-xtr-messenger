@@ -10,6 +10,8 @@ from .handler_descriptor import HandlerDescriptor
 from .handlers_locator_interface import HandlersLocatorInterface
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .handler_descriptor import Handler
 
 __all__ = ["HandlersLocator"]
@@ -76,6 +78,22 @@ class HandlersLocator(HandlersLocatorInterface):
     def message_types(self) -> tuple[type, ...]:
         """Return every message type with at least one handler."""
         return tuple(self._handlers)
+
+    def decorate(self, wrap: Callable[[HandlerDescriptor], HandlerDescriptor]) -> None:
+        """Replace every registered handler with ``wrap`` applied to it.
+
+        For wrapping handlers in something they should not have to know
+        about — a container filling their parameters, a span, a timer.
+        Declaration stays where it is; this changes what is called.
+
+        Applies to what is registered now. A handler declared afterwards is
+        not wrapped, which is why this belongs at the end of start-up, once
+        the modules declaring handlers have been imported.
+        """
+        self._handlers = {
+            message_type: tuple(wrap(d) for d in descriptors)
+            for message_type, descriptors in self._handlers.items()
+        }
 
     @override
     def bindings(self) -> tuple[tuple[type, HandlerDescriptor], ...]:

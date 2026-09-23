@@ -28,11 +28,9 @@ And the wiring, where the container is built::
     worker = await container.get(WorkerInterface)
     await worker.run()
 
-That is the whole surface: one decorator and one wiring call.
-:func:`takes_injected` runs at import, where it can only hide the parameters
-— the container does not exist yet, and the bus would otherwise reject a
-handler for declaring a parameter it cannot supply.
-:func:`make_injectables` runs where the container does exist, and fills them.
+Two ways in, depending on who builds the bus. :func:`setup` wires the
+container into handlers and leaves you to build a bus the ordinary way.
+:func:`make_injectables` has the container hand one out instead.
 
 wireup opens a scope around each call on its own, so a dependency declared
 ``lifetime="scoped"`` is built once per message and released when that
@@ -49,14 +47,15 @@ describes what a message should not share, not what a handler must be.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import TypeVar, final
 
 import wireup
-from typing_extensions import override
 from wireup import AsyncContainer
-from wireup.ioc.util import hide_annotated_names
 
-from message_bus.handler import HandlerDescriptor, HandlersLocatorInterface, default_registry
+from message_bus.handler import (
+    HandlerDescriptor,
+    HandlersLocator,
+    default_registry,
+)
 from message_bus.message_bus_config import MessageBusConfig
 from message_bus.message_bus_factory import MessageBusFactory
 from message_bus.message_bus_interface import MessageBusInterface
@@ -64,33 +63,9 @@ from message_bus.transport.transport_factory_interface import TransportFactoryIn
 from message_bus.worker_factory import WorkerFactory
 from message_bus.worker_interface import WorkerInterface
 
-HandlerT = TypeVar("HandlerT")
+__all__ = ["make_injectables", "setup"]
 
-__all__ = ["make_injectables", "takes_injected"]
-
-
-def takes_injected(handler: HandlerT) -> HandlerT:
-    """Declare that ``handler`` has parameters the container should fill.
-
-    Mark the parameters themselves with wireup's ``Injected[T]``; this says
-    the handler has some. Both are needed, and they are different things::
-
-        @as_message_handler(IngestDocument)
-        @takes_injected
-        async def ingest(message: IngestDocument, db: Injected[Session]) -> None: ...
-
-    What it does is hide those parameters from anything inspecting the
-    handler afterwards, which is what lets the bus keep requiring a handler
-    to take the message and at most an envelope. Without it, registration
-    rejects the handler for declaring a parameter the bus cannot supply.
-
-    Apply it *under* :func:`~message_bus.decorator.as_message_handler`, so
-    the shape is already hidden by the time the handler is registered.
-    Nothing is resolved here: the container does not exist yet, and
-    :func:`make_injectables` supplies it later.
-    """
-    hide_annotated_names(handler)  # pyright: ignore[reportArgumentType]
-    return handler
+_FILLED = "_message_bus_filled"
 
 
 def make_injectables(
@@ -98,14 +73,16 @@ def make_injectables(
     *,
     transports: Sequence[str] = (),
     factories: Sequence[TransportFactoryInterface] | None = None,
-    handlers: HandlersLocatorInterface | None = None,
+    handlers: HandlersLocator | None = None,
 ) -> list[object]:
     """Return what a container needs to provide a bus and a worker.
 
     A container built with these hands out a ``MessageBusInterface``, and a
-    ``WorkerInterface`` when ``transports`` names any. Handlers marked with
-    :func:`takes_injected` have their parameters filled from the same
-    container.
+    ``WorkerInterface`` when ``transports`` names any. Handlers are wired to
+    the same container, so :func:`setup` need not be called as well.
+
+    Use this when you would rather ask the container for a bus than build
+    one; use :func:`setup` when your application builds it.
 
     **The configuration goes in the container either way.** Pass it here and
     it is registered for you; leave it out and provide it yourself, which is
@@ -132,14 +109,13 @@ def make_injectables(
         Injectables to spread into ``create_async_container(injectables=...)``.
     """
 
-    def filled(container: AsyncContainer) -> HandlersLocatorInterface:
-        return _FilledHandlers(container, handlers or default_registry())
-
     def message_bus(config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
-        return MessageBusFactory(config, factories, filled(container)).bus()
+        setup(container, handlers)
+        return MessageBusFactory(config, factories, handlers).bus()
 
     def worker(config: MessageBusConfig, container: AsyncContainer) -> WorkerInterface:
-        return WorkerFactory(config, factories, filled(container)).worker(transports)
+        setup(container, handlers)
+        return WorkerFactory(config, factories, handlers).worker(transports)
 
     registered: list[object] = [wireup.injectable(message_bus)]
     if config is not None:
@@ -149,57 +125,47 @@ def make_injectables(
     return registered
 
 
-@final
-class _FilledHandlers(HandlersLocatorInterface):
-    """Another locator, with the container filling in handler parameters.
+def setup(container: AsyncContainer, handlers: HandlersLocator | None = None) -> None:
+    """Make every declared handler resolve its parameters from ``container``.
 
-    A decorator rather than a replacement: declaration stays where it was,
-    and a handler that asks the container for nothing passes through
-    untouched.
+    Call once at start-up, after the container is built and after the modules
+    declaring handlers have been imported. Then build a bus the ordinary
+    way — it needs to know nothing about a container::
+
+        container = wireup.create_async_container(injectables=[app.services])
+        setup(container)
+
+        bus = MessageBusFactory(CONFIG).bus()
+        worker = WorkerFactory(CONFIG).worker(["jobs"])
+
+    Use this when your application builds the bus. Use
+    :func:`make_injectables` instead when you would rather the container hand
+    one out.
+
+    There is no configuration argument. A ``MessageBusConfig`` says which
+    transports exist and where messages go; a container says what a handler
+    can be given. The two have nothing to say to each other, and the bus
+    already takes the configuration.
+
+    Calling this twice is harmless — a handler already drawing from a
+    container is left alone.
+
+    Args:
+        container: The container handler parameters are filled from.
+        handlers: The locator to wire, defaulting to the process-wide one.
     """
+    registry = handlers if handlers is not None else default_registry()
+    registry.decorate(lambda descriptor: _filled(container, descriptor))
 
-    __slots__ = ("_container", "_filled", "_inner")
 
-    def __init__(self, container: AsyncContainer, inner: HandlersLocatorInterface) -> None:
-        """Fill handlers from ``inner`` using ``container``."""
-        self._container = container
-        self._inner = inner
-        self._filled: dict[int, HandlerDescriptor] = {}
-
-    @override
-    def register(
-        self,
-        message_type: type,
-        handler: object,
-        name: str | None = None,
-    ) -> HandlerDescriptor:
-        """Register on the wrapped locator."""
-        return self._inner.register(message_type, handler, name)  # pyright: ignore[reportArgumentType]
-
-    @override
-    def handlers_for(self, message_type: type) -> tuple[HandlerDescriptor, ...]:
-        """Return the wrapped locator's handlers, each able to be filled."""
-        return tuple(self._fill(d) for d in self._inner.handlers_for(message_type))
-
-    @override
-    def message_types(self) -> tuple[type, ...]:
-        """Return every message type the wrapped locator knows."""
-        return self._inner.message_types()
-
-    @override
-    def bindings(self) -> tuple[tuple[type, HandlerDescriptor], ...]:
-        """Return every ``(message_type, handler)`` pair, filled."""
-        return tuple((t, self._fill(d)) for t, d in self._inner.bindings())
-
-    def _fill(self, descriptor: HandlerDescriptor) -> HandlerDescriptor:
-        known = self._filled.get(id(descriptor.handler))
-        if known is not None:
-            return known
-        fill = wireup.inject_from_container(self._container)
-        made = HandlerDescriptor(
-            handler=fill(descriptor.handler),
-            name=descriptor.name,
-            wants_envelope=descriptor.wants_envelope,
-        )
-        self._filled[id(descriptor.handler)] = made
-        return made
+def _filled(container: AsyncContainer, descriptor: HandlerDescriptor) -> HandlerDescriptor:
+    """Return ``descriptor`` with its container parameters filled in."""
+    if getattr(descriptor.handler, _FILLED, False):
+        return descriptor
+    filled = wireup.inject_from_container(container)(descriptor.handler)
+    setattr(filled, _FILLED, True)
+    return HandlerDescriptor(
+        handler=filled,
+        name=descriptor.name,
+        wants_envelope=descriptor.wants_envelope,
+    )
