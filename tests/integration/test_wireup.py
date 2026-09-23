@@ -24,7 +24,7 @@ from message_bus import (
     as_message,
     as_message_handler,
 )
-from message_bus.integration.wireup import injected, make_injectables
+from message_bus.integration.wireup import make_injectables, takes_injected
 from message_bus.transport.in_memory import InMemoryTransportFactory
 
 pytestmark = pytest.mark.anyio
@@ -65,7 +65,7 @@ async def session() -> AsyncIterator[str]:
 
 
 @as_message_handler(IngestDocument)
-@injected
+@takes_injected
 async def ingest(message: IngestDocument, db: Injected[str], m: Injected[Metrics]) -> None:
     handled.append(message.document_id)
     sessions.append(db)
@@ -186,7 +186,7 @@ async def test_a_handler_asking_for_nothing_is_untouched() -> None:
     await container.close()
 
 
-def test_injected_hides_the_parameters_from_the_bus() -> None:
+def test_takes_injected_hides_the_parameters_from_the_bus() -> None:
     """Otherwise registration rejects a handler for a parameter it declares."""
     assert tuple(inspect.signature(ingest).parameters) == ("message",)
 
@@ -194,7 +194,7 @@ def test_injected_hides_the_parameters_from_the_bus() -> None:
 def test_a_handler_may_still_ask_for_the_envelope_alongside() -> None:
     registry = HandlersLocator()
 
-    @injected
+    @takes_injected
     async def with_envelope(
         message: IngestDocument,
         envelope: Envelope,

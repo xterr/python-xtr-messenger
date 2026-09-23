@@ -341,17 +341,21 @@ the usual way, and anything it needs beyond the message is a parameter the conta
 
 ```python
 # app/handlers.py
-from wireup import Injected
-
+from wireup import Injected                                   # wireup's annotation
 from message_bus import as_message_handler
-from message_bus.integration.wireup import injected
+from message_bus.integration.wireup import takes_injected     # this library's decorator
 
 
 @as_message_handler(IngestDocument)
-@injected
+@takes_injected
 async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
     await db.record(message.document_id)
 ```
+
+Two different things, and both are needed. `Injected[Session]` is wireup's, marking *which*
+parameter it should fill. `takes_injected` is this library's, telling the bus the handler has
+some — without it, registration rejects `ingest` for declaring a parameter the bus cannot
+supply.
 
 And the wiring, where the container is built:
 
@@ -388,7 +392,7 @@ asyncio.run(main())
 A publishing process asks for `MessageBusInterface` instead, and omits `transports` — then no
 worker is registered.
 
-`injected` runs at import, where it can only hide the injected parameters: the container does
+`takes_injected` runs at import, where it can only hide the injected parameters: the container does
 not exist yet, and the bus would otherwise reject a handler for declaring a parameter it cannot
 supply. `make_injectables` runs where the container does exist, and fills them. That is the
 whole surface.

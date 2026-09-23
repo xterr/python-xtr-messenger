@@ -1,32 +1,37 @@
 """Container-provided dependencies for handlers, via wireup.
 
-Install with the ``wireup`` extra. Two things to write. A handler stays a
-plain function declared the usual way, with anything it needs beyond the
-message as a parameter the container fills::
+Install with the ``wireup`` extra. Two things to write, both from here::
 
-    from wireup import Injected
+    from wireup import Injected  # wireup's
 
     from message_bus import as_message_handler
-    from message_bus.integration.wireup import injected
+    from message_bus.integration.wireup import takes_injected  # this module
 
 
     @as_message_handler(IngestDocument)
-    @injected
+    @takes_injected
     async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
         await db.record(message.document_id)
 
+``Injected[T]`` is wireup's annotation, marking a parameter it should fill.
+:func:`takes_injected` is this module's decorator, saying the handler has
+some. They are separate things and both are needed.
+
 And the wiring, where the container is built::
 
+    from message_bus.integration.wireup import make_injectables
+
     container = wireup.create_async_container(
-        injectables=[app.services, *make_injectables(CONFIG, transports=["jobs"])],
+        injectables=[app.handlers, *make_injectables(CONFIG, transports=["jobs"])],
     )
 
     worker = await container.get(WorkerInterface)
     await worker.run()
 
-That is the whole surface. :func:`injected` runs at import, where it can
-only hide the parameters — the container does not exist yet, and the bus
-would otherwise reject a handler for declaring a parameter it cannot supply.
+That is the whole surface: one decorator and one wiring call.
+:func:`takes_injected` runs at import, where it can only hide the parameters
+— the container does not exist yet, and the bus would otherwise reject a
+handler for declaring a parameter it cannot supply.
 :func:`make_injectables` runs where the container does exist, and fills them.
 
 wireup opens a scope around each call on its own, so a dependency declared
@@ -61,15 +66,23 @@ from message_bus.worker_interface import WorkerInterface
 
 HandlerT = TypeVar("HandlerT")
 
-__all__ = ["injected", "make_injectables"]
+__all__ = ["make_injectables", "takes_injected"]
 
 
-def injected(handler: HandlerT) -> HandlerT:
-    """Declare that ``handler`` takes parameters the container fills.
+def takes_injected(handler: HandlerT) -> HandlerT:
+    """Declare that ``handler`` has parameters the container should fill.
 
-    Hides the parameters annotated ``Injected[T]`` from anything inspecting
-    the handler afterwards, which is what lets the bus keep requiring a
-    handler to take the message and at most an envelope.
+    Mark the parameters themselves with wireup's ``Injected[T]``; this says
+    the handler has some. Both are needed, and they are different things::
+
+        @as_message_handler(IngestDocument)
+        @takes_injected
+        async def ingest(message: IngestDocument, db: Injected[Session]) -> None: ...
+
+    What it does is hide those parameters from anything inspecting the
+    handler afterwards, which is what lets the bus keep requiring a handler
+    to take the message and at most an envelope. Without it, registration
+    rejects the handler for declaring a parameter the bus cannot supply.
 
     Apply it *under* :func:`~message_bus.decorator.as_message_handler`, so
     the shape is already hidden by the time the handler is registered.
@@ -90,8 +103,9 @@ def make_injectables(
     """Return what a container needs to provide a bus and a worker.
 
     A container built with these hands out a ``MessageBusInterface``, and a
-    ``WorkerInterface`` when ``transports`` names any. Handlers declared with
-    :func:`injected` have their parameters filled from the same container.
+    ``WorkerInterface`` when ``transports`` names any. Handlers marked with
+    :func:`takes_injected` have their parameters filled from the same
+    container.
 
     **The configuration goes in the container either way.** Pass it here and
     it is registered for you; leave it out and provide it yourself, which is
