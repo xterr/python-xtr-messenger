@@ -1,17 +1,16 @@
-"""Wiring declared handlers onto a taskiq broker.
+"""Wiring a bus onto a taskiq broker.
 
-Handlers are declared with :func:`~message_bus.decorator.as_message_handler`,
-which knows nothing about transports. This module performs the other half:
-at worker startup it walks a registry and registers each handler as a task,
-under the message's own name — the same name
+taskiq looks a message up by task name, so every declared message becomes a
+task under its own name — the same name
 :class:`~message_bus.bridge.taskiq.taskiq_sender.TaskiqSender` publishes to.
+Each task only rebuilds the envelope and dispatches it into a bus. Which
+handlers run is the bus's business, decided in one place whether a message
+arrived through taskiq, through the library's own worker, or through
+``sync://``::
 
-Handler modules therefore never import a broker. They are imported for their
-registration side effect, and the broker is named once, here::
+    import app.handlers.ingest  # noqa: F401 — declares the message and its handler
 
-    import app.handlers.ingest  # noqa: F401 — registers the handler
-
-    bind_handlers(broker)
+    bind_bus(broker, MessageBus([HandleMessageMiddleware()]))
 """
 
 from __future__ import annotations
@@ -22,8 +21,7 @@ import msgspec
 from taskiq import Context, TaskiqDepends
 
 from message_bus.exception import MessageDecodingFailedError
-from message_bus.handler import default_registry
-from message_bus.message_registry import name_of
+from message_bus.message_registry import declared_names
 from message_bus.stamp import ReceivedStamp, RedeliveryStamp
 from message_bus.transport.serialization import EncodedEnvelope, JsonSerializer
 
@@ -35,10 +33,10 @@ if TYPE_CHECKING:
     from taskiq import AsyncBroker, AsyncTaskiqDecoratedTask
 
     from message_bus.envelope import Envelope
-    from message_bus.handler import HandlerDescriptor, HandlersLocatorInterface
+    from message_bus.message_bus_interface import MessageBusInterface
     from message_bus.transport.serialization import SerializerInterface
 
-__all__ = ["bind_handlers"]
+__all__ = ["bind_bus"]
 
 #: Reported when the ``_retries`` label is absent or unreadable. The sender
 #: always sets it, so its absence is anomalous — treating it as a very late
@@ -51,44 +49,40 @@ _LOST_LABEL_ATTEMPT = 1_000_000
 _CONTEXT: Context = TaskiqDepends()
 
 
-def bind_handlers(
+def bind_bus(
     broker: AsyncBroker,
-    registry: HandlersLocatorInterface | None = None,
+    bus: MessageBusInterface,
     serializer: SerializerInterface | None = None,
 ) -> tuple[str, ...]:
-    """Register every declared handler on ``broker``, returning the task names.
+    """Register a task per declared message on ``broker``, dispatching into ``bus``.
 
     Call this once at worker startup, after importing the modules that
-    declare handlers. Registering the same handler twice is harmless — the
-    second registration replaces the first under the same name.
+    declare messages with :func:`~message_bus.decorator.as_message`. Binding
+    again is harmless — each task replaces the one under the same name.
+
+    Returns:
+        The task names registered.
     """
-    source = registry if registry is not None else default_registry()
     wire = serializer if serializer is not None else JsonSerializer()
-    names: list[str] = []
-    for message_type, descriptor in source.bindings():
-        task_name = name_of(message_type)
-        task = _task_for(descriptor, task_name, wire)
+    names = declared_names()
+    for task_name in names:
         _registered: AsyncTaskiqDecoratedTask[..., Coroutine[None, None, None]] = (
-            broker.register_task(task, task_name=task_name)
+            broker.register_task(_task_for(bus, task_name, wire), task_name=task_name)
         )
-        names.append(task_name)
-    return tuple(names)
+    return names
 
 
 def _task_for(
-    descriptor: HandlerDescriptor,
+    bus: MessageBusInterface,
     task_name: str,
     serializer: SerializerInterface,
 ) -> Callable[..., Coroutine[None, None, None]]:
     async def run(body: str, context: Context = _CONTEXT) -> None:
-        await descriptor.invoke(_rebuild(body, context, task_name, serializer))
+        envelope = _rebuild(body, context, task_name, serializer)
+        _ = await bus.dispatch(envelope.message, *envelope.stamps)
 
-    # Named from the descriptor, not the handler: a handler built by a
-    # dependency-injection container is an object, and an object has no
-    # __name__ — reading one off it crashed at worker startup.
-    run.__name__ = descriptor.name.rpartition(".")[2]
-    run.__qualname__ = descriptor.name
-    run.__doc__ = getattr(descriptor.handler, "__doc__", None)
+    run.__name__ = task_name.rpartition(".")[2]
+    run.__qualname__ = task_name
     return run
 
 

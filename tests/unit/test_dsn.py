@@ -4,7 +4,7 @@ from types import MappingProxyType
 
 import pytest
 
-from message_bus import Dsn, InvalidDsnError, TransportConfig
+from message_bus import Dsn, InvalidDsnError
 
 
 def test_a_scheme_is_read_from_a_hostless_dsn() -> None:
@@ -22,12 +22,12 @@ def test_a_scheme_is_lowercased() -> None:
 def test_query_options_are_decoded() -> None:
     dsn = Dsn.parse("amqp://rabbit:5672/%2f?queue=jobs_high&priority=5")
 
-    assert dsn.option("queue") == "jobs_high"
-    assert dsn.option("priority") == "5"
+    assert dsn.options["queue"] == "jobs_high"
+    assert dsn.options["priority"] == "5"
 
 
 def test_an_absent_option_is_none() -> None:
-    assert Dsn.parse("sync://").option("queue") is None
+    assert Dsn.parse("sync://").options.get("queue") is None
 
 
 def test_the_raw_dsn_is_kept_for_the_adapter() -> None:
@@ -36,11 +36,19 @@ def test_the_raw_dsn_is_kept_for_the_adapter() -> None:
     assert Dsn.parse(raw).raw == raw
 
 
-def test_a_dsn_without_a_scheme_is_refused() -> None:
+def test_a_dsn_without_a_separator_is_refused() -> None:
     with pytest.raises(InvalidDsnError) as excinfo:
         _ = Dsn.parse("just-a-host")
 
     assert excinfo.value.dsn == "just-a-host"
+
+
+def test_a_dsn_with_a_separator_but_no_scheme_is_refused() -> None:
+    """``://host`` has the separator yet no scheme to dispatch on."""
+    with pytest.raises(InvalidDsnError) as excinfo:
+        _ = Dsn.parse("://host")
+
+    assert excinfo.value.dsn == "://host"
 
 
 def test_options_are_a_read_only_view() -> None:
@@ -63,17 +71,3 @@ def test_two_transports_differing_only_in_options_share_a_connection() -> None:
 
 def test_a_hostless_connection_stays_parseable() -> None:
     assert Dsn.parse(Dsn.parse("in-memory://").connection).scheme == "in-memory"
-
-
-def test_a_queue_in_the_dsn_is_used_when_no_field_is_given() -> None:
-    assert TransportConfig("amqp://rabbit?queue=from_dsn").queue_name == "from_dsn"
-
-
-def test_an_explicit_queue_field_wins_over_the_dsn() -> None:
-    spec = TransportConfig("amqp://rabbit?queue=from_dsn", queue="from_field")
-
-    assert spec.queue_name == "from_field"
-
-
-def test_a_transport_with_no_queue_anywhere_reports_none() -> None:
-    assert TransportConfig("sync://").queue_name is None

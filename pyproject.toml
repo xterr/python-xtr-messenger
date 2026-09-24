@@ -99,15 +99,6 @@ reportImportCycles = "none"
 root = "src/message_bus/bridge/amqp/amqp_broker.py"
 reportPrivateUsage = "none"
 
-# codec.py is the runtime-reflection boundary (json.loads, getattr, isinstance
-# on object). Narrowing `object` to a container always yields `list[Unknown]`,
-# which no annotation overrides. Scoped here only; every other module keeps them.
-[[tool.basedpyright.executionEnvironments]]
-root = "src/message_bus/transport/serialization/json_value.py"
-reportAny = "none"
-reportUnknownVariableType = "none"
-reportUnknownArgumentType = "none"
-
 # defstruct's field tuples are typed loosely in msgspec's stubs, and the
 # annotations feeding them come from get_type_hints, which returns Any.
 # Scoped here only; every other module keeps these on.
@@ -150,15 +141,12 @@ fixable = ["ALL"]
 unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
-# taskiq resolves task annotations at runtime, so `Context` must be a real
-# import here, not a TYPE_CHECKING one.
-"src/message_bus/taskiq/handler.py" = ["TC001", "TC002", "TC003"]
 # wireup registers a factory under its return annotation, read at runtime.
 # Deferring these would register the factories under nothing.
 "src/message_bus/integration/wireup.py" = ["TC001", "TC002", "TC003"]
 # Same reason on the consuming side: wireup reads a factory's annotations at
 # runtime, so a test that registers one cannot defer them either.
-"tests/integration/*.py" = ["TC001", "TC002", "TC003"]
+"tests/integration/integration/test_wireup.py" = ["TC001", "TC002", "TC003"]
 "tests/**/*.py" = [
     "S101",    # assert is the point of pytest
     "S603",    # a fresh interpreter is the only way to assert a module was never imported
@@ -195,13 +183,6 @@ docstring-code-line-length = "dynamic"
 # basedpyright accepted (reading __name__ off a handler that is an object).
 [tool.ty.src]
 include = ["src", "tests"]
-
-[tool.ty.rules]
-# Tests monkey-patch third-party constructors to count instantiations and
-# assert on privates; neither has a typed form.
-invalid-assignment = "ignore"
-invalid-argument-type = "ignore"
-unknown-argument = "ignore"
 
 # ─────────────────────────────────────────────────────────────────
 # pytest

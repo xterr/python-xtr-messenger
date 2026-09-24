@@ -1,102 +1,227 @@
-"""Container-provided dependencies for handlers, via wireup.
+"""The bus, the worker and every handler's dependencies, from a wireup container.
 
-Install with the ``wireup`` extra. Two things to write, both from here::
+Install with the ``wireup`` extra. Handlers ask for what they need the way
+wireup always does, and import nothing from here::
 
-    from wireup import Injected  # wireup's
+    from wireup import Injected
 
     from message_bus import as_message_handler
-    from message_bus.integration.wireup import takes_injected  # this module
 
 
     @as_message_handler(IngestDocument)
-    @takes_injected
-    async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
-        await db.record(message.document_id)
+    async def ingest(message: IngestDocument, db: Injected[Session]) -> None: ...
 
-``Injected[T]`` is wireup's annotation, marking a parameter it should fill.
-:func:`takes_injected` is this module's decorator, saying the handler has
-some. They are separate things and both are needed.
 
-And the wiring, where the container is built::
+    @as_message_handler(IssueInvoice)
+    class IssueInvoiceHandler:
+        def __init__(self, invoices: InvoiceRepository) -> None: ...
 
-    from message_bus.integration.wireup import make_injectables
+        async def __call__(self, message: IssueInvoice, db: Injected[Session]) -> None: ...
+
+One call where the container is built::
+
+    from message_bus.integration import wireup as message_bus
 
     container = wireup.create_async_container(
-        injectables=[app.handlers, *make_injectables(CONFIG, transports=["jobs"])],
+        injectables=[
+            app.services,
+            *message_bus.injectables(CONFIG, transports=["jobs"]),
+        ],
     )
 
-    worker = await container.get(WorkerInterface)
-    await worker.run()
+    await (await container.get(WorkerInterface)).run()
 
-Two ways in, depending on who builds the bus. :func:`setup` wires the
-container into handlers and leaves you to build a bus the ordinary way.
-:func:`make_injectables` has the container hand one out instead.
+and any service can take a ``MessageBusInterface`` like any other dependency.
 
-wireup opens a scope around each call on its own, so a dependency declared
-``lifetime="scoped"`` is built once per message and released when that
-message finishes. A singleton stays shared by every message. Scoping
-describes what a message should not share, not what a handler must be.
+A handler class is a singleton, registered here — it needs no ``@injectable``
+of its own. Its constructor is resolved once, so it takes what lives as long
+as it does; anything a single message needs goes on ``__call__`` as
+``Injected[...]``, and a ``lifetime="scoped"`` dependency there is built for
+that call and released when it finishes, even if it raised. A constructor
+asking for a scoped dependency is refused as the container is built.
 
 .. note::
-   Every annotation a container reads is imported at runtime, not deferred
-   into a ``TYPE_CHECKING`` block. wireup resolves a factory's parameters and
-   return type when the container is built, and a deferred name is not there
-   to resolve.
+   Every annotation wireup reads is imported at runtime, not deferred into a
+   ``TYPE_CHECKING`` block — it resolves them as the container is built.
 """
 
 from __future__ import annotations
 
+import inspect
+import types
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from typing import cast, final
+
 import wireup
+from typing_extensions import override
 from wireup import AsyncContainer
 
-from message_bus.handler import (
-    HandlerDescriptor,
-    HandlersLocator,
-    default_registry,
-)
+from message_bus.exception import UnregisteredHandlerError
+from message_bus.handler import Handler, HandlerDescriptor, HandlersLocator, default_registry
+from message_bus.message_bus_config import MessageBusConfig
+from message_bus.message_bus_factory import MessageBusFactory
+from message_bus.message_bus_interface import MessageBusInterface
+from message_bus.transport.transport_factory import TransportFactory
+from message_bus.transport.transport_factory_interface import TransportFactoryInterface
+from message_bus.worker_factory import WorkerFactory
+from message_bus.worker_interface import WorkerInterface
 
-__all__ = ["setup"]
-
-_FILLED = "_message_bus_filled"
+__all__ = ["injectables"]
 
 
-def setup(container: AsyncContainer, handlers: HandlersLocator | None = None) -> None:
-    """Make every declared handler resolve its parameters from ``container``.
+def injectables(
+    config: MessageBusConfig | None = None,
+    *,
+    transports: Sequence[str] = (),
+    factories: Sequence[TransportFactoryInterface] | None = None,
+    handlers: HandlersLocator | None = None,
+) -> list[object]:
+    """Return what to spread into ``create_async_container(injectables=[...])``.
 
-    Call once at start-up, after the container is built and after the modules
-    declaring handlers have been imported. Then build a bus the ordinary
-    way — it needs to know nothing about a container::
+    The container then provides a ``MessageBusInterface``, a
+    ``WorkerInterface`` when ``transports`` names any, and the
+    ``MessageBusConfig`` both are built from — and every handler class
+    declared so far, as a singleton. Import the modules declaring handler
+    classes before calling this; one declared afterwards is refused with
+    :class:`~message_bus.exception.UnregisteredHandlerError` when the bus or
+    the worker is resolved.
 
-        container = wireup.create_async_container(injectables=[app.services])
-        setup(container)
-
-        bus = MessageBusFactory(CONFIG).bus()
-        worker = WorkerFactory(CONFIG).worker(["jobs"])
-
-    There is no configuration argument. A ``MessageBusConfig`` says which
-    transports exist and where messages go; a container says what a handler
-    can be given. The two have nothing to say to each other, and the bus
-    already takes the configuration.
-
-    Calling this twice is harmless — a handler already drawing from a
-    container is left alone.
+    Resolving either wires the handlers to the container: a function handler,
+    or a handler class's ``__call__``, has its ``Injected[...]`` parameters
+    filled on every call.
 
     Args:
-        container: The container handler parameters are filled from.
-        handlers: The locator to wire, defaulting to the process-wide one.
+        config: Which transports exist and where messages go. Omit it to
+            provide a ``MessageBusConfig`` injectable of your own, say one
+            built from ``Inject(config=...)`` settings.
+        transports: What this process consumes. Omit in a process that only
+            publishes, and no worker is provided.
+        factories: Transport factories, when discovery is not wanted or one
+            needs a collaborator it cannot be discovered with.
+        handlers: The locator handlers were declared into, when not the
+            process-wide one.
+
+    Returns:
+        Injectables for ``create_async_container``.
     """
     registry = handlers if handlers is not None else default_registry()
-    registry.decorate(lambda descriptor: _filled(container, descriptor))
+    # One for the bus and the worker both, so they share what a factory holds:
+    # the connection to a broker, the backlog of an in-memory transport.
+    shared = [TransportFactory(factories)]
+    registered = {declared: _registration_of(declared) for declared in _handler_classes(registry)}
+
+    def message_bus(bus_config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
+        _wire(registry, container, registered)
+        return MessageBusFactory(bus_config, shared, registry).bus()
+
+    def worker(bus_config: MessageBusConfig, container: AsyncContainer) -> WorkerInterface:
+        _wire(registry, container, registered)
+        return WorkerFactory(bus_config, shared, registry).worker(transports)
+
+    provided: list[object] = [wireup.injectable(message_bus)]
+    provided.extend(wireup.injectable(registration) for registration in registered.values())
+    if config is not None:
+        provided.append(wireup.instance(config, as_type=MessageBusConfig))
+    if transports:
+        provided.append(wireup.injectable(worker))
+    return provided
 
 
-def _filled(container: AsyncContainer, descriptor: HandlerDescriptor) -> HandlerDescriptor:
-    """Return ``descriptor`` with its container parameters filled in."""
-    if getattr(descriptor.handler, _FILLED, False):
-        return descriptor
-    filled = wireup.inject_from_container(container)(descriptor.handler)
-    setattr(filled, _FILLED, True)
-    return HandlerDescriptor(
-        handler=filled,
-        name=descriptor.name,
-        wants_envelope=descriptor.wants_envelope,
-    )
+def _handler_classes(registry: HandlersLocator) -> set[type]:
+    return {
+        descriptor.handler
+        for message_type in registry.message_types()
+        for descriptor in registry.handlers_for(message_type)
+        if isinstance(descriptor.handler, type)
+    }
+
+
+def _registration_of(handler_type: type) -> type:
+    """Return what registers ``handler_type`` with the container, as a singleton.
+
+    A private subclass rather than the class itself. ``@injectable`` works by
+    marking what it decorates, and a marked handler class would be registered
+    a second time by the container scanning the module that declares it.
+    Named and placed like the class, so the container's own messages read as
+    if they were about it.
+    """
+
+    def namespace(body: dict[str, object]) -> None:
+        body["__module__"] = handler_type.__module__
+        body["__qualname__"] = handler_type.__qualname__
+
+    return types.new_class(handler_type.__name__, (handler_type,), exec_body=namespace)
+
+
+def _wire(
+    registry: HandlersLocator,
+    container: AsyncContainer,
+    registered: Mapping[type, type],
+) -> None:
+    """Have every handler draw its dependencies from ``container``.
+
+    Raises:
+        WireupError: If a handler asks for something ``container`` cannot
+            provide.
+        UnregisteredHandlerError: If a handler class was declared after the
+            container was built.
+    """
+    registry.decorate(_ContainerBinding(container, registered))
+
+
+@final
+class _ContainerBinding:
+    """Binds each handler to one container, as a locator decorator.
+
+    Every binding is equal to every other, so a locator holds one at a time:
+    wiring again — or wiring another container, as a test suite does per
+    test — replaces the binding instead of stacking on top of it, and a
+    handler declared later is bound to the current container only.
+    """
+
+    __slots__ = ("_container", "_registered")
+
+    def __init__(self, container: AsyncContainer, registered: Mapping[type, type]) -> None:
+        self._container = container
+        self._registered = registered
+
+    def __call__(self, descriptor: HandlerDescriptor) -> HandlerDescriptor:
+        return replace(descriptor, call=self._calling(descriptor.handler))
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _ContainerBinding)
+
+    @override
+    def __hash__(self) -> int:
+        return hash(_ContainerBinding)
+
+    def _calling(self, declared: Handler | type) -> Handler:
+        """Return what to call for ``declared``, with the container filling it in."""
+        if isinstance(declared, type):
+            return self._shared(declared)
+        plain = inspect.isfunction(declared) or inspect.ismethod(declared)
+        target: Handler = declared if plain else declared.__call__
+        return wireup.inject_from_container(self._container)(target)
+
+    def _shared(self, handler_type: type) -> Handler:
+        """Call the container's one ``handler_type``, filling its ``__call__``.
+
+        wireup enters a scope around the call only when ``__call__`` asks for
+        something scoped, so a handler needing none costs a lookup per message.
+
+        Raises:
+            UnregisteredHandlerError: If ``handler_type`` was declared after
+                the container was built.
+        """
+        registration = self._registered.get(handler_type)
+        if registration is None:
+            raise UnregisteredHandlerError(handler_type.__qualname__)
+        container = self._container
+        call = wireup.inject_from_container(container)(cast("Handler", handler_type.__call__))
+
+        async def per_message(*args: object) -> None:
+            await call(await container.get(registration), *args)
+
+        return per_message

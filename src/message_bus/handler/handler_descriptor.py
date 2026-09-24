@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, TypeAlias, cast, get_type_hints
+from typing import TYPE_CHECKING, Annotated, TypeAlias, cast, get_args, get_origin, get_type_hints
 
 from message_bus.envelope import Envelope
 from message_bus.exception import HandlerSignatureError
@@ -17,164 +17,169 @@ __all__ = ["Handler", "HandlerDescriptor"]
 
 Handler: TypeAlias = "Callable[..., Awaitable[None]]"
 
-_ENVELOPE_ARITY = 2
+_WITH_ENVELOPE = 2
 
 
 @dataclass(frozen=True, slots=True)
 class HandlerDescriptor:
-    """A registered handler, and how to call it."""
+    """A registered handler, and how to call it.
 
-    handler: Handler
+    ``handler`` is what was declared: a function, a callable object, or a
+    class whose instances are callable — built once, when its first message
+    arrives, and shared by every message after. ``call`` is what runs. The two
+    start out as the same thing, and an integration that has to wrap a handler
+    (a container filling its parameters, a span, a timer) replaces ``call``
+    while ``handler`` keeps saying what was declared.
+    """
+
+    handler: Handler | type
     name: str
     wants_envelope: bool
+    call: Handler
 
     @classmethod
-    def of(cls, handler: Handler, name: str | None = None) -> HandlerDescriptor:
+    def of(cls, handler: Handler | type, name: str | None = None) -> HandlerDescriptor:
         """Describe ``handler`` by inspecting the signature it declares.
 
-        Raises:
-            HandlerSignatureError: If the parameters are not a shape the bus
-                can call.
-        """
-        _hide_container_parameters(handler)
-        return cls(
-            handler=handler,
-            name=name or _name_of(handler),
-            wants_envelope=_wants_envelope(handler),
-        )
-
-    @classmethod
-    def of_type(
-        cls,
-        handler_type: type,
-        handler: Handler,
-        name: str | None = None,
-    ) -> HandlerDescriptor:
-        """Describe ``handler``, taking its shape from ``handler_type``.
-
-        For a handler that does not exist yet — one a container builds when a
-        message arrives — so the class is all there is to check. Checking it
-        now means a handler with a shape the bus cannot call is rejected
-        while wiring rather than on the first message.
+        The bus calls a handler with the message, and with the envelope too
+        when a second parameter is annotated :class:`Envelope`. Parameters a
+        dependency-injection container fills — wireup's ``Injected[T]`` — may
+        follow; they are the container's to supply, not the bus's.
 
         Raises:
             HandlerSignatureError: If the parameters are not a shape the bus
                 can call.
         """
-        call = _own_call_of(handler_type)
-        if call is not None:
-            _hide_container_parameters(call)
-        if call is None:
-            raise HandlerSignatureError(handler_type.__qualname__, ())
-        declared = tuple(inspect.signature(call).parameters)[1:]
+        label = name or _name_of(handler)
         return cls(
             handler=handler,
-            name=name or handler_type.__qualname__,
-            wants_envelope=_decide(declared, _hints_of(call), handler_type.__qualname__),
+            name=label,
+            wants_envelope=_wants_envelope(handler, label),
+            call=_built_once(handler) if isinstance(handler, type) else handler,
         )
 
     async def invoke(self, envelope: Envelope) -> None:
         """Call the handler with the message, and the envelope if it asked."""
         if self.wants_envelope:
-            await self.handler(envelope.message, envelope)
+            await self.call(envelope.message, envelope)
         else:
-            await self.handler(envelope.message)
+            await self.call(envelope.message)
 
 
-def _name_of(handler: Handler) -> str:
+def _name_of(handler: Handler | type) -> str:
     named = getattr(handler, "__qualname__", None)
     return named if isinstance(named, str) else type(handler).__qualname__
 
 
-def _annotated(handler: Handler) -> object:
-    """Return the object carrying ``handler``'s annotations.
+def _built_once(handler_type: type) -> Handler:
+    """Build ``handler_type`` on its first message, and reuse it for every other.
 
-    A handler need not be a function. A dependency-injection container builds
-    objects, so a handler is often an instance whose ``__call__`` does the
-    work — and annotations live on that method, not on the instance, where
-    :func:`typing.get_type_hints` would find nothing and every such handler
-    would be rejected for not annotating a parameter it had annotated.
+    A handler is a service, not a value: building one per message would cost
+    a construction for each of thousands, to throw away what it holds. Lazily,
+    so declaring a handler at import time builds nothing.
     """
-    if inspect.isfunction(handler) or inspect.ismethod(handler):
-        return handler
-    call = getattr(type(handler), "__call__", None)  # noqa: B004
-    return call if call is not None else handler
+    built: Handler | None = None
+
+    async def call(*args: object) -> None:
+        nonlocal built
+        if built is None:
+            built = cast("Handler", handler_type())
+        await built(*args)
+
+    return call
 
 
-@cache
-def _container_hook() -> Callable[[Handler], None] | None:
-    """Return the installed container's way of hiding what it fills, if any.
-
-    A dependency-injection container lets a handler declare parameters it
-    supplies. Those are not part of the shape the bus calls, so they have to
-    be hidden before the signature is read or every such handler would be
-    rejected for declaring a parameter the bus cannot pass.
-
-    Detected rather than required, the same way a pydantic codec is: with no
-    container installed there are no container parameters to hide, so this
-    cannot change behaviour.
-    """
-    try:
-        from wireup.ioc.util import hide_annotated_names  # noqa: PLC0415
-    except ImportError:
-        return None
-    return hide_annotated_names
-
-
-def _hide_container_parameters(handler: Handler) -> None:
-    """Hide the parameters a container fills, so the bus does not see them.
-
-    Applied to whatever carries the signature, which for a handler that is
-    an object is its ``__call__`` — an instance has no ``__globals__`` for
-    the container to read annotations against.
-    """
-    hide = _container_hook()
-    if hide is None:
-        return
-    target = _annotated(handler)
-    if hasattr(target, "__globals__"):
-        hide(cast("Handler", target))
-
-
-def _own_call_of(handler_type: type) -> Handler | None:
-    """Return the ``__call__`` ``handler_type`` itself defines, if any.
-
-    Not ``getattr``: every class inherits ``type.__call__`` from its
-    metaclass — the thing that makes ``Thing()`` build one — so asking
-    whether a class is callable always says yes, and a class that handles
-    nothing would be accepted as a handler and fail on the first message.
-    """
-    for ancestor in handler_type.__mro__:
-        found = ancestor.__dict__.get("__call__")
-        if found is not None:
-            return cast("Handler", found)
-    return None
-
-
-def _hints_of(target: object) -> dict[str, object]:
-    try:
-        return dict(get_type_hints(target))
-    except (NameError, TypeError):
-        return {}
-
-
-def _decide(parameters: tuple[str, ...], hints: dict[str, object], name: str) -> bool:
-    """Report whether a handler declaring ``parameters`` wants the envelope.
-
-    The one place the rule lives, so a handler that is a function and one a
-    container will build are held to the same shape.
+def _wants_envelope(handler: Handler | type, name: str) -> bool:
+    """Report whether ``handler`` takes the envelope after the message.
 
     Raises:
         HandlerSignatureError: If the parameters are not a shape the bus can
             call.
     """
-    if len(parameters) < _ENVELOPE_ARITY:
+    parameters, hints = _signature_of(handler, name)
+    declared = tuple(parameters)
+    own = tuple(p for p in declared if not _supplied_by_container(hints.get(p)))
+    # The bus passes its arguments by position, so they have to come first.
+    if declared[: len(own)] != own or len(own) > _WITH_ENVELOPE:
+        raise HandlerSignatureError(name, declared)
+    if len(own) < _WITH_ENVELOPE:
         return False
-    if len(parameters) > _ENVELOPE_ARITY or hints.get(parameters[1]) is not Envelope:
-        raise HandlerSignatureError(name, parameters)
+    if hints.get(own[1]) is not Envelope:
+        raise HandlerSignatureError(name, declared)
     return True
 
 
-def _wants_envelope(handler: Handler) -> bool:
-    parameters = tuple(inspect.signature(handler).parameters)
-    return _decide(parameters, _hints_of(_annotated(handler)), _name_of(handler))
+def _signature_of(handler: Handler | type, name: str) -> tuple[list[str], dict[str, object]]:
+    """Return the parameter names the handler is called with, and their hints.
+
+    Annotations live wherever the code does: on a function, on the
+    ``__call__`` of a callable object — an instance has none of its own — or
+    on the ``__call__`` a handler class defines, minus ``self``.
+
+    Raises:
+        HandlerSignatureError: If ``handler`` is a class that defines no
+            ``__call__``.
+    """
+    if isinstance(handler, type):
+        call = _own_call_of(handler)
+        if call is None:
+            raise HandlerSignatureError(name, ())
+        return list(inspect.signature(call).parameters)[1:], _hints_of(call)
+    annotated = (
+        handler
+        if inspect.isfunction(handler) or inspect.ismethod(handler)
+        else type(handler).__call__
+    )
+    return list(inspect.signature(handler).parameters), _hints_of(annotated)
+
+
+def _own_call_of(handler_type: type) -> Callable[..., object] | None:
+    """Return the ``__call__`` ``handler_type`` defines, if any.
+
+    Not ``getattr``: every class inherits ``type.__call__`` from its
+    metaclass — the thing that makes ``Thing()`` build one — so asking a class
+    for its ``__call__`` always finds something.
+    """
+    for ancestor in handler_type.__mro__:
+        found: object | None = ancestor.__dict__.get("__call__")
+        if found is not None:
+            return cast("Callable[..., object]", found)
+    return None
+
+
+def _hints_of(target: object) -> dict[str, object]:
+    try:
+        return dict(get_type_hints(target, include_extras=True))
+    except (NameError, TypeError):
+        return {}
+
+
+def _supplied_by_container(hint: object) -> bool:
+    """Report whether a container fills a parameter annotated ``hint``.
+
+    Detected rather than required, the same way a pydantic codec is: with no
+    container installed there is nothing to recognise, so this cannot change
+    behaviour.
+    """
+    marker = _container_marker()
+    if marker is None or get_origin(hint) is not Annotated:
+        return False
+    metadata: tuple[object, ...] = get_args(hint)[1:]
+    return any(_marks(annotation, marker) for annotation in metadata)
+
+
+def _marks(metadata: object, marker: type) -> bool:
+    if isinstance(metadata, marker):
+        return True
+    # With FastAPI installed, wireup's Inject() hands back a Depends wrapping it.
+    dependency = getattr(metadata, "dependency", None)
+    return bool(getattr(dependency, "__is_wireup_depends__", False))
+
+
+@cache
+def _container_marker() -> type | None:
+    try:
+        from wireup.ioc.types import InjectableType  # noqa: PLC0415
+    except ImportError:
+        return None
+    return InjectableType

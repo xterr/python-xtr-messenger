@@ -19,10 +19,19 @@ class WorkerInterface(Protocol):
     to present this same face.
 
     Depending on this, rather than on either implementation, is what makes a
-    broker replaceable. An entrypoint says ``await worker.run()`` and never
-    learns which of the two it got.
+    broker replaceable. An entrypoint says ``await worker.run()`` — and
+    ``worker.stop()`` from a signal handler — and never learns which of the
+    two it got.
     """
 
     async def run(self) -> None:
-        """Consume and handle messages until cancelled or exhausted."""
+        """Consume and handle messages until stopped, cancelled or exhausted."""
+        ...
+
+    def stop(self) -> None:
+        """Ask a running worker to finish the message in hand and return.
+
+        Safe to call before :meth:`run` or after it returns: a worker that is
+        not running has nothing to wind down.
+        """
         ...

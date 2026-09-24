@@ -1,187 +1,261 @@
+"""The library's own receive loop: collect, dispatch, ack or reject."""
+
 from __future__ import annotations
 
-import subprocess
-import sys
-from dataclasses import dataclass
-from uuid import UUID, uuid4
+import asyncio
+from typing import TYPE_CHECKING, final
 
 import pytest
+from typing_extensions import override
 
 from message_bus import (
     Envelope,
-    HandleMessageMiddleware,
-    HandlersLocator,
-    MessageBus,
-    NoHandlerForMessageError,
+    ErrorDetailsStamp,
+    MessageBusInterface,
+    ReceivedStamp,
     ReceiverInterface,
-    SendersLocator,
-    SendMessageMiddleware,
-    TransportInterface,
+    StampInterface,
     Worker,
     WorkerInterface,
-    as_message,
-    as_message_handler,
 )
-from message_bus.stamp import AckReceiptStamp, ErrorDetailsStamp, ReceivedStamp
-from message_bus.transport.in_memory.in_memory_transport import InMemoryTransport
-from message_bus.transport.sync.sync_transport import SyncTransport
+from tests.support.fakes import RecordingBus, StubReceiver
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterable
 
 pytestmark = pytest.mark.anyio
 
-
-@as_message(name="test.work.v1")
-@dataclass(frozen=True, slots=True)
-class DoWork:
-    identifier: UUID
-    poison: bool = False
+_TIMEOUT = 5.0
 
 
-def a_bus(registry: HandlersLocator, transport: InMemoryTransport) -> MessageBus:
-    table = SendersLocator({DoWork: "queue"}, {"queue": transport})
-    return MessageBus([SendMessageMiddleware(table), HandleMessageMiddleware(registry)])
+@final
+class SelectiveBus(MessageBusInterface):
+    """A bus that raises for one message and dispatches every other."""
+
+    def __init__(self, poison: object) -> None:
+        self._poison = poison
+        self.dispatched: list[Envelope] = []
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        envelope = Envelope.wrap(message, stamps)
+        self.dispatched.append(envelope)
+        if envelope.message == self._poison:
+            raise ValueError("poison")
+        return envelope
 
 
-def a_registry(done: list[UUID]) -> HandlersLocator:
-    registry = HandlersLocator()
+@final
+class StoppingBus(MessageBusInterface):
+    """A bus that stops its worker the moment it dispatches its first message."""
 
-    @as_message_handler(DoWork, registry=registry)
-    async def work(message: DoWork) -> None:
-        if message.poison:
-            raise ValueError("cannot handle this one")
-        done.append(message.identifier)
+    def __init__(self) -> None:
+        self.worker: WorkerInterface | None = None
+        self.dispatched: list[Envelope] = []
 
-    return registry
-
-
-def test_both_shipped_transports_are_whole_transports() -> None:
-    """A whole transport composes the send and receive halves."""
-    assert isinstance(InMemoryTransport(), TransportInterface)
-    assert isinstance(SyncTransport(HandlersLocator()), TransportInterface)
-    assert isinstance(InMemoryTransport(), ReceiverInterface)
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        envelope = Envelope.wrap(message, stamps)
+        self.dispatched.append(envelope)
+        if self.worker is not None:
+            self.worker.stop()
+        return envelope
 
 
-async def test_a_worker_handles_what_was_published() -> None:
-    done: list[UUID] = []
-    registry = a_registry(done)
-    transport = InMemoryTransport()
-    identifier = uuid4()
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=identifier)))
+@final
+class BlockingBus(MessageBusInterface):
+    """A bus whose dispatch announces itself, then blocks forever."""
 
-    await Worker(a_bus(registry, transport), transport).run()
+    def __init__(self) -> None:
+        self.dispatching = asyncio.Event()
+        self._blocked = asyncio.Event()
 
-    assert done == [identifier]
-
-
-async def test_a_collected_message_is_marked_received_so_it_is_not_republished() -> None:
-    transport = InMemoryTransport()
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=uuid4())))
-
-    collected = [envelope async for envelope in transport.get()]
-
-    assert collected[0].last(ReceivedStamp) is not None
-    assert collected[0].last(AckReceiptStamp) is not None
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        self.dispatching.set()
+        _ = await self._blocked.wait()
+        return Envelope.wrap(message, stamps)
 
 
-async def test_one_undeliverable_message_does_not_stop_the_worker() -> None:
-    done: list[UUID] = []
-    registry = a_registry(done)
-    transport = InMemoryTransport()
-    first, second = uuid4(), uuid4()
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=first)))
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=uuid4(), poison=True)))
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=second)))
+@final
+class RecordingReceiver(ReceiverInterface):
+    """A receiver that records which envelopes it actually yielded."""
 
-    await Worker(a_bus(registry, transport), transport).run()
+    def __init__(self, backlog: Iterable[Envelope]) -> None:
+        self._backlog = tuple(backlog)
+        self.collected: list[Envelope] = []
+        self.acked: list[Envelope] = []
+        self.rejected: list[Envelope] = []
 
-    assert done == [first, second]
-    assert len(transport.rejected) == 1
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        for envelope in self._backlog:
+            self.collected.append(envelope)
+            yield envelope
 
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        self.acked.append(envelope)
 
-async def test_a_rejected_message_carries_why_it_failed() -> None:
-    registry = a_registry([])
-    transport = InMemoryTransport()
-    _ = await transport.send(Envelope.wrap(DoWork(identifier=uuid4(), poison=True)))
-
-    await Worker(a_bus(registry, transport), transport).run()
-
-    details = transport.rejected[0].last(ErrorDetailsStamp)
-    assert details is not None
-    assert details.exception_class == "ValueError"
-    assert details.exception_message == "cannot handle this one"
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        self.rejected.append(envelope)
 
 
-async def test_draining_the_queue_leaves_the_record_intact() -> None:
-    """The assertion surface and the consumable queue are separate on purpose."""
-    registry = a_registry([])
-    transport = InMemoryTransport()
-    for _ in range(3):
-        _ = await transport.send(Envelope.wrap(DoWork(identifier=uuid4())))
+@final
+class IdleReceiver(ReceiverInterface):
+    """A receiver that announces it is waiting, then never delivers anything."""
 
-    await Worker(a_bus(registry, transport), transport).run()
+    def __init__(self) -> None:
+        self.waiting = asyncio.Event()
+        self._blocked = asyncio.Event()
+        self.acked: list[Envelope] = []
+        self.rejected: list[Envelope] = []
 
-    assert len(transport.sent) == 3
-    assert transport.pending == 0
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        self.waiting.set()
+        _ = await self._blocked.wait()
+        empty: tuple[Envelope, ...] = ()
+        for envelope in empty:
+            yield envelope
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        self.acked.append(envelope)
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        self.rejected.append(envelope)
 
 
-async def test_a_sync_worker_finishes_at_once_because_nothing_is_outstanding() -> None:
-    transport = SyncTransport(HandlersLocator())
+@final
+class ExplodingReceiver(ReceiverInterface):
+    """A receiver that raises while collecting."""
 
-    collected = [envelope async for envelope in transport.get()]
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        empty: tuple[Envelope, ...] = ()
+        for envelope in empty:
+            yield envelope
+        raise RuntimeError("cannot collect")
 
-    assert collected == []
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        del envelope
 
-
-async def test_a_message_with_no_handler_refuses_to_be_acknowledged_quietly() -> None:
-    """Silently acking an unhandled message loses the work; an unimported
-    handler module is the overwhelmingly likely cause."""
-    bus = MessageBus([HandleMessageMiddleware(HandlersLocator())])
-
-    with pytest.raises(NoHandlerForMessageError, match="DoWork"):
-        _ = await bus.dispatch(DoWork(identifier=uuid4()))
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        del envelope
 
 
 def test_a_worker_is_recognised_by_its_contract_not_its_class() -> None:
-    assert isinstance(Worker(MessageBus([]), InMemoryTransport()), WorkerInterface)
+    assert isinstance(Worker(RecordingBus(), StubReceiver()), WorkerInterface)
 
 
-def test_a_full_receive_loop_runs_without_taskiq_installed_in_memory() -> None:
-    """The replaceability claim, reduced to something falsifiable.
+async def test_it_handles_and_acks_each_collected_message() -> None:
+    first, second = Envelope("first"), Envelope("second")
+    receiver = StubReceiver([first, second])
+    bus = RecordingBus()
 
-    If a complete get -> dispatch -> handle -> ack cycle finishes with no
-    broker library imported, the receive port demonstrably is not shaped
-    around one.
-    """
-    code = (
-        "import asyncio, sys\n"
-        "from dataclasses import dataclass\n"
-        "from uuid import UUID, uuid4\n"
-        "from message_bus import (Envelope, HandleMessageMiddleware, HandlersLocator,\n"
-        "    MessageBus, SendersLocator, SendMessageMiddleware, Worker, as_message,\n"
-        "    as_message_handler)\n"
-        "from message_bus.transport.in_memory.in_memory_transport import InMemoryTransport\n"
-        "@as_message(name='probe.v1')\n"
-        "@dataclass(frozen=True, slots=True)\n"
-        "class Probe:\n"
-        "    identifier: UUID\n"
-        "seen = []\n"
-        "registry = HandlersLocator()\n"
-        "@as_message_handler(Probe, registry=registry)\n"
-        "async def run(message):\n"
-        "    seen.append(message.identifier)\n"
-        "async def main():\n"
-        "    transport = InMemoryTransport()\n"
-        "    await transport.send(Envelope.wrap(Probe(identifier=uuid4())))\n"
-        "    table = SendersLocator({Probe: 'q'}, {'q': transport})\n"
-        "    bus = MessageBus([SendMessageMiddleware(table),\n"
-        "        HandleMessageMiddleware(registry)])\n"
-        "    await Worker(bus, transport).run()\n"
-        "    assert len(seen) == 1, 'the worker handled nothing'\n"
-        "asyncio.run(main())\n"
-        "assert 'taskiq' not in sys.modules, 'taskiq was imported'\n"
-        "assert 'aio_pika' not in sys.modules, 'aio_pika was imported'\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )
+    await Worker(bus, receiver).run()
 
-    assert result.returncode == 0, result.stderr
+    assert bus.dispatched == [first, second]
+    assert receiver.acked == [first, second]
+    assert receiver.rejected == []
+
+
+async def test_a_failing_dispatch_rejects_with_the_reason_attached() -> None:
+    receiver = StubReceiver([Envelope("a")])
+    bus = RecordingBus(failure=ValueError("boom"))
+
+    await Worker(bus, receiver).run()
+
+    assert receiver.acked == []
+    assert receiver.rejected[0].last(ErrorDetailsStamp) == ErrorDetailsStamp("ValueError", "boom")
+
+
+async def test_one_undeliverable_message_does_not_stop_the_worker() -> None:
+    """One bad message is rejected and the loop moves on to the next."""
+    receiver = StubReceiver([Envelope("good-1"), Envelope("poison"), Envelope("good-2")])
+    bus = SelectiveBus("poison")
+
+    await Worker(bus, receiver).run()
+
+    assert [envelope.message for envelope in receiver.acked] == ["good-1", "good-2"]
+    assert [envelope.message for envelope in receiver.rejected] == ["poison"]
+
+
+async def test_the_collected_envelope_is_dispatched_as_it_arrived() -> None:
+    """Its stamps — the ReceivedStamp especially — must reach the bus intact,
+    because that stamp is what stops the bus routing the message back out."""
+    envelope = Envelope("a").with_stamps(ReceivedStamp("in-memory"))
+    receiver = StubReceiver([envelope])
+    bus = RecordingBus()
+
+    await Worker(bus, receiver).run()
+
+    assert bus.dispatched[0] is envelope
+    assert bus.dispatched[0].last(ReceivedStamp) == ReceivedStamp("in-memory")
+
+
+async def test_stop_returns_at_once_while_the_worker_waits_for_a_message() -> None:
+    """A worker parked on an idle receiver has nothing in hand, so stop lets
+    ``run`` return without a message ever being settled."""
+    receiver = IdleReceiver()
+    worker = Worker(RecordingBus(), receiver)
+    run = asyncio.ensure_future(worker.run())
+
+    _ = await asyncio.wait_for(receiver.waiting.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert receiver.acked == []
+    assert receiver.rejected == []
+
+
+async def test_stop_between_messages_leaves_the_next_one_untouched() -> None:
+    """A stop requested while a message is in hand settles that message, then
+    returns before the next is even collected."""
+    receiver = RecordingReceiver([Envelope("first"), Envelope("second")])
+    bus = StoppingBus()
+    worker = Worker(bus, receiver)
+    bus.worker = worker
+
+    await asyncio.wait_for(worker.run(), timeout=_TIMEOUT)
+
+    assert [envelope.message for envelope in receiver.collected] == ["first"]
+    assert [envelope.message for envelope in receiver.acked] == ["first"]
+    assert receiver.rejected == []
+
+
+async def test_stop_before_run_and_after_it_returned_are_no_ops() -> None:
+    receiver = StubReceiver([Envelope("a")])
+    worker = Worker(RecordingBus(), receiver)
+
+    worker.stop()
+    await worker.run()
+    worker.stop()
+
+    assert [envelope.message for envelope in receiver.acked] == ["a"]
+
+
+async def test_cancellation_propagates_and_leaves_the_message_unsettled() -> None:
+    """Cancellation is not an ``Exception``, so it is not mistaken for a
+    message that failed: the envelope is neither acked nor rejected."""
+    bus = BlockingBus()
+    receiver = StubReceiver([Envelope("a")])
+    run = asyncio.ensure_future(Worker(bus, receiver).run())
+
+    _ = await asyncio.wait_for(bus.dispatching.wait(), timeout=_TIMEOUT)
+    _ = run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert receiver.acked == []
+    assert receiver.rejected == []
+
+
+async def test_a_receiver_that_raises_while_collecting_propagates_out_of_run() -> None:
+    with pytest.raises(RuntimeError, match="cannot collect"):
+        await Worker(RecordingBus(), ExplodingReceiver()).run()

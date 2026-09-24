@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from message_bus.handler import default_registry
 from message_bus.transport.transport_factory_interface import TransportFactoryInterface
 from message_bus.transport.transport_options import reject_unknown_options
 
@@ -16,7 +15,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from message_bus.dsn import Dsn
-    from message_bus.handler import HandlersLocatorInterface
     from message_bus.transport.sender import SenderInterface
     from message_bus.transport.transport_config import TransportConfig
 
@@ -32,11 +30,7 @@ SYNC_OPTIONS: tuple[str, ...] = ()
 class SyncTransportFactory(TransportFactoryInterface):
     """Builds ``sync://`` transports, which handle in the calling process."""
 
-    __slots__ = ("_handlers",)
-
-    def __init__(self, handlers: HandlersLocatorInterface | None = None) -> None:
-        """Resolve handlers from ``handlers``, or from the default registry."""
-        self._handlers = handlers
+    __slots__ = ()
 
     @override
     def supports(self, dsn: Dsn) -> bool:
@@ -45,7 +39,7 @@ class SyncTransportFactory(TransportFactoryInterface):
 
     @override
     def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
-        """Build a sync transport per name, all sharing one handlers locator.
+        """Build a sync transport per name.
 
         Raises:
             UnknownTransportOptionError: If a DSN carries any setting, since
@@ -53,7 +47,4 @@ class SyncTransportFactory(TransportFactoryInterface):
         """
         for spec in group.values():
             reject_unknown_options(SYNC_SCHEME, spec.settings, SYNC_OPTIONS)
-        return {name: SyncTransport(self._registry()) for name in group}
-
-    def _registry(self) -> HandlersLocatorInterface:
-        return self._handlers if self._handlers is not None else default_registry()
+        return {name: SyncTransport() for name in group}

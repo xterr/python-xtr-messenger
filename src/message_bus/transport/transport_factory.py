@@ -97,5 +97,8 @@ class TransportFactory(TransportFactoryInterface):
         else:
             for factory in self._factories:
                 if factory.supports(dsn):
-                    return factory
+                    # Seen through, or an adapter bringing its own worker would be hidden.
+                    return (
+                        factory.serving(group) if isinstance(factory, TransportFactory) else factory
+                    )
         raise UnsupportedDsnError(name, dsn.raw)

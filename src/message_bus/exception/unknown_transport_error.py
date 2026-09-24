@@ -1,4 +1,4 @@
-"""A route names a transport that was never registered."""
+"""A transport was asked for by a name the configuration does not define."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ __all__ = ["UnknownTransportError"]
 
 
 class UnknownTransportError(MessageBusError):
-    """A routing entry names a transport that was never registered."""
+    """A route or a worker names a transport the configuration does not define."""
 
-    transport_name: str
-    known_transports: tuple[str, ...]
+    names: tuple[str, ...]
+    known: tuple[str, ...]
 
-    def __init__(self, transport_name: str, known_transports: tuple[str, ...]) -> None:
-        """Record the missing transport alongside the registered ones."""
-        self.transport_name = transport_name
-        self.known_transports = known_transports
-        known = ", ".join(known_transports) or "<none>"
-        super().__init__(f"unknown transport {transport_name!r}; registered: {known}")
+    def __init__(self, names: tuple[str, ...], known: tuple[str, ...]) -> None:
+        """Record what was asked for, and what is actually configured."""
+        self.names = names
+        self.known = known
+        defined = ", ".join(sorted(known)) or "<none>"
+        super().__init__(f"unknown transport(s): {', '.join(names)}; defined: {defined}")

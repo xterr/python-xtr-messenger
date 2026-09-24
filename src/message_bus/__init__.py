@@ -13,17 +13,18 @@ from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
     HandlerSignatureError,
+    InvalidTransportOptionError,
     MessageBusError,
     MessageDecodingFailedError,
-    MissingTaskRouteError,
+    MessageEncodingFailedError,
     MixedDsnError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
     NotConsumableError,
     UnknownMessageNameError,
     UnknownTransportError,
-    UnknownTransportNameError,
     UnknownTransportOptionError,
+    UnregisteredHandlerError,
 )
 from .handler import (
     Handler,
@@ -48,7 +49,6 @@ from .middleware import (
 )
 from .stamp import (
     AckReceiptStamp,
-    BusNameStamp,
     DelayStamp,
     ErrorDetailsStamp,
     HandledStamp,
@@ -88,7 +88,6 @@ __version__ = "0.1.0"
 
 __all__ = [
     "AckReceiptStamp",
-    "BusNameStamp",
     "DataclassCodec",
     "DelayStamp",
     "Dsn",
@@ -105,6 +104,7 @@ __all__ = [
     "InMemoryTransport",
     "InMemoryTransportFactory",
     "InvalidDsnError",
+    "InvalidTransportOptionError",
     "JsonSerializer",
     "LoggerInterface",
     "LoggingMiddleware",
@@ -115,8 +115,8 @@ __all__ = [
     "MessageBusInterface",
     "MessageCodecInterface",
     "MessageDecodingFailedError",
+    "MessageEncodingFailedError",
     "MiddlewareInterface",
-    "MissingTaskRouteError",
     "MixedDsnError",
     "NoHandlerForMessageError",
     "NoSenderForMessageError",
@@ -144,8 +144,8 @@ __all__ = [
     "TransportNamesStamp",
     "UnknownMessageNameError",
     "UnknownTransportError",
-    "UnknownTransportNameError",
     "UnknownTransportOptionError",
+    "UnregisteredHandlerError",
     "UnsupportedDsnError",
     "Worker",
     "WorkerFactory",

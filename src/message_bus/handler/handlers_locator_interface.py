@@ -23,7 +23,7 @@ class HandlersLocatorInterface(Protocol):
     def register(
         self,
         message_type: type,
-        handler: Handler,
+        handler: Handler | type,
         name: str | None = None,
     ) -> HandlerDescriptor:
         """Bind ``handler`` to ``message_type`` and return its descriptor."""
@@ -35,8 +35,4 @@ class HandlersLocatorInterface(Protocol):
 
     def message_types(self) -> tuple[type, ...]:
         """Return every message type with at least one handler."""
-        ...
-
-    def bindings(self) -> tuple[tuple[type, HandlerDescriptor], ...]:
-        """Return every ``(message_type, handler)`` pair, for wiring."""
         ...

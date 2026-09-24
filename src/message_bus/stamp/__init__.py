@@ -11,7 +11,6 @@ envelope on the wire.
 """
 
 from .ack_receipt_stamp import AckReceiptStamp
-from .bus_name_stamp import BusNameStamp
 from .delay_stamp import DelayStamp
 from .error_details_stamp import ErrorDetailsStamp
 from .handled_stamp import HandledStamp
@@ -26,7 +25,6 @@ from .transport_names_stamp import TransportNamesStamp
 __all__ = [
     "DEFAULT_STAMP_TYPES",
     "AckReceiptStamp",
-    "BusNameStamp",
     "DelayStamp",
     "ErrorDetailsStamp",
     "HandledStamp",
@@ -48,7 +46,6 @@ __all__ = [
 #: names a class this process must import, so an unknown name is dropped
 #: rather than resolved — but the list defaults to what the library ships.
 DEFAULT_STAMP_TYPES: tuple[type[StampInterface], ...] = (
-    BusNameStamp,
     DelayStamp,
     ErrorDetailsStamp,
     RedeliveryStamp,

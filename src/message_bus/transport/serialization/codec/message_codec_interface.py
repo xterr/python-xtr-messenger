@@ -25,7 +25,12 @@ class MessageCodecInterface(Protocol):
         ...
 
     def encode(self, message: object) -> JsonValue:
-        """Render ``message`` as a JSON structure."""
+        """Render ``message`` as a JSON structure.
+
+        Implementations raise
+        :class:`~message_bus.exception.MessageEncodingFailedError` when
+        ``message`` has no JSON form.
+        """
         ...
 
     def decode(self, message_type: type, raw: JsonValue) -> object:

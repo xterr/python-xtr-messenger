@@ -62,7 +62,3 @@ class Dsn:
             connection=f"{split.scheme.lower()}{_SEPARATOR}{split.netloc}{split.path}",
             options=MappingProxyType(dict(parse_qsl(split.query))),
         )
-
-    def option(self, key: str) -> str | None:
-        """Return the query-string option ``key``, or ``None``."""
-        return self.options.get(key)

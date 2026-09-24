@@ -22,22 +22,23 @@ class HandlersLocator(HandlersLocatorInterface):
     """Binds message types to the handlers that consume them.
 
     Lookup walks the message's method resolution order, so registering a
-    base class or a shared marker class handles every subclass. The first
-    ancestor with handlers wins — a subclass with its own handlers is not
-    also handled by its parent's.
+    base class or a shared marker class handles every subclass — alongside
+    whatever the subclass registers of its own.
     """
 
-    __slots__ = ("_handlers",)
+    __slots__ = ("_declared", "_decorators", "_handlers")
 
     def __init__(self) -> None:
         """Start empty."""
+        self._declared: dict[type, tuple[HandlerDescriptor, ...]] = {}
         self._handlers: dict[type, tuple[HandlerDescriptor, ...]] = {}
+        self._decorators: list[Callable[[HandlerDescriptor], HandlerDescriptor]] = []
 
     @override
     def register(
         self,
         message_type: type,
-        handler: Handler,
+        handler: Handler | type,
         name: str | None = None,
     ) -> HandlerDescriptor:
         """Bind ``handler`` to ``message_type`` and return its descriptor.
@@ -46,9 +47,11 @@ class HandlersLocator(HandlersLocatorInterface):
             HandlerSignatureError: If the handler's parameters are not a
                 shape the bus can call.
         """
-        descriptor = HandlerDescriptor.of(handler, name)
-        self._handlers[message_type] = (*self._handlers.get(message_type, ()), descriptor)
-        return descriptor
+        declared = HandlerDescriptor.of(handler, name)
+        decorated = self._decorated(declared)
+        self._declared[message_type] = (*self._declared.get(message_type, ()), declared)
+        self._handlers[message_type] = (*self._handlers.get(message_type, ()), decorated)
+        return decorated
 
     @override
     def handlers_for(self, message_type: type) -> tuple[HandlerDescriptor, ...]:
@@ -80,26 +83,28 @@ class HandlersLocator(HandlersLocatorInterface):
         return tuple(self._handlers)
 
     def decorate(self, wrap: Callable[[HandlerDescriptor], HandlerDescriptor]) -> None:
-        """Replace every registered handler with ``wrap`` applied to it.
+        """Apply ``wrap`` to every handler, registered now or later.
 
         For wrapping handlers in something they should not have to know
         about — a container filling their parameters, a span, a timer.
         Declaration stays where it is; this changes what is called.
 
-        Applies to what is registered now. A handler declared afterwards is
-        not wrapped, which is why this belongs at the end of start-up, once
-        the modules declaring handlers have been imported.
+        Decorators apply in the order given, always to the handler as it was
+        declared. One equal to a decorator already applied takes its place
+        rather than stacking on it, which is how an integration rebinds every
+        handler — to a new container, say — without the old binding lingering
+        underneath.
         """
+        if wrap in self._decorators:
+            self._decorators[self._decorators.index(wrap)] = wrap
+        else:
+            self._decorators.append(wrap)
         self._handlers = {
-            message_type: tuple(wrap(d) for d in descriptors)
-            for message_type, descriptors in self._handlers.items()
+            message_type: tuple(self._decorated(d) for d in descriptors)
+            for message_type, descriptors in self._declared.items()
         }
 
-    @override
-    def bindings(self) -> tuple[tuple[type, HandlerDescriptor], ...]:
-        """Return every ``(message_type, handler)`` pair, for wiring."""
-        return tuple(
-            (message_type, descriptor)
-            for message_type, descriptors in self._handlers.items()
-            for descriptor in descriptors
-        )
+    def _decorated(self, descriptor: HandlerDescriptor) -> HandlerDescriptor:
+        for wrap in self._decorators:
+            descriptor = wrap(descriptor)
+        return descriptor

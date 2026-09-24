@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from message_bus.exception import InvalidDsnError, UnknownTransportOptionError
+from message_bus.exception import InvalidTransportOptionError, UnknownTransportOptionError
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping
@@ -40,7 +40,7 @@ def as_int(options: Mapping[str, str], key: str, fallback: int) -> int:
     """Read ``key`` as an integer, or return ``fallback``.
 
     Raises:
-        InvalidDsnError: If the value is present but not an integer.
+        InvalidTransportOptionError: If the value is present but not an integer.
     """
     raw = options.get(key)
     if raw is None:
@@ -48,14 +48,14 @@ def as_int(options: Mapping[str, str], key: str, fallback: int) -> int:
     try:
         return int(raw)
     except ValueError as exc:
-        raise InvalidDsnError(f"{key}={raw!r} is not a whole number") from exc
+        raise InvalidTransportOptionError(key, raw, "a whole number") from exc
 
 
 def as_float(options: Mapping[str, str], key: str, fallback: float) -> float:
     """Read ``key`` as a float, or return ``fallback``.
 
     Raises:
-        InvalidDsnError: If the value is present but not a number.
+        InvalidTransportOptionError: If the value is present but not a number.
     """
     raw = options.get(key)
     if raw is None:
@@ -63,7 +63,7 @@ def as_float(options: Mapping[str, str], key: str, fallback: float) -> float:
     try:
         return float(raw)
     except ValueError as exc:
-        raise InvalidDsnError(f"{key}={raw!r} is not a number") from exc
+        raise InvalidTransportOptionError(key, raw, "a number") from exc
 
 
 def as_bool(options: Mapping[str, str], key: str, fallback: bool = False) -> bool:
@@ -73,13 +73,13 @@ def as_bool(options: Mapping[str, str], key: str, fallback: bool = False) -> boo
     than being read as one of them.
 
     Raises:
-        InvalidDsnError: If the value is present but not ``true``/``false``.
+        InvalidTransportOptionError: If the value is present but not ``true``/``false``.
     """
     raw = options.get(key)
     if raw is None:
         return fallback
     if raw not in ("true", "false"):
-        raise InvalidDsnError(f"{key}={raw!r} must be 'true' or 'false'")
+        raise InvalidTransportOptionError(key, raw, "'true' or 'false'")
     return raw == "true"
 
 
@@ -92,14 +92,14 @@ def as_choice(
     """Read ``key`` as one of ``allowed``, or return ``fallback``.
 
     Raises:
-        InvalidDsnError: If the value is present but not one of ``allowed``.
+        InvalidTransportOptionError: If the value is present but not one of ``allowed``.
     """
     raw = settings.get(key)
     if raw is None:
         return fallback
     if raw not in allowed:
         permitted = ", ".join(sorted(allowed))
-        raise InvalidDsnError(f"{key}={raw!r} must be one of: {permitted}")
+        raise InvalidTransportOptionError(key, raw, f"one of: {permitted}")
     return raw
 
 

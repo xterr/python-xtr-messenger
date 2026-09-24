@@ -10,25 +10,23 @@ and no changes to this package.
   running taskiq's own worker behind
   :class:`~message_bus.worker_interface.WorkerInterface`, so callers stay free of
   taskiq.
-* :func:`~message_bus.bridge.taskiq.binding.bind_handlers` registers handlers
-  declared with :func:`~message_bus.decorator.as_message_handler` as
-  tasks on a broker, which is why handler modules never import one.
+* :func:`~message_bus.bridge.taskiq.binding.bind_bus` registers every
+  declared message as a task on a broker, dispatching into a bus — which is
+  why handler modules never import one.
 
 The RabbitMQ wiring built on top of this — connection, retry ladder,
 dead-lettering — lives in :mod:`message_bus.bridge.amqp` and needs the
 ``amqp`` extra.
 """
 
-from .binding import bind_handlers
-from .broker import MissingTaskRouteError, assert_routes_registered, ensure_started
+from .binding import bind_bus
+from .broker import ensure_started
 from .taskiq_sender import TaskiqSender
 from .taskiq_worker import TaskiqWorker
 
 __all__ = [
-    "MissingTaskRouteError",
     "TaskiqSender",
     "TaskiqWorker",
-    "assert_routes_registered",
-    "bind_handlers",
+    "bind_bus",
     "ensure_started",
 ]

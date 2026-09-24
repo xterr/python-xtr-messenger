@@ -64,7 +64,7 @@ class SendersLocator(SendersLocatorInterface):
         for names in self._routes.values():
             for name in names:
                 if name not in self._senders:
-                    raise UnknownTransportError(name, tuple(self._senders))
+                    raise UnknownTransportError((name,), tuple(self._senders))
 
     @override
     def senders_for(self, envelope: Envelope) -> Iterator[tuple[str, SenderInterface]]:
@@ -76,7 +76,7 @@ class SendersLocator(SendersLocatorInterface):
             seen.add(name)
             sender = self._senders.get(name)
             if sender is None:
-                raise UnknownTransportError(name, tuple(self._senders))
+                raise UnknownTransportError((name,), tuple(self._senders))
             yield name, sender
 
     @override

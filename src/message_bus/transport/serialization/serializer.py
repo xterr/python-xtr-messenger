@@ -17,7 +17,11 @@ import msgspec
 from typing_extensions import override
 
 from message_bus.envelope import Envelope
-from message_bus.exception import MessageDecodingFailedError, UnknownMessageNameError
+from message_bus.exception import (
+    MessageDecodingFailedError,
+    MessageEncodingFailedError,
+    UnknownMessageNameError,
+)
 from message_bus.message_registry import name_of, type_for_name
 from message_bus.stamp import (
     DEFAULT_STAMP_TYPES,
@@ -39,6 +43,8 @@ __all__ = ["TYPE_HEADER", "JsonSerializer"]
 
 TYPE_HEADER = "type"
 STAMP_HEADER_PREFIX = "X-Message-Stamp-"
+
+_NO_CODEC = "no codec handles this message type; pass one to JsonSerializer(codecs=...)"
 
 
 @final
@@ -84,11 +90,16 @@ class JsonSerializer(SerializerInterface):
         """Render ``envelope`` as a JSON body plus type and stamp headers.
 
         Raises:
-            MessageDecodingFailedError: If no codec handles the message type.
+            MessageEncodingFailedError: If no codec handles the message type,
+                or the codec cannot encode it.
         """
         message_type = type(envelope.message)
-        body = self._codec_for(message_type).encode(envelope.message)
-        headers = {TYPE_HEADER: name_of(message_type)}
+        name = name_of(message_type)
+        codec = self._codec_for(message_type)
+        if codec is None:
+            raise MessageEncodingFailedError(_NO_CODEC, name)
+        body = codec.encode(envelope.message)
+        headers = {TYPE_HEADER: name}
         headers.update(_encode_stamps(envelope.without_stamps(NonSendableStampInterface).stamps))
         return EncodedEnvelope(body=_dump(body), headers=headers)
 
@@ -107,17 +118,14 @@ class JsonSerializer(SerializerInterface):
             message_type = type_for_name(name)
         except UnknownMessageNameError as exc:
             raise MessageDecodingFailedError(str(exc), message_name=name) from exc
-        raw = _load(encoded.body, name)
-        message = self._codec_for(message_type).decode(message_type, raw)
+        codec = self._codec_for(message_type)
+        if codec is None:
+            raise MessageDecodingFailedError(_NO_CODEC, name)
+        message = codec.decode(message_type, _load(encoded.body, name))
         return Envelope(message, self._decode_stamps(encoded.headers, name))
 
-    def _codec_for(self, message_type: type) -> MessageCodecInterface:
-        for codec in self._codecs:
-            if codec.supports(message_type):
-                return codec
-        raise MessageDecodingFailedError(
-            f"no codec handles {message_type.__name__!r}; pass one to JsonSerializer(codecs=...)",
-        )
+    def _codec_for(self, message_type: type) -> MessageCodecInterface | None:
+        return next((codec for codec in self._codecs if codec.supports(message_type)), None)
 
     def _decode_stamps(self, headers: Mapping[str, str], name: str) -> tuple[StampInterface, ...]:
         stamps: list[StampInterface] = []

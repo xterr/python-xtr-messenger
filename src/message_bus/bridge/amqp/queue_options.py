@@ -64,7 +64,7 @@ class QueueOptions:
         """Read the queue settings, falling back to ``defaults``.
 
         Raises:
-            InvalidDsnError: If a value is present but not usable.
+            InvalidTransportOptionError: If a value is present but not usable.
         """
         base = defaults if defaults is not None else cls()
         return cls(

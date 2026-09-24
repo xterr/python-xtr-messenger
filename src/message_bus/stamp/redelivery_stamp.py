@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
 
 from .stamp_interface import StampInterface
 
@@ -19,4 +18,3 @@ class RedeliveryStamp(StampInterface):
     """
 
     retry_count: int
-    redelivered_at: datetime = field(default_factory=lambda: datetime.now(UTC))

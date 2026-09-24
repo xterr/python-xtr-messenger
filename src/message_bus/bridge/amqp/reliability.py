@@ -48,7 +48,7 @@ class Reliability:
         still have one setting overridden per transport.
 
         Raises:
-            InvalidDsnError: If a value is present but not a number.
+            InvalidTransportOptionError: If a value is present but not a number.
         """
         base = defaults if defaults is not None else cls()
         dead_letter = settings.get("dead_letter_queue", base.dead_letter_queue)

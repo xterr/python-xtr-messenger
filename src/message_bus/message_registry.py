@@ -28,7 +28,7 @@ import importlib
 
 from .exception import MessageBusError, UnknownMessageNameError
 
-__all__ = ["name_of", "register_message", "transports_of", "type_for_name"]
+__all__ = ["declared_names", "name_of", "register_message", "transports_of", "type_for_name"]
 
 _NAME_BY_TYPE: dict[type, str] = {}
 _TYPE_BY_NAME: dict[str, type] = {}
@@ -52,8 +52,19 @@ def register_message(
     """
     if name is not None:
         _claim(name, message_type)
+    elif message_type not in _NAME_BY_TYPE:
+        _claim(_default_name(message_type), message_type)
     if transports:
         _TRANSPORTS_BY_TYPE[message_type] = transports
+
+
+def declared_names() -> tuple[str, ...]:
+    """Return the wire name of every declared message.
+
+    What a consumer that looks messages up by name — a taskiq worker
+    registers a task per name — can expect to receive.
+    """
+    return tuple(_NAME_BY_TYPE.values())
 
 
 def name_of(message_type: type) -> str:
@@ -64,6 +75,10 @@ def name_of(message_type: type) -> str:
     pinned = _NAME_BY_TYPE.get(message_type)
     if pinned is not None:
         return pinned
+    return _default_name(message_type)
+
+
+def _default_name(message_type: type) -> str:
     return f"{message_type.__module__}:{message_type.__qualname__}"
 
 

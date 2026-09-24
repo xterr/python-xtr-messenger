@@ -6,21 +6,26 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from message_bus.stamp import HandledStamp
+from message_bus.stamp import ReceivedStamp, SentStamp
 from message_bus.transport.transport_interface import TransportInterface
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from message_bus.envelope import Envelope
-    from message_bus.handler import HandlersLocatorInterface
 
 __all__ = ["SyncTransport"]
 
 
 @final
 class SyncTransport(TransportInterface):
-    """Runs the registered handlers immediately, in the caller's task.
+    """Has the message handled immediately, by the bus that dispatched it.
+
+    Sending marks the envelope received and hands it straight back, so
+    :class:`~message_bus.middleware.SendMessageMiddleware` passes it on to
+    the bus's own handling step instead of stopping there. The transport
+    never calls a handler itself, so which handlers run is decided in one
+    place — the bus — whether a message is handled here or by a worker.
 
     Useful for local development and for messages that do not need a worker:
     the dispatch site keeps the same API, so moving a message onto a real
@@ -30,26 +35,20 @@ class SyncTransport(TransportInterface):
     retry from, so failing loudly is the honest behaviour.
 
     The receive half is empty, which describes this transport accurately
-    rather than leaving a gap: the work is finished by the time :meth:`send`
+    rather than leaving a gap: the work is finished by the time the dispatch
     returns, so there is never anything left for a worker to collect. A
     worker pointed here starts, finds nothing outstanding, and stops — which
     beats raising, because it lets one worker entrypoint serve a list of
     transports that happens to include ``sync://``.
     """
 
-    __slots__ = ("_registry",)
-
-    def __init__(self, registry: HandlersLocatorInterface) -> None:
-        """Resolve handlers from ``registry`` at send time."""
-        self._registry = registry
+    __slots__ = ()
 
     @override
     async def send(self, envelope: Envelope) -> Envelope:
-        """Invoke every handler bound to the message, stamping each one."""
-        for descriptor in self._registry.handlers_for(type(envelope.message)):
-            await descriptor.invoke(envelope)
-            envelope = envelope.with_stamps(HandledStamp(descriptor.name))
-        return envelope
+        """Mark the envelope received, under the name it was sent to."""
+        sent = envelope.last(SentStamp)
+        return envelope.with_stamps(ReceivedStamp(sent.sender_alias if sent else "sync"))
 
     @override
     def get(self) -> AsyncIterator[Envelope]:

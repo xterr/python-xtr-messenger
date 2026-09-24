@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, cast, final, get_type_hints
 import msgspec
 from typing_extensions import override
 
-from message_bus.exception import MessageDecodingFailedError
+from message_bus.exception import MessageDecodingFailedError, MessageEncodingFailedError
 
 from .message_codec_interface import MessageCodecInterface
 
@@ -59,14 +59,12 @@ class DataclassCodec(MessageCodecInterface):
         """Render ``message`` field by field.
 
         Raises:
-            MessageDecodingFailedError: If a field type has no encoding.
+            MessageEncodingFailedError: If a field type has no encoding.
         """
         try:
             return cast("JsonValue", msgspec.to_builtins(message, str_keys=True))
         except (TypeError, NotImplementedError) as exc:
-            raise MessageDecodingFailedError(
-                f"no encoding for {type(message).__name__!r}: {exc}"
-            ) from exc
+            raise MessageEncodingFailedError(str(exc), type(message).__name__) from exc
 
     @override
     def decode(self, message_type: type, raw: JsonValue) -> object:

@@ -68,7 +68,7 @@ class DeadLetterMiddleware(TaskiqMiddleware):
         towards the dead-letter queue is not.
 
         This is the opposite of the reading
-        :func:`~message_bus.bridge.taskiq.binding.bind_handlers` gives a
+        :func:`~message_bus.bridge.taskiq.binding.bind_bus` gives a
         handler, and deliberately so: there an unknown count is reported high
         so a handler treats the delivery as its last chance and does not skip
         cleanup. Both choices pick the outcome that loses nothing.

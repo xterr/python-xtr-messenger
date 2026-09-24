@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, final
 from taskiq_aio_pika import AioPikaBroker
 from typing_extensions import override
 
-from message_bus.bridge.taskiq.binding import bind_handlers
+from message_bus.bridge.taskiq.binding import bind_bus
 from message_bus.bridge.taskiq.taskiq_sender import TaskiqSender
 from message_bus.bridge.taskiq.taskiq_worker import TaskiqWorker
 from message_bus.exception import MixedDsnError
@@ -38,7 +38,6 @@ if TYPE_CHECKING:
     from taskiq_aio_pika import AioPikaBroker
 
     from message_bus.dsn import Dsn
-    from message_bus.handler import HandlersLocatorInterface
     from message_bus.message_bus_interface import MessageBusInterface
     from message_bus.transport.sender import SenderInterface
     from message_bus.transport.serialization import SerializerInterface
@@ -54,22 +53,16 @@ AMQP_SCHEMES = frozenset({"amqp", "amqps"})
 class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
     """Builds ``amqp://`` transports, sharing one broker per DSN."""
 
-    __slots__ = ("_handlers", "_options", "_serializer")
+    __slots__ = ("_options", "_serializer")
 
     def __init__(
         self,
         options: AmqpOptions | None = None,
         serializer: SerializerInterface | None = None,
-        handlers: HandlersLocatorInterface | None = None,
     ) -> None:
-        """Apply these to everything it builds.
-
-        ``handlers`` is only consulted when building a consumer, and defaults
-        to the registry ``@as_message_handler`` fills.
-        """
+        """Apply these to everything it builds."""
         self._options = options if options is not None else AmqpOptions()
         self._serializer = serializer
-        self._handlers = handlers
 
     @override
     def supports(self, dsn: Dsn) -> bool:
@@ -98,27 +91,20 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
     ) -> WorkerInterface:
         """Build a runnable worker consuming only ``group``.
 
-        The declared handlers are registered on the broker here, so the
-        result needs no further wiring — ``await worker.run()`` and it
-        consumes. It listens on exactly these queues, so a worker serving a
-        different transport is unaffected.
+        Every declared message is registered on the broker as a task that
+        dispatches into ``bus``, so the result needs no further wiring —
+        ``await worker.run()`` and it consumes, with ``bus`` deciding which
+        handlers run. It listens on exactly these queues, so a worker serving
+        a different transport is unaffected.
 
-        Import the modules that declare your handlers before calling this;
-        a handler that has not been declared cannot be bound.
-
-        ``bus`` is deliberately unused. taskiq resolves a message to a
-        registered task itself, and that task already invokes the handler, so
-        routing the message through a bus as well would run the middleware
-        chain twice over the same message. Transports without a worker of
-        their own dispatch through ``bus`` instead — the parameter is part of
-        the contract, not of every implementation of it.
+        Import the modules that declare your messages and handlers before
+        calling this; a message that has not been declared cannot be bound.
 
         Raises:
             MixedDsnError: If the transports do not share one connection.
         """
-        del bus
         broker = self._broker_for(group)
-        _ = bind_handlers(broker, self._handlers, self._wire())
+        _ = bind_bus(broker, bus, self._wire())
         return TaskiqWorker(broker)
 
     def _wire(self) -> SerializerInterface:

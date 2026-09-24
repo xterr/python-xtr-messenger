@@ -9,11 +9,11 @@ nothing but the message class::
     async def ingest(message: IngestDocument) -> None: ...
 
 Declaring a handler and wiring it to a transport are separate steps. The
-declaration populates a registry; a transport picks the registry up later —
-:class:`~message_bus.middleware.HandleMessageMiddleware` reads it to invoke
-handlers in-process, and
-:func:`~message_bus.bridge.taskiq.binding.bind_handlers` registers each entry
-as a task at worker startup.
+declaration populates a registry, and exactly one thing reads it:
+:class:`~message_bus.middleware.HandleMessageMiddleware`, at the end of a
+bus. Every transport — ``sync://``, the library's worker, a broker with a
+consume loop of its own — hands messages to a bus rather than calling
+handlers itself.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 __all__ = ["as_message_handler"]
 
-HandlerT = TypeVar("HandlerT", bound="Callable[..., Awaitable[None]]")
+HandlerT = TypeVar("HandlerT", bound="Callable[..., Awaitable[None]] | type")
 
 
 def as_message_handler(
@@ -45,6 +45,15 @@ def as_message_handler(
         @as_message_handler(IngestDocument)
         async def ingest(message: IngestDocument, envelope: Envelope) -> None:
             attempt = envelope.last(RedeliveryStamp)
+
+    A class works too, when its instances are the callable. It is built once
+    and shared by every message — by a dependency-injection container when one
+    is wired, otherwise with no arguments — so keep per-message state off
+    ``self``::
+
+        @as_message_handler(IngestDocument)
+        class Ingest:
+            async def __call__(self, message: IngestDocument) -> None: ...
     """
     target = registry if registry is not None else default_registry()
 

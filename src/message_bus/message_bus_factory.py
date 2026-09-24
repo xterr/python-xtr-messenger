@@ -27,8 +27,7 @@ class MessageBusFactory:
     """Builds the bus a publishing process dispatches through.
 
     Pass ``factories`` to control how transports are constructed — a
-    serializer of your own, a private handlers locator, or a scheme the
-    library does not ship.
+    serializer of your own, or a scheme the library does not ship.
     """
 
     __slots__ = ("_config", "_handlers", "_transports")
@@ -41,13 +40,9 @@ class MessageBusFactory:
     ) -> None:
         """Build from ``config``; ``factories`` overrides lazy discovery.
 
-        ``handlers`` configures handling on this bus. It does **not** reach
-        transport factories, which discovery builds with no arguments — a
-        transport that resolves handlers itself, as ``sync://`` does, will
-        use the process-wide registry regardless. Give a private registry to
-        the factory instead::
-
-            MessageBusFactory(config, [SyncTransportFactory(handlers=private)])
+        ``handlers`` replaces the process-wide registry for everything this
+        bus handles, ``sync://`` included: no transport calls a handler
+        itself, they all hand the message back to the bus.
         """
         self._config = config
         self._transports = TransportFactory(factories)
@@ -57,7 +52,7 @@ class MessageBusFactory:
         self,
         middleware: Sequence[MiddlewareInterface] = (),
         require_sender: bool = False,
-        handles: bool = False,
+        handle_unrouted: bool = False,
     ) -> MessageBus:
         """Build a bus that routes according to the configuration.
 
@@ -66,21 +61,24 @@ class MessageBusFactory:
         ``require_sender`` to reject a message no transport is routed for
         rather than letting the dispatch pass quietly.
 
-        Set ``handles`` for the bus a worker dispatches through. It appends
-        handling *after* routing, which is the order that lets one
-        composition serve both sides: a message being published is routed and
-        stops there, while one that arrived from a transport carries a
+        Handling always comes *after* routing, which is the order that lets
+        one composition serve both sides: a message being published is routed
+        and stops there, while one that arrived from a transport — or was
+        handed straight back by ``sync://`` — carries a
         :class:`~message_bus.stamp.ReceivedStamp`, is deliberately not routed
-        again, and falls through to be handled here.
+        again, and falls through to be handled here. Set ``handle_unrouted``
+        to have a message routed nowhere handled here too, rather than
+        passing quietly.
 
         Raises:
             UnsupportedDsnError: If no factory recognises a transport's DSN.
         """
-        send = SendMessageMiddleware(self._locator(), require_sender=require_sender)
-        chain: list[MiddlewareInterface] = [*middleware, send]
-        if handles:
-            chain.append(HandleMessageMiddleware(self._handlers))
-        return MessageBus(chain)
+        send = SendMessageMiddleware(
+            self._locator(),
+            require_sender=require_sender,
+            handle_unrouted=handle_unrouted,
+        )
+        return MessageBus([*middleware, send, HandleMessageMiddleware(self._handlers)])
 
     def _locator(self) -> SendersLocatorInterface:
         return SendersLocator(self._config.routing, self._senders())

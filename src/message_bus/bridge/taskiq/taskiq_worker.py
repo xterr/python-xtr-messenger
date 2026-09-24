@@ -10,6 +10,8 @@ from typing_extensions import override
 
 from message_bus.worker_interface import WorkerInterface
 
+from .broker import forget_started
+
 if TYPE_CHECKING:
     from taskiq import AsyncBroker
 
@@ -76,6 +78,12 @@ class TaskiqWorker(WorkerInterface):
         The flag is restored on the way out. It lives on the broker, which
         the producing side may share, so leaving it set would tell every
         later publish that a worker owns a connection nothing is consuming.
+
+        The broker is shut down on the way out too — taskiq's receiver starts
+        it and leaves closing it to taskiq's CLI, which this replaces. Shut
+        down while still flagged as a worker, so the worker shutdown events
+        fire to match the worker startup events; and forgotten as started, so
+        a producing side sharing it opens it again on its next publish.
         """
         claimed = self._broker.is_worker_process
         self._broker.is_worker_process = True
@@ -89,9 +97,14 @@ class TaskiqWorker(WorkerInterface):
         try:
             await receiver.listen(self._finished)
         finally:
-            self._broker.is_worker_process = claimed
-            self._finished = None
+            try:
+                await self._broker.shutdown()
+            finally:
+                forget_started(self._broker)
+                self._broker.is_worker_process = claimed
+                self._finished = None
 
+    @override
     def stop(self) -> None:
         """Ask a running worker to finish what it has and return.
 

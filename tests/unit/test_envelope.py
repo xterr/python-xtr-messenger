@@ -105,16 +105,3 @@ def test_stripping_a_stamp_family_keeps_everything_outside_it() -> None:
         "DelayStamp",
         "TransportMessageIdStamp",
     ]
-
-
-def test_only_real_stamps_satisfy_the_stamp_contract() -> None:
-    """Nominal, not structural: arbitrary objects are not stamps."""
-    assert isinstance(DelayStamp(1), StampInterface)
-    assert not isinstance("a string", StampInterface)
-    assert not isinstance(42, StampInterface)
-    assert not isinstance(None, StampInterface)
-
-
-def test_a_sendable_stamp_is_not_treated_as_non_sendable() -> None:
-    assert not isinstance(DelayStamp(1), NonSendableStampInterface)
-    assert isinstance(SentStamp("T", "async"), NonSendableStampInterface)

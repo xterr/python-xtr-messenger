@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, cast, final
 from pydantic import BaseModel, ValidationError
 from typing_extensions import override
 
-from message_bus.exception import MessageDecodingFailedError
+from message_bus.exception import MessageDecodingFailedError, MessageEncodingFailedError
 
 from .message_codec_interface import MessageCodecInterface
 
@@ -50,10 +50,10 @@ class PydanticCodec(MessageCodecInterface):
         """Render ``message`` through the model's JSON dump.
 
         Raises:
-            MessageDecodingFailedError: If ``message`` is not a pydantic model.
+            MessageEncodingFailedError: If ``message`` is not a pydantic model.
         """
         if not isinstance(message, BaseModel):
-            raise MessageDecodingFailedError(f"{type(message).__name__!r} is not a pydantic model")
+            raise MessageEncodingFailedError("not a pydantic model", type(message).__name__)
         return cast("JsonValue", message.model_dump(mode="json"))
 
     @override

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
-from .exception import NotConsumableError, UnknownTransportNameError
+from .exception import NotConsumableError, UnknownTransportError
 from .message_bus import MessageBus
 from .middleware import HandleMessageMiddleware
 from .transport.receiver.chained_receiver import ChainedReceiver
@@ -54,13 +54,10 @@ class WorkerFactory:
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
-        ``handlers`` configures the bus this worker dispatches through. It
-        does **not** reach transport factories, which discovery builds with
-        no arguments — an adapter that registers handlers with the broker
-        itself, as the AMQP one does, will use the process-wide registry
-        regardless. Give a private registry to the factory instead::
-
-            WorkerFactory(config, [AmqpTransportFactory(handlers=private)])
+        ``handlers`` replaces the process-wide registry in the bus this
+        worker dispatches through, which is the only place a handler is
+        called — an adapter bringing its own worker, as the AMQP one does,
+        dispatches into that bus too.
         """
         self._config = config
         self._transports = TransportFactory(factories)
@@ -74,7 +71,7 @@ class WorkerFactory:
         has not been declared cannot be found.
 
         Raises:
-            UnknownTransportNameError: If a name is not configured.
+            UnknownTransportError: If a name is not configured.
             UnsupportedDsnError: If no factory recognises their DSN.
         """
         group = self._select(names)
@@ -106,7 +103,7 @@ class WorkerFactory:
         transports = self._config.transports
         missing = tuple(name for name in names if name not in transports)
         if missing:
-            raise UnknownTransportNameError(missing, tuple(transports))
+            raise UnknownTransportError(missing, tuple(transports))
         return {name: transports[name] for name in names}
 
 

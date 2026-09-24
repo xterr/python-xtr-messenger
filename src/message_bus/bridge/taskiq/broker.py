@@ -12,19 +12,10 @@ import asyncio
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary, WeakSet
 
-from message_bus.exception import MissingTaskRouteError
-from message_bus.message_registry import name_of
-
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from taskiq import AsyncBroker
 
-__all__ = [
-    "MissingTaskRouteError",
-    "assert_routes_registered",
-    "ensure_started",
-]
+__all__ = ["ensure_started", "forget_started"]
 
 #: Brokers already opened for publishing. A weak set so the entry dies with
 #: the broker — keying by ``id()`` meant a garbage-collected broker could
@@ -67,21 +58,6 @@ async def ensure_started(broker: AsyncBroker) -> None:
             return
         await broker.startup()
         _started.add(broker)
-
-
-def assert_routes_registered(broker: AsyncBroker, message_types: Iterable[type]) -> None:
-    """Fail unless every message type has a task registered under its name.
-
-    Call this at worker startup. Without it, a handler module that was never
-    imported shows up as messages quietly accumulating and never running.
-
-    Raises:
-        MissingTaskRouteError: If any message type has no matching task.
-    """
-    registered = tuple(broker.get_all_tasks())
-    missing = tuple(name for name in (name_of(t) for t in message_types) if name not in registered)
-    if missing:
-        raise MissingTaskRouteError(missing, registered)
 
 
 def forget_started(broker: AsyncBroker) -> None:
