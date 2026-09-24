@@ -7,6 +7,7 @@ middleware chain. MiddlewareInterface records what it did by appending a
 The core has no third-party dependencies. Transports that need one live
 behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 """
+from importlib.metadata import version
 
 from .decorator import as_message, as_message_handler
 from .dsn import Dsn, InvalidDsnError
@@ -84,7 +85,7 @@ from .worker_factory import WorkerFactory
 from .worker_interface import WorkerInterface
 from .worker_providing_interface import WorkerProvidingInterface
 
-__version__ = "0.1.0"
+__version__ = version("xtr-messenger")
 
 __all__ = [
     "AckReceiptStamp",
