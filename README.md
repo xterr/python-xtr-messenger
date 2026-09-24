@@ -43,6 +43,7 @@ uv add "xtr-messenger[amqp]"            # + RabbitMQ
 uv add "xtr-messenger[taskiq]"          # + any other taskiq broker
 uv add "xtr-messenger[pydantic]"        # + pydantic messages
 uv add "xtr-messenger[wireup]"          # + a pre-wired DI container
+uv add "xtr-messenger[console]"         # + the messenger:consume console command
 ```
 
 | Extra | Brings | For |
@@ -52,6 +53,7 @@ uv add "xtr-messenger[wireup]"          # + a pre-wired DI container
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
 | `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
+| `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
 
 Requires Python 3.11+.
 
@@ -258,6 +260,45 @@ receives is dispatched into a bus, and the bus calls the handlers.
 > modules declaring your messages before building it. A message that arrives with no handler
 > fails with `NoHandlerForMessageError` and is retried, then dead-lettered — never acknowledged
 > and lost.
+
+### From the console
+
+With the `console` extra, `messenger:consume` does the same from an
+[xtr-console](https://github.com/xterr/python-xtr-console) application. Importing
+`xtr_messenger.command` declares it; it needs only a `WorkerFactory` to build workers with.
+
+```python
+# app/console.py
+import app.handlers  # noqa: F401
+
+from app.bus import CONFIG
+from xtr_console import Application
+from xtr_messenger import WorkerFactory
+from xtr_messenger.command import ConsumeMessagesCommand
+
+ConsumeMessagesCommand.use_workers(WorkerFactory(CONFIG))
+raise SystemExit(Application("app").run())
+```
+
+```sh
+uv run python -m app.console messenger:consume high low
+uv run python -m app.console messenger:consume high --time-limit 3600
+```
+
+SIGTERM, or the time limit running out, stops the worker once the message in hand is settled;
+Ctrl-C cancels it. With a [container](#wiring-with-a-container), skip `use_workers()`: import
+`xtr_messenger.command` before the console's `injectables()`, and the command is built from the
+`WorkerFactory` the messenger's `injectables()` provide — handlers wired to the container.
+
+```python
+import xtr_messenger.command  # noqa: F401
+from xtr_console.integration import wireup as console
+
+container = wireup.create_async_container(
+    injectables=[services, *messenger.injectables(CONFIG), *console.injectables(Application("app"))],
+)
+raise SystemExit(await (await container.get(Application)).run_async())
+```
 
 ### Who retries
 
@@ -531,7 +572,8 @@ asyncio.run(main())
 ```
 
 The container now provides a `MessageBusInterface`, a `WorkerInterface` (only when `transports`
-names some — a process that only publishes leaves it out) and the `MessageBusConfig`. The bus
+names some — a process that only publishes leaves it out), a `WorkerFactory` for workers whose
+transports are chosen later, and the `MessageBusConfig`. The bus
 and the worker share their transports, so a handler publishing from inside the worker reuses its
 connection. Any service takes the bus like any other dependency:
 
@@ -597,6 +639,8 @@ xtr_messenger/
 ├── bridge/
 │   ├── taskiq/              broker-agnostic publish and consume
 │   └── amqp/                RabbitMQ on top of it
+├── command/
+│   └── consume.py           messenger:consume, on xtr-console
 └── integration/
     └── wireup.py            everything pre-wired for a wireup container
 ```

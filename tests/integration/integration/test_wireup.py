@@ -22,6 +22,7 @@ from xtr_messenger import (
     TransportConfig,
     UnregisteredHandlerError,
     Worker,
+    WorkerFactory,
     WorkerInterface,
     as_message,
     as_message_handler,
@@ -315,6 +316,18 @@ async def test_the_container_provides_the_bus_the_worker_and_the_config(
     assert await resolve(container, MessageBusConfig) is CONFIG
     assert isinstance(await resolve(container, MessageBusInterface), MessageBus)
     assert isinstance(await resolve(container, WorkerInterface), Worker)
+
+
+async def test_workers_chosen_later_come_from_the_factory_with_handlers_wired() -> None:
+    publisher = a_container(transports=())
+    message = Ingest(uuid4())
+    try:
+        _ = await (await resolve(publisher, MessageBusInterface)).dispatch(message)
+        await (await resolve(publisher, WorkerFactory)).worker(["jobs"]).run()
+    finally:
+        await publisher.close()
+
+    assert [arguments[0] for arguments in calls("ingest")] == [message]
 
 
 async def test_a_publishing_process_is_given_no_worker() -> None:

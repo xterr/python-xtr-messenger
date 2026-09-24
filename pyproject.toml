@@ -28,6 +28,9 @@ pydantic = [
 wireup = [
     "wireup>=2.12",
 ]
+console = [
+    "xtr-console>=0.1",
+]
 taskiq = [
     "taskiq>=0.12.4",
     "anyio>=4.0",
@@ -60,7 +63,12 @@ dev = [
     "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
     "wireup>=2.12",
+    "xtr-console>=0.1",
 ]
+
+# xtr-console is not on PyPI yet; resolve it from its repository meanwhile.
+[tool.uv.sources]
+xtr-console = { git = "https://github.com/xterr/python-xtr-console.git" }
 
 [build-system]
 requires = ["hatchling"]
@@ -144,6 +152,9 @@ unfixable = []
 # wireup registers a factory under its return annotation, read at runtime.
 # Deferring these would register the factories under nothing.
 "src/xtr_messenger/integration/wireup.py" = ["TC001", "TC002", "TC003"]
+# xtr-console reads a command's annotations at runtime — the constructor's for
+# a container, __call__'s for the command line — so none can be deferred.
+"src/xtr_messenger/command/consume.py" = ["TC001", "TC002", "TC003"]
 # Same reason on the consuming side: wireup reads a factory's annotations at
 # runtime, so a test that registers one cannot defer them either.
 "tests/integration/integration/test_wireup.py" = ["TC001", "TC002", "TC003"]

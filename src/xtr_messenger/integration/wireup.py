@@ -80,16 +80,18 @@ def injectables(
     """Return what to spread into ``create_async_container(injectables=[...])``.
 
     The container then provides a ``MessageBusInterface``, a
-    ``WorkerInterface`` when ``transports`` names any, and the
-    ``MessageBusConfig`` both are built from — and every handler class
-    declared so far, as a singleton. Import the modules declaring handler
-    classes before calling this; one declared afterwards is refused with
+    ``WorkerInterface`` when ``transports`` names any, a ``WorkerFactory``
+    for building workers whose transports are chosen later — as the
+    ``messenger:consume`` command does — and the ``MessageBusConfig`` they
+    are built from — and every handler class declared so far, as a
+    singleton. Import the modules declaring handler classes before calling
+    this; one declared afterwards is refused with
     :class:`~xtr_messenger.exception.UnregisteredHandlerError` when the bus or
-    the worker is resolved.
+    a worker is resolved.
 
-    Resolving either wires the handlers to the container: a function handler,
-    or a handler class's ``__call__``, has its ``Injected[...]`` parameters
-    filled on every call.
+    Resolving any of them wires the handlers to the container: a function
+    handler, or a handler class's ``__call__``, has its ``Injected[...]``
+    parameters filled on every call.
 
     Args:
         config: Which transports exist and where messages go. Omit it to
@@ -115,11 +117,14 @@ def injectables(
         _wire(registry, container, registered)
         return MessageBusFactory(bus_config, shared, registry).bus()
 
-    def worker(bus_config: MessageBusConfig, container: AsyncContainer) -> WorkerInterface:
+    def worker_factory(bus_config: MessageBusConfig, container: AsyncContainer) -> WorkerFactory:
         _wire(registry, container, registered)
-        return WorkerFactory(bus_config, shared, registry).worker(transports)
+        return WorkerFactory(bus_config, shared, registry)
 
-    provided: list[object] = [wireup.injectable(message_bus)]
+    def worker(workers: WorkerFactory) -> WorkerInterface:
+        return workers.worker(transports)
+
+    provided: list[object] = [wireup.injectable(message_bus), wireup.injectable(worker_factory)]
     provided.extend(wireup.injectable(registration) for registration in registered.values())
     if config is not None:
         provided.append(wireup.instance(config, as_type=MessageBusConfig))
