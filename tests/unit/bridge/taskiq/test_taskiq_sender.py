@@ -8,12 +8,12 @@ import msgspec
 import pytest
 from taskiq import InMemoryBroker
 
-from message_bus import DelayStamp, Envelope, JsonSerializer, TransportMessageIdStamp
-from message_bus.bridge.taskiq.broker import forget_started
-from message_bus.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
-from message_bus.bridge.taskiq.taskiq_sender import TaskiqSender
 from tests.support.messages import ingest_document
 from tests.support.taskiq import RecordingMiddleware
+from xtr_messenger import DelayStamp, Envelope, JsonSerializer, TransportMessageIdStamp
+from xtr_messenger.bridge.taskiq.broker import forget_started
+from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
+from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

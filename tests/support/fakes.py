@@ -6,12 +6,12 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from message_bus import Envelope, MessageBusInterface, ReceiverInterface, SenderInterface
+from xtr_messenger import Envelope, MessageBusInterface, ReceiverInterface, SenderInterface
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
 
-    from message_bus import StampInterface
+    from xtr_messenger import StampInterface
 
 
 @final

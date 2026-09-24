@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from xtr_messenger import (
     Dsn,
     TransportConfig,
     TransportFactory,
@@ -13,13 +13,13 @@ from message_bus import (
     UnsupportedDsnError,
     WorkerProvidingInterface,
 )
-from message_bus.transport.in_memory import InMemoryTransport
+from xtr_messenger.transport.in_memory import InMemoryTransport
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from message_bus import MessageBusInterface, WorkerInterface
-    from message_bus.transport.sender import SenderInterface
+    from xtr_messenger import MessageBusInterface, WorkerInterface
+    from xtr_messenger.transport.sender import SenderInterface
 
 
 @final

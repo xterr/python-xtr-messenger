@@ -10,7 +10,7 @@ import pytest
 from taskiq import InMemoryBroker
 from typing_extensions import override
 
-from message_bus.bridge.taskiq.broker import ensure_started, forget_started
+from xtr_messenger.bridge.taskiq.broker import ensure_started, forget_started
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

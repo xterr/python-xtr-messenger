@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import (
+from xtr_messenger import (
     Dsn,
     SyncTransport,
     SyncTransportFactory,

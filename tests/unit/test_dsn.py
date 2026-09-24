@@ -4,7 +4,7 @@ from types import MappingProxyType
 
 import pytest
 
-from message_bus import Dsn, InvalidDsnError
+from xtr_messenger import Dsn, InvalidDsnError
 
 
 def test_a_scheme_is_read_from_a_hostless_dsn() -> None:

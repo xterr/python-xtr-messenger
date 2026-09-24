@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.fakes import RecordingBus, StubReceiver
+from xtr_messenger import (
     Envelope,
     ErrorDetailsStamp,
     MessageBusInterface,
@@ -18,7 +19,6 @@ from message_bus import (
     Worker,
     WorkerInterface,
 )
-from tests.support.fakes import RecordingBus, StubReceiver
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable

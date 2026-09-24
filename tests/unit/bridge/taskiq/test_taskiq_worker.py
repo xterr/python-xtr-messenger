@@ -11,9 +11,9 @@ import pytest
 from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage
 from typing_extensions import override
 
-from message_bus import WorkerInterface
-from message_bus.bridge.taskiq.broker import ensure_started, forget_started
-from message_bus.bridge.taskiq.taskiq_worker import TaskiqWorker
+from xtr_messenger import WorkerInterface
+from xtr_messenger.bridge.taskiq.broker import ensure_started, forget_started
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator

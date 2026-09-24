@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.fakes import RecordingSender
+from tests.support.messages import UndeclaredMessage
+from xtr_messenger import (
     Envelope,
     MiddlewareInterface,
     NoSenderForMessageError,
@@ -18,8 +20,6 @@ from message_bus import (
     SentStamp,
     StackInterface,
 )
-from tests.support.fakes import RecordingSender
-from tests.support.messages import UndeclaredMessage
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator

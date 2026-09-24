@@ -5,10 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from message_bus import Envelope, TransportNamesStamp, UnknownTransportError, as_message
-from message_bus.transport.sender import SendersLocator
 from tests.support.fakes import RecordingSender
 from tests.support.messages import AnalyseDocument, IngestDocument, ingest_document
+from xtr_messenger import Envelope, TransportNamesStamp, UnknownTransportError, as_message
+from xtr_messenger.transport.sender import SendersLocator
 
 
 @dataclass(frozen=True, slots=True)

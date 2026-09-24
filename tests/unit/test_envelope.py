@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from message_bus import (
+from xtr_messenger import (
     DelayStamp,
     Envelope,
     NonSendableStampInterface,

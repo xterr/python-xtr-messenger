@@ -8,7 +8,8 @@ from uuid import uuid4
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.messages import IngestDocument, ingest_document
+from xtr_messenger import (
     EncodedEnvelope,
     Envelope,
     JsonSerializer,
@@ -20,10 +21,9 @@ from message_bus import (
     TransportMessageIdStamp,
     as_message,
 )
-from message_bus.stamp import DEFAULT_STAMP_TYPES, DelayStamp
-from message_bus.transport.serialization import TYPE_HEADER
-from message_bus.transport.serialization.codec import JsonValue, MessageCodecInterface
-from tests.support.messages import IngestDocument, ingest_document
+from xtr_messenger.stamp import DEFAULT_STAMP_TYPES, DelayStamp
+from xtr_messenger.transport.serialization import TYPE_HEADER
+from xtr_messenger.transport.serialization.codec import JsonValue, MessageCodecInterface
 
 ID_STAMP_HEADER = "X-Message-Stamp-TransportMessageIdStamp"
 

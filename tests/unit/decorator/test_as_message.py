@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from message_bus import as_message, name_of, transports_of
+from xtr_messenger import as_message, name_of, transports_of
 
 
 def test_a_bare_decoration_returns_the_class_unchanged() -> None:

@@ -10,16 +10,16 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from message_bus import (
+from tests.support.messages import IngestDocument
+from xtr_messenger import (
     DataclassCodec,
     MessageDecodingFailedError,
     MessageEncodingFailedError,
     as_message,
 )
-from tests.support.messages import IngestDocument
 
 if TYPE_CHECKING:
-    from message_bus.transport.serialization.codec import JsonValue
+    from xtr_messenger.transport.serialization.codec import JsonValue
 
 
 class Priority(IntEnum):

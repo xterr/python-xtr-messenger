@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, final
 
-from message_bus import HandlersLocator
+from xtr_messenger import HandlersLocator
 
 if TYPE_CHECKING:
-    from message_bus import HandlerDescriptor
+    from xtr_messenger import HandlerDescriptor
 
 
 class Base:

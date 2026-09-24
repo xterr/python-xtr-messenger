@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import InvalidTransportOptionError
-from message_bus.bridge.amqp.amqp_options import AMQP_OPTIONS, AmqpOptions
-from message_bus.bridge.amqp.reliability import Reliability
+from xtr_messenger import InvalidTransportOptionError
+from xtr_messenger.bridge.amqp.amqp_options import AMQP_OPTIONS, AmqpOptions
+from xtr_messenger.bridge.amqp.reliability import Reliability
 
 
 def test_the_defaults() -> None:

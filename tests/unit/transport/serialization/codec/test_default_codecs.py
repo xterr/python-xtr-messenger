@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from message_bus import default_codecs
+from xtr_messenger import default_codecs
 
 
 def test_default_codecs_prefer_pydantic_when_it_is_installed() -> None:

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from message_bus import as_message
+from xtr_messenger import as_message
 
 
 @as_message(name="test.ingest.v1")

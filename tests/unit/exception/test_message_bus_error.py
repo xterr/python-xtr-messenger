@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-import message_bus
-from message_bus import (
+import xtr_messenger
+from xtr_messenger import (
     HandlerSignatureError,
     InvalidDsnError,
     InvalidTransportOptionError,
@@ -47,7 +47,7 @@ class Sample:
 
 def test_every_error_the_library_raises_is_catchable_from_the_root() -> None:
     """Two were once reachable only through a different import than the rest."""
-    unreachable = [name for name in exception.__all__ if name not in message_bus.__all__]
+    unreachable = [name for name in exception.__all__ if name not in xtr_messenger.__all__]
 
     assert unreachable == []
 

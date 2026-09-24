@@ -5,7 +5,8 @@ from typing import final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.messages import ingest_document
+from xtr_messenger import (
     Dsn,
     EncodedEnvelope,
     Envelope,
@@ -16,8 +17,7 @@ from message_bus import (
     UnknownTransportOptionError,
     WorkerProvidingInterface,
 )
-from message_bus.transport.in_memory import InMemoryTransport, InMemoryTransportFactory
-from tests.support.messages import ingest_document
+from xtr_messenger.transport.in_memory import InMemoryTransport, InMemoryTransportFactory
 
 pytestmark = pytest.mark.anyio
 

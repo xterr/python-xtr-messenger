@@ -8,7 +8,13 @@ from typing import final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.messages import (
+    AnalyseDocument,
+    IngestDocument,
+    UndeclaredMessage,
+    ingest_document,
+)
+from xtr_messenger import (
     Envelope,
     HandledStamp,
     HandleMessageMiddleware,
@@ -18,12 +24,6 @@ from message_bus import (
     StackInterface,
     as_message,
     as_message_handler,
-)
-from tests.support.messages import (
-    AnalyseDocument,
-    IngestDocument,
-    UndeclaredMessage,
-    ingest_document,
 )
 
 pytestmark = pytest.mark.anyio

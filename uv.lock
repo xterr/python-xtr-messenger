@@ -1182,7 +1182,7 @@ wheels = [
 ]
 
 [[package]]
-name = "xtr-message-bus"
+name = "xtr-messenger"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -8,19 +8,19 @@ from typing import TYPE_CHECKING
 import pytest
 from taskiq import InMemoryBroker
 
-from message_bus import (
+from tests.support.fakes import RecordingBus
+from tests.support.messages import ingest_document
+from xtr_messenger import (
     Envelope,
     JsonSerializer,
     MessageDecodingFailedError,
     ReceivedStamp,
     RedeliveryStamp,
 )
-from message_bus.bridge.taskiq.binding import bind_bus
-from message_bus.bridge.taskiq.broker import forget_started
-from message_bus.bridge.taskiq.labels import HEADERS_LABEL, RETRIES_LABEL
-from message_bus.message_registry import declared_names
-from tests.support.fakes import RecordingBus
-from tests.support.messages import ingest_document
+from xtr_messenger.bridge.taskiq.binding import bind_bus
+from xtr_messenger.bridge.taskiq.broker import forget_started
+from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, RETRIES_LABEL
+from xtr_messenger.message_registry import declared_names
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

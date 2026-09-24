@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from message_bus import MessageBusConfig, TransportConfig
 from tests.support.messages import IngestDocument
+from xtr_messenger import MessageBusConfig, TransportConfig
 
 
 def test_a_config_builds_nothing_by_itself() -> None:

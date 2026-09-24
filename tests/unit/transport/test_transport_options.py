@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import InvalidTransportOptionError, UnknownTransportOptionError
-from message_bus.transport.transport_options import (
+from xtr_messenger import InvalidTransportOptionError, UnknownTransportOptionError
+from xtr_messenger.transport.transport_options import (
     as_bool,
     as_choice,
     as_float,

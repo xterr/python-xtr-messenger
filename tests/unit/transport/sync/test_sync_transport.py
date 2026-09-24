@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import Envelope, HandledStamp, ReceivedStamp, SentStamp, SyncTransport
 from tests.support.messages import ingest_document
+from xtr_messenger import Envelope, HandledStamp, ReceivedStamp, SentStamp, SyncTransport
 
 pytestmark = pytest.mark.anyio
 

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from message_bus import (
+from xtr_messenger import (
     ErrorDetailsStamp,
     HandlersLocator,
     InMemoryTransport,

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pathlib
 
-from message_bus import Dsn
-from message_bus.transport import transport_factory_discovery as discovery
-from message_bus.transport.transport_factory_discovery import (
+from xtr_messenger import Dsn
+from xtr_messenger.transport import transport_factory_discovery as discovery
+from xtr_messenger.transport.transport_factory_discovery import (
     ENTRY_POINT_GROUP,
     advertised_schemes,
     default_factories,
@@ -48,7 +48,7 @@ def test_the_group_name_is_part_of_the_public_contract() -> None:
     Deliberately not tied to the module that defines it: that module has been
     renamed twice while this has not.
     """
-    assert ENTRY_POINT_GROUP == "message_bus.transport_factories"
+    assert ENTRY_POINT_GROUP == "xtr_messenger.transport_factories"
 
 
 def test_the_documented_group_name_matches_the_one_actually_used() -> None:

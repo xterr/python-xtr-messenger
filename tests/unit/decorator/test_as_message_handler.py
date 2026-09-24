@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from message_bus import HandlersLocator, as_message, as_message_handler, default_registry
+from xtr_messenger import HandlersLocator, as_message, as_message_handler, default_registry
 
 
 @as_message(name="test.unit.decorator.as_message_handler.local.v1")

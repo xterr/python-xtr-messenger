@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.messages import ingest_document
+from xtr_messenger import (
     Envelope,
     LoggerInterface,
     LoggingMiddleware,
@@ -17,11 +18,10 @@ from message_bus import (
     StackInterface,
     TransportMessageIdStamp,
 )
-from message_bus.middleware import logging_middleware
-from tests.support.messages import ingest_document
+from xtr_messenger.middleware import logging_middleware
 
 if TYPE_CHECKING:
-    from message_bus import StampInterface
+    from xtr_messenger import StampInterface
 
 pytestmark = pytest.mark.anyio
 

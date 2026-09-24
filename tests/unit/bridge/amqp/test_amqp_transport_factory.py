@@ -11,7 +11,9 @@ import pytest
 from taskiq import SmartRetryMiddleware
 from taskiq_aio_pika import AioPikaBroker
 
-from message_bus import (
+from tests.support.fakes import RecordingBus
+from tests.support.messages import IngestDocument
+from xtr_messenger import (
     Dsn,
     JsonSerializer,
     MixedDsnError,
@@ -21,12 +23,10 @@ from message_bus import (
     WorkerProvidingInterface,
     name_of,
 )
-from message_bus.bridge.amqp import AmqpTransportFactory, declared_queues
-from message_bus.bridge.taskiq.taskiq_sender import TaskiqSender
-from message_bus.bridge.taskiq.taskiq_worker import TaskiqWorker
-from message_bus.message_registry import declared_names
-from tests.support.fakes import RecordingBus
-from tests.support.messages import IngestDocument
+from xtr_messenger.bridge.amqp import AmqpTransportFactory, declared_queues
+from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
+from xtr_messenger.message_registry import declared_names
 
 _HOST = "amqp://guest:guest@localhost:5672/"
 _OTHER = "amqp://guest:guest@other:5672/"

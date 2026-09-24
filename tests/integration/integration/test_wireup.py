@@ -13,7 +13,7 @@ from taskiq import InMemoryBroker
 from wireup import AsyncContainer, Inject, Injected, injectable
 from wireup.errors import WireupError
 
-from message_bus import (
+from xtr_messenger import (
     Envelope,
     HandlersLocator,
     MessageBus,
@@ -26,15 +26,15 @@ from message_bus import (
     as_message,
     as_message_handler,
 )
-from message_bus.bridge.taskiq import TaskiqSender, bind_bus
-from message_bus.bridge.taskiq.broker import forget_started
-from message_bus.bridge.taskiq.taskiq_worker import TaskiqWorker
-from message_bus.integration.wireup import injectables
-from message_bus.middleware import HandleMessageMiddleware, SendMessageMiddleware
-from message_bus.stamp import HandledStamp
-from message_bus.transport.in_memory import InMemoryTransportFactory
-from message_bus.transport.sender import SendersLocator
-from message_bus.transport.sync import SyncTransportFactory
+from xtr_messenger.bridge.taskiq import TaskiqSender, bind_bus
+from xtr_messenger.bridge.taskiq.broker import forget_started
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
+from xtr_messenger.integration.wireup import injectables
+from xtr_messenger.middleware import HandleMessageMiddleware, SendMessageMiddleware
+from xtr_messenger.stamp import HandledStamp
+from xtr_messenger.transport.in_memory import InMemoryTransportFactory
+from xtr_messenger.transport.sender import SendersLocator
+from xtr_messenger.transport.sync import SyncTransportFactory
 
 pytestmark = pytest.mark.anyio
 

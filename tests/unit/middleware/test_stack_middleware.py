@@ -7,7 +7,7 @@ from typing import final
 import pytest
 from typing_extensions import override
 
-from message_bus import Envelope, MiddlewareInterface, StackInterface, StackMiddleware
+from xtr_messenger import Envelope, MiddlewareInterface, StackInterface, StackMiddleware
 
 pytestmark = pytest.mark.anyio
 

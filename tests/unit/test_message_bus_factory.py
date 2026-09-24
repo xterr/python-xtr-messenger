@@ -6,7 +6,9 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from tests.support.fakes import RecordingSender
+from tests.support.messages import IngestDocument, ingest_document
+from xtr_messenger import (
     HandlersLocator,
     MessageBusConfig,
     MessageBusFactory,
@@ -20,13 +22,11 @@ from message_bus import (
     UnsupportedDsnError,
     as_message_handler,
 )
-from tests.support.fakes import RecordingSender
-from tests.support.messages import IngestDocument, ingest_document
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from message_bus import Dsn, Envelope, StackInterface
+    from xtr_messenger import Dsn, Envelope, StackInterface
 
 pytestmark = pytest.mark.anyio
 

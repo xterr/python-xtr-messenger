@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from message_bus import (
+from tests.support.messages import UndeclaredMessage
+from xtr_messenger import (
     MessageBusError,
     UnknownMessageNameError,
     as_message,
@@ -12,8 +13,7 @@ from message_bus import (
     transports_of,
     type_for_name,
 )
-from message_bus.message_registry import declared_names, register_message
-from tests.support.messages import UndeclaredMessage
+from xtr_messenger.message_registry import declared_names, register_message
 
 
 class Outer:
@@ -146,7 +146,7 @@ def test_a_name_without_a_colon_cannot_be_resolved() -> None:
 
 def test_a_name_in_an_unimportable_module_cannot_be_resolved() -> None:
     with pytest.raises(UnknownMessageNameError):
-        _ = type_for_name("message_bus.does_not_exist:Thing")
+        _ = type_for_name("xtr_messenger.does_not_exist:Thing")
 
 
 def test_a_name_whose_attribute_is_missing_cannot_be_resolved() -> None:

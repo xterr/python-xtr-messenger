@@ -20,8 +20,8 @@ def test_resolving_a_sync_bus_never_imports_a_broker_library() -> None:
         "import asyncio\n"
         "from dataclasses import dataclass\n"
         "from uuid import UUID, uuid4\n"
-        "from message_bus import MessageBusConfig, MessageBusFactory, TransportConfig\n"
-        "from message_bus import as_message, as_message_handler\n"
+        "from xtr_messenger import MessageBusConfig, MessageBusFactory, TransportConfig\n"
+        "from xtr_messenger import as_message, as_message_handler\n"
         "@as_message(name='test.integration.transport.probe.v1')\n"
         "@dataclass(frozen=True, slots=True)\n"
         "class Probe:\n"
@@ -46,7 +46,7 @@ def test_resolving_a_sync_bus_never_imports_a_broker_library() -> None:
 
 def test_an_amqp_bus_does_load_its_broker_library() -> None:
     code = (
-        "from message_bus import MessageBusConfig, MessageBusFactory, TransportConfig\n"
+        "from xtr_messenger import MessageBusConfig, MessageBusFactory, TransportConfig\n"
         "config = MessageBusConfig(\n"
         "    transports={'q': TransportConfig('amqp://guest:guest@h:5672/', queue='jobs')}\n"
         ")\n"

@@ -19,9 +19,9 @@ from taskiq_aio_pika import AioPikaBroker
 from typing_extensions import override
 from yarl import URL
 
-from message_bus.bridge.amqp.dead_letter_middleware import DeadLetterMiddleware
-from message_bus.bridge.amqp.reliability import DEFAULT_DEAD_LETTER_QUEUE
-from message_bus.bridge.taskiq.labels import RETRIES_LABEL
+from xtr_messenger.bridge.amqp.dead_letter_middleware import DeadLetterMiddleware
+from xtr_messenger.bridge.amqp.reliability import DEFAULT_DEAD_LETTER_QUEUE
+from xtr_messenger.bridge.taskiq.labels import RETRIES_LABEL
 
 if TYPE_CHECKING:
     from aio_pika.abc import AbstractChannel, AbstractMessage, TimeoutType

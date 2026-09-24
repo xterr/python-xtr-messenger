@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from message_bus import (
+from xtr_messenger import (
     AckReceiptStamp,
     DelayStamp,
     HandledStamp,

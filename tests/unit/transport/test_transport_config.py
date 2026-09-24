@@ -4,7 +4,7 @@ from types import MappingProxyType
 
 import pytest
 
-from message_bus import Dsn, InvalidDsnError, TransportConfig
+from xtr_messenger import Dsn, InvalidDsnError, TransportConfig
 
 
 def test_a_queue_in_the_dsn_is_used_when_no_field_is_given() -> None:

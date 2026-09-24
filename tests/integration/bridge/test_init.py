@@ -12,9 +12,9 @@ import pathlib
 import pytest
 from taskiq import InMemoryBroker
 
-from message_bus.bridge.taskiq import TaskiqSender, TaskiqWorker
+from xtr_messenger.bridge.taskiq import TaskiqSender, TaskiqWorker
 
-_BRIDGE = pathlib.Path(__file__).resolve().parents[3] / "src" / "message_bus" / "bridge"
+_BRIDGE = pathlib.Path(__file__).resolve().parents[3] / "src" / "xtr_messenger" / "bridge"
 
 
 def _sources(package: str) -> list[pathlib.Path]:

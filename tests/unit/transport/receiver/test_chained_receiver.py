@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import AckReceiptStamp, Envelope, ErrorDetailsStamp
-from message_bus.transport.receiver.chained_receiver import ChainedReceiver
 from tests.support.fakes import StubReceiver
+from xtr_messenger import AckReceiptStamp, Envelope, ErrorDetailsStamp
+from xtr_messenger.transport.receiver.chained_receiver import ChainedReceiver
 
 pytestmark = pytest.mark.anyio
 

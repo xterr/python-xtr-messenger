@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from message_bus import InvalidTransportOptionError
-from message_bus.bridge.amqp.connection_options import ConnectionOptions
+from xtr_messenger import InvalidTransportOptionError
+from xtr_messenger.bridge.amqp.connection_options import ConnectionOptions
 
 _HOST = "amqp://guest:guest@localhost:5672/"
 

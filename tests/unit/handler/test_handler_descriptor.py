@@ -6,8 +6,8 @@ from typing import Annotated, final, get_type_hints
 import pytest
 from wireup import Injected
 
-from message_bus import Envelope, HandlerDescriptor, HandlerSignatureError
 from tests.support.messages import IngestDocument, ingest_document
+from xtr_messenger import Envelope, HandlerDescriptor, HandlerSignatureError
 
 pytestmark = pytest.mark.anyio
 

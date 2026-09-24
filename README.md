@@ -1,6 +1,6 @@
 <div align="center">
 
-# xtr-message-bus
+# xtr-messenger
 
 **A message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
@@ -38,11 +38,11 @@ Where that goes is configuration. Whether it happens in-process or on RabbitMQ i
 ## Install
 
 ```sh
-uv add xtr-message-bus                    # sync:// and in-memory://
-uv add "xtr-message-bus[amqp]"            # + RabbitMQ
-uv add "xtr-message-bus[taskiq]"          # + any other taskiq broker
-uv add "xtr-message-bus[pydantic]"        # + pydantic messages
-uv add "xtr-message-bus[wireup]"          # + a pre-wired DI container
+uv add xtr-messenger                    # sync:// and in-memory://
+uv add "xtr-messenger[amqp]"            # + RabbitMQ
+uv add "xtr-messenger[taskiq]"          # + any other taskiq broker
+uv add "xtr-messenger[pydantic]"        # + pydantic messages
+uv add "xtr-messenger[wireup]"          # + a pre-wired DI container
 ```
 
 | Extra | Brings | For |
@@ -64,7 +64,7 @@ properties live on the class:
 from dataclasses import dataclass
 from uuid import UUID
 
-from message_bus import as_message
+from xtr_messenger import as_message
 
 
 @as_message(name="ingest.document.v1")
@@ -82,7 +82,7 @@ default transport, used when the routing table says nothing about it.
 A handler is a function that imports nothing but the message:
 
 ```python
-from message_bus import as_message_handler
+from xtr_messenger import as_message_handler
 
 
 @as_message_handler(IngestDocument)
@@ -93,7 +93,7 @@ async def ingest(message: IngestDocument) -> None:
 Describe the transports and where messages go, then build a bus:
 
 ```python
-from message_bus import MessageBusConfig, MessageBusFactory, TransportConfig
+from xtr_messenger import MessageBusConfig, MessageBusFactory, TransportConfig
 
 CONFIG = MessageBusConfig(
     transports={"sync": TransportConfig("sync://")},
@@ -114,7 +114,7 @@ annotated `Envelope`. Anything else is refused with `HandlerSignatureError` wher
 declared, not on the first message that reaches it.
 
 ```python
-from message_bus import Envelope, RedeliveryStamp, as_message_handler
+from xtr_messenger import Envelope, RedeliveryStamp, as_message_handler
 
 
 @as_message_handler(IngestDocument)
@@ -142,7 +142,7 @@ but the message. Where one registry per process is too coarse — two applicatio
 run, say — declare into a `HandlersLocator` of your own and hand it to the bus or the worker:
 
 ```python
-from message_bus import HandlersLocator
+from xtr_messenger import HandlersLocator
 
 orders = HandlersLocator()
 
@@ -230,7 +230,7 @@ import signal
 import app.handlers.ingest  # noqa: F401 — importing declares the message and its handler
 
 from app.bus import CONFIG
-from message_bus import WorkerFactory
+from xtr_messenger import WorkerFactory
 
 
 async def main() -> None:
@@ -277,7 +277,7 @@ attempt it is on in its `RedeliveryStamp`.
 Every dispatch-side concern is middleware, so adding one changes no existing code:
 
 ```python
-from message_bus import Envelope, LoggingMiddleware, MiddlewareInterface, StackInterface
+from xtr_messenger import Envelope, LoggingMiddleware, MiddlewareInterface, StackInterface
 
 
 class RejectOutOfHours(MiddlewareInterface):
@@ -321,7 +321,7 @@ without redeploying every consumer first. Where both sides ship together and a s
 means a typo, ask for the other behaviour:
 
 ```python
-from message_bus import DataclassCodec, JsonSerializer
+from xtr_messenger import DataclassCodec, JsonSerializer
 
 strict = JsonSerializer(codecs=[DataclassCodec(forbid_unknown_fields=True)])
 ```
@@ -377,7 +377,7 @@ whole path without a broker. Build the bus and the worker from the same factory 
 they share the recorder:
 
 ```python
-from message_bus import InMemoryTransport, InMemoryTransportFactory, WorkerFactory
+from xtr_messenger import InMemoryTransport, InMemoryTransportFactory, WorkerFactory
 
 CONFIG = MessageBusConfig(
     transports={"jobs": TransportConfig("in-memory://?serialize=true")},
@@ -434,7 +434,7 @@ class TransportFactoryInterface(Protocol):
 ```
 
 ```toml
-[project.entry-points."message_bus.transport_factories"]
+[project.entry-points."xtr_messenger.transport_factories"]
 kafka = "my_package.kafka:KafkaTransportFactory"
 ```
 
@@ -475,7 +475,7 @@ With the `wireup` extra, a handler asks for what it needs the way wireup always 
 # app/handlers.py
 from wireup import Injected
 
-from message_bus import as_message_handler
+from xtr_messenger import as_message_handler
 
 
 @as_message_handler(IngestDocument)
@@ -513,13 +513,13 @@ import wireup
 
 import app.handlers  # noqa: F401 — importing declares the handlers
 from app import services
-from message_bus import WorkerInterface
-from message_bus.integration import wireup as message_bus
+from xtr_messenger import WorkerInterface
+from xtr_messenger.integration import wireup as messenger
 
 
 async def main() -> None:
     container = wireup.create_async_container(
-        injectables=[services, *message_bus.injectables(CONFIG, transports=["jobs"])],
+        injectables=[services, *messenger.injectables(CONFIG, transports=["jobs"])],
     )
     try:
         await (await container.get(WorkerInterface)).run()
@@ -565,7 +565,7 @@ def bus_config(dsn: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConf
 
 
 container = wireup.create_async_container(
-    injectables=[services, bus_config, *message_bus.injectables(transports=["jobs"])],
+    injectables=[services, bus_config, *messenger.injectables(transports=["jobs"])],
     config={"amqp_url": os.environ["AMQP_URL"]},
 )
 ```
@@ -575,12 +575,12 @@ container = wireup.create_async_container(
 ## Layout
 
 ```
-message_bus/
+xtr_messenger/
 ├── envelope.py              the message plus its stamps
 ├── message_registry.py      what @as_message declared: names, default transports
 ├── message_bus_config.py    which transports exist, and where messages go
 ├── message_bus_factory.py   builds the bus a process publishes through
-├── message_bus.py           the loop — wrap, then walk the middleware chain
+├── xtr_messenger.py           the loop — wrap, then walk the middleware chain
 ├── worker_factory.py        builds what a worker process runs
 ├── worker.py                the other loop — collect, dispatch, ack or reject
 ├── dsn.py                   reading a transport's DSN

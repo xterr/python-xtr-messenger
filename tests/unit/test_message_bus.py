@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
-from message_bus import (
+from xtr_messenger import (
     Envelope,
     MessageBus,
     MessageBusInterface,
@@ -15,7 +15,7 @@ from message_bus import (
 )
 
 if TYPE_CHECKING:
-    from message_bus import StackInterface
+    from xtr_messenger import StackInterface
 
 pytestmark = pytest.mark.anyio
 

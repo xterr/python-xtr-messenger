@@ -7,11 +7,11 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from message_bus import MessageDecodingFailedError, MessageEncodingFailedError, as_message
-from message_bus.transport.serialization.codec.pydantic_codec import PydanticCodec
+from xtr_messenger import MessageDecodingFailedError, MessageEncodingFailedError, as_message
+from xtr_messenger.transport.serialization.codec.pydantic_codec import PydanticCodec
 
 if TYPE_CHECKING:
-    from message_bus.transport.serialization.codec import JsonValue
+    from xtr_messenger.transport.serialization.codec import JsonValue
 
 
 @as_message(name="test.unit.pydantic_codec.issue_invoice.v1")
