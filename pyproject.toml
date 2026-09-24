@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "msgspec>=0.18",
     "typing-extensions>=4.4",
+    "xtr-logging",
 ]
 
 [project.optional-dependencies]
@@ -69,6 +70,7 @@ dev = [
 # xtr-console is not on PyPI yet; resolve it from its repository meanwhile.
 [tool.uv.sources]
 xtr-console = { git = "https://github.com/xterr/python-xtr-console.git" }
+xtr-logging = { git = "https://github.com/xterr/python-xtr-logging.git" }
 
 [build-system]
 requires = ["hatchling"]
@@ -144,6 +146,9 @@ ignore = [
     "TRY003",
     "EM101",
     "EM102",
+    # xtr-logging's LoggerInterface takes a context mapping, not the standard
+    # library's format arguments; PLE1205 reads one as the other.
+    "PLE1205",
 ]
 fixable = ["ALL"]
 unfixable = []

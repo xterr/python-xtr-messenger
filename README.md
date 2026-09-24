@@ -5,7 +5,7 @@
 **A message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
 <img alt="python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A5%203.11-3776AB?logo=python&logoColor=white">
-<img alt="core dependencies: 2" src="https://img.shields.io/badge/core%20deps-2-3FB950">
+<img alt="core dependencies: 3" src="https://img.shields.io/badge/core%20deps-3-3FB950">
 <img alt="typed" src="https://img.shields.io/badge/typed-ty%20%2B%20basedpyright-1f6feb">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue">
 
@@ -22,7 +22,7 @@ Dispatch wraps a message in an **envelope** and walks it through a **middleware 
 middleware records what it did by appending a **stamp**. A **routing table** maps a message
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
-- 🪶 **Two core dependencies** — `msgspec` and `typing-extensions`. A broker is an extra.
+- 🪶 **Three core dependencies** — `msgspec`, `typing-extensions` and `xtr-logging`. A broker is an extra.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
@@ -48,14 +48,22 @@ uv add "xtr-messenger[console]"         # + the messenger:consume console comman
 
 | Extra | Brings | For |
 | --- | --- | --- |
-| *(none)* | `msgspec`, `typing-extensions` | `sync://`, `in-memory://`, the whole core |
+| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging` | `sync://`, `in-memory://`, the whole core |
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
 | `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
 | `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
 
-Requires Python 3.11+.
+Requires Python 3.11+. `xtr-logging` is not on PyPI yet; with uv, point it at git:
+
+```toml
+[tool.uv.sources]
+xtr-logging = { git = "https://github.com/xterr/python-xtr-logging.git" }
+```
+
+That one entry is enough — uv reads a git dependency's own `tool.uv.sources`, so the `xtr-clock`
+that `xtr-logging` reads the time from is resolved from its repository too.
 
 ## Quick start
 
@@ -328,8 +336,25 @@ class RejectOutOfHours(MiddlewareInterface):
         return await stack.next().handle(envelope, stack)
 
 
-bus = MessageBusFactory(CONFIG).bus([LoggingMiddleware(), RejectOutOfHours()])
+bus = MessageBusFactory(CONFIG).bus([LoggingMiddleware(logger), RejectOutOfHours()])
 ```
+
+`LoggingMiddleware` writes one record per dispatch through an
+[xtr-logging](https://github.com/xterr/python-xtr-logging) `LoggerInterface` — the message type,
+and whatever the chain stamped, as context rather than baked into the text:
+
+```python
+from xtr_logging import Level, Logger, StreamHandler
+
+logger = Logger("messenger", [StreamHandler("var/log/app.log", Level.INFO)])
+# [2026-09-24T12:30:45+03:00] messenger.INFO: message dispatched
+#   {"message_type":"IngestDocument","transport":"high","message_id":"id-1"} []
+```
+
+Given no logger it writes to a `NullLogger`, so the middleware costs nothing until an
+application hands it one. Where a container owns the graph, xtr-logging's own
+[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container)
+provides the `LoggerInterface` to inject here.
 
 Your middleware runs first, in the order given. Routing and handling always come last, in that
 order, and two rules carry the producer/consumer split:

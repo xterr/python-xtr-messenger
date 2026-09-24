@@ -7,6 +7,7 @@ middleware chain. MiddlewareInterface records what it did by appending a
 The core has no third-party dependencies. Transports that need one live
 behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 """
+
 from importlib.metadata import version
 
 from .decorator import as_message, as_message_handler
@@ -41,7 +42,6 @@ from .message_bus_interface import MessageBusInterface
 from .message_registry import name_of, transports_of, type_for_name
 from .middleware import (
     HandleMessageMiddleware,
-    LoggerInterface,
     LoggingMiddleware,
     MiddlewareInterface,
     SendMessageMiddleware,
@@ -107,7 +107,6 @@ __all__ = [
     "InvalidDsnError",
     "InvalidTransportOptionError",
     "JsonSerializer",
-    "LoggerInterface",
     "LoggingMiddleware",
     "MessageBus",
     "MessageBusConfig",

@@ -2,40 +2,26 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
+from xtr_logging import Level, Logger, TestHandler
 
 from tests.support.messages import ingest_document
 from xtr_messenger import (
     Envelope,
-    LoggerInterface,
     LoggingMiddleware,
     MiddlewareInterface,
     SentStamp,
     StackInterface,
     TransportMessageIdStamp,
 )
-from xtr_messenger.middleware import logging_middleware
 
 if TYPE_CHECKING:
     from xtr_messenger import StampInterface
 
 pytestmark = pytest.mark.anyio
-
-
-@final
-class RecordingLogger(LoggerInterface):
-    """Records every ``(message, fields)`` it is asked to log."""
-
-    def __init__(self) -> None:
-        self.records: list[tuple[str, dict[str, str]]] = []
-
-    @override
-    def info(self, message: str, /, **fields: str) -> None:
-        self.records.append((message, fields))
 
 
 @final
@@ -73,21 +59,40 @@ class OneStep(StackInterface):
         return self._terminal
 
 
-async def test_it_logs_the_message_type_with_no_extra_fields_when_none_apply() -> None:
-    logger = RecordingLogger()
+def recording() -> tuple[Logger, TestHandler]:
+    """A logger writing only to a handler that keeps what it is given."""
+    handler = TestHandler()
+    return Logger("app", [handler]), handler
+
+
+async def test_it_logs_the_message_type_with_no_extra_context_when_none_applies() -> None:
+    logger, handler = recording()
 
     _ = await LoggingMiddleware(logger).handle(
         Envelope(ingest_document()),
         OneStep(StampingTerminal()),
     )
 
-    assert logger.records == [("message dispatched", {"message_type": "IngestDocument"})]
+    assert [(record.message, dict(record.context)) for record in handler.records] == [
+        ("message dispatched", {"message_type": "IngestDocument"}),
+    ]
+
+
+async def test_it_logs_at_info() -> None:
+    logger, handler = recording()
+
+    _ = await LoggingMiddleware(logger).handle(
+        Envelope(ingest_document()),
+        OneStep(StampingTerminal()),
+    )
+
+    assert handler.has_record("message dispatched", Level.INFO)
 
 
 async def test_it_adds_the_transport_and_message_id_the_chain_stamped() -> None:
     """The stamps come from the terminal, so seeing them in the log proves the
     record is written after the rest of the chain has run."""
-    logger = RecordingLogger()
+    logger, handler = recording()
     terminal = StampingTerminal(
         SentStamp("InMemoryTransport", "async"),
         TransportMessageIdStamp("id-1"),
@@ -95,23 +100,24 @@ async def test_it_adds_the_transport_and_message_id_the_chain_stamped() -> None:
 
     _ = await LoggingMiddleware(logger).handle(Envelope(ingest_document()), OneStep(terminal))
 
-    assert logger.records[0] == (
-        "message dispatched",
-        {"message_type": "IngestDocument", "transport": "async", "message_id": "id-1"},
-    )
+    assert dict(handler.records[0].context) == {
+        "message_type": "IngestDocument",
+        "transport": "async",
+        "message_id": "id-1",
+    }
 
 
 async def test_the_transport_is_taken_from_the_last_sent_stamp() -> None:
-    logger = RecordingLogger()
+    logger, handler = recording()
     terminal = StampingTerminal(SentStamp("A", "primary"), SentStamp("B", "mirror"))
 
     _ = await LoggingMiddleware(logger).handle(Envelope(ingest_document()), OneStep(terminal))
 
-    assert logger.records[0][1]["transport"] == "mirror"
+    assert handler.records[0].context["transport"] == "mirror"
 
 
 async def test_it_returns_the_result_untouched() -> None:
-    logger = RecordingLogger()
+    logger, _ = recording()
     stamp = SentStamp("InMemoryTransport", "async")
     envelope = Envelope(ingest_document())
 
@@ -121,7 +127,7 @@ async def test_it_returns_the_result_untouched() -> None:
 
 
 async def test_an_exception_from_the_chain_propagates_and_nothing_is_logged() -> None:
-    logger = RecordingLogger()
+    logger, handler = recording()
 
     with pytest.raises(RuntimeError, match="downstream boom"):
         _ = await LoggingMiddleware(logger).handle(
@@ -129,16 +135,15 @@ async def test_an_exception_from_the_chain_propagates_and_nothing_is_logged() ->
             OneStep(ExplodingTerminal()),
         )
 
-    assert logger.records == []
+    assert handler.records == ()
 
 
-async def test_the_default_logger_writes_through_the_stdlib_logger(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    with caplog.at_level(logging.INFO, logger=logging_middleware.__name__):
-        _ = await LoggingMiddleware().handle(
-            Envelope(ingest_document()),
-            OneStep(StampingTerminal()),
-        )
+async def test_without_a_logger_it_discards_the_record_and_still_returns_the_result() -> None:
+    stamp = SentStamp("InMemoryTransport", "async")
 
-    assert caplog.messages == ["message dispatched"]
+    result = await LoggingMiddleware().handle(
+        Envelope(ingest_document()),
+        OneStep(StampingTerminal(stamp)),
+    )
+
+    assert result.stamps == (stamp,)
