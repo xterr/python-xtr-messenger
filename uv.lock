@@ -1259,8 +1259,8 @@ source = { git = "https://github.com/xterr/python-xtr-clock.git#4e612a4300e11ded
 
 [[package]]
 name = "xtr-console"
-version = "0.1.0"
-source = { git = "https://github.com/xterr/python-xtr-console.git#b743c1e3181a18563602a81d0f56c639472a4189" }
+version = "0.2.0"
+source = { git = "https://github.com/xterr/python-xtr-console.git#7cdd7f66352d88ca22341e33abcd2975f0cdf4c6" }
 dependencies = [
     { name = "cyclopts" },
     { name = "rich" },
@@ -1269,8 +1269,8 @@ dependencies = [
 
 [[package]]
 name = "xtr-logging"
-version = "0.1.0"
-source = { git = "https://github.com/xterr/python-xtr-logging.git#dea5c36e9db495cb04916aca6abbf4cd5c47a211" }
+version = "0.2.0"
+source = { git = "https://github.com/xterr/python-xtr-logging.git#677808f6e99faf2f0abb23a986e584075527a7fa" }
 dependencies = [
     { name = "msgspec" },
     { name = "typing-extensions" },

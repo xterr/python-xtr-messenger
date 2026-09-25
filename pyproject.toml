@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "msgspec>=0.18",
     "typing-extensions>=4.4",
-    "xtr-logging",
+    "xtr-logging>=0.2",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +30,7 @@ wireup = [
     "wireup>=2.12",
 ]
 console = [
-    "xtr-console>=0.1",
+    "xtr-console>=0.2",
 ]
 taskiq = [
     "taskiq>=0.12.4",
@@ -64,7 +64,7 @@ dev = [
     "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
     "wireup>=2.12",
-    "xtr-console>=0.1",
+    "xtr-console>=0.2",
 ]
 
 # xtr-console is not on PyPI yet; resolve it from its repository meanwhile.
