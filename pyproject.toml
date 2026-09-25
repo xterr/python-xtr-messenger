@@ -1,6 +1,6 @@
 [project]
 name = "xtr-messenger"
-version = "0.4.0"
+version = "0.5.0"
 description = "A message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
 readme = "README.md"
 requires-python = ">=3.11"
