@@ -365,14 +365,23 @@ second should not say so unasked. Each tier adds what the one above it left out 
 repeating it, so `-vvv` on a worker reads as a trace and a plain run stays silent.
 
 Given no logger it writes to a `NullLogger`, so the middleware costs nothing until an
-application hands it one. Where a container owns the graph, xtr-logging's own
-[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container)
-provides the `LoggerInterface` to build it with.
+application hands it one.
 
-Under [xtr-console](https://github.com/xterr/python-xtr-console) a container holding a
-`LoggerFactory` has its console handlers follow every command it runs, so the `-v` flags on
-`messenger:consume` are what set the level — pass the middleware to the bus you build and
-`-vv` reads out every handler that ran.
+**With a container you add nothing at all.** A container that provides a `LoggerInterface` —
+xtr-logging's own
+[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container) does —
+has every dispatch logged, on the bus and in every worker, without being asked:
+
+```python
+container = wireup.create_async_container(
+    injectables=[services, *logging.injectables(LOGGING), *messenger.injectables(CONFIG)],
+)
+```
+
+That is the whole of it. Under [xtr-console](https://github.com/xterr/python-xtr-console) the
+same container makes its console handlers follow every command it runs, so the `-v` flags do the
+rest and `messenger:consume -vv` reads out every handler that ran. Provide no logger and nothing
+is added.
 
 Your middleware runs first, in the order given. Routing and handling always come last, in that
 order, and two rules carry the producer/consumer split:

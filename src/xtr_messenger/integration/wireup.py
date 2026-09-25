@@ -56,12 +56,16 @@ from typing import cast, final
 import wireup
 from typing_extensions import override
 from wireup import AsyncContainer
+from wireup.errors import UnknownServiceRequestedError
+from xtr_logging import LoggerInterface
 
 from xtr_messenger.exception import UnregisteredHandlerError
 from xtr_messenger.handler import Handler, HandlerDescriptor, HandlersLocator, default_registry
 from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.message_bus_factory import MessageBusFactory
 from xtr_messenger.message_bus_interface import MessageBusInterface
+from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
+from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 from xtr_messenger.worker_factory import WorkerFactory
@@ -93,6 +97,12 @@ def injectables(
     handler, or a handler class's ``__call__``, has its ``Injected[...]``
     parameters filled on every call.
 
+    A container that also provides a ``LoggerInterface`` — xtr-logging's own
+    wireup integration does — has every dispatch logged, on the bus and in
+    every worker, without being asked. Configuring logging is the whole of
+    it; under xtr-console a command's ``-v`` flags then decide how much of a
+    dispatch it reports.
+
     Args:
         config: Which transports exist and where messages go. Omit it to
             provide a ``MessageBusConfig`` injectable of your own, say one
@@ -113,13 +123,17 @@ def injectables(
     shared = [TransportFactory(factories)]
     registered = {declared: _registration_of(declared) for declared in _handler_classes(registry)}
 
-    def message_bus(bus_config: MessageBusConfig, container: AsyncContainer) -> MessageBusInterface:
+    async def message_bus(
+        bus_config: MessageBusConfig, container: AsyncContainer
+    ) -> MessageBusInterface:
         _wire(registry, container, registered)
-        return MessageBusFactory(bus_config, shared, registry).bus()
+        return MessageBusFactory(bus_config, shared, registry).bus(await _logging(container))
 
-    def worker_factory(bus_config: MessageBusConfig, container: AsyncContainer) -> WorkerFactory:
+    async def worker_factory(
+        bus_config: MessageBusConfig, container: AsyncContainer
+    ) -> WorkerFactory:
         _wire(registry, container, registered)
-        return WorkerFactory(bus_config, shared, registry)
+        return WorkerFactory(bus_config, shared, registry, middleware=await _logging(container))
 
     def worker(workers: WorkerFactory) -> WorkerInterface:
         return workers.worker(transports)
@@ -131,6 +145,20 @@ def injectables(
     if transports:
         provided.append(wireup.injectable(worker))
     return provided
+
+
+async def _logging(container: AsyncContainer) -> tuple[MiddlewareInterface, ...]:
+    """Return a ``LoggingMiddleware`` when ``container`` holds a logger, nothing otherwise.
+
+    Added unasked, because it is free until something listens: the records
+    are graded from ``NOTICE`` down, so nothing is written at normal
+    verbosity.
+    """
+    try:
+        logger = await container.get(LoggerInterface)
+    except UnknownServiceRequestedError:
+        return ()
+    return (LoggingMiddleware(logger),)
 
 
 def _handler_classes(registry: HandlersLocator) -> set[type]:

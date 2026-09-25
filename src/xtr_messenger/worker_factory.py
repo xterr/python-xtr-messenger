@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .handler import HandlersLocatorInterface
     from .message_bus_config import MessageBusConfig
     from .message_bus_interface import MessageBusInterface
+    from .middleware.middleware_interface import MiddlewareInterface
     from .transport.sender import SenderInterface
     from .transport.transport_config import TransportConfig
     from .transport.transport_factory_interface import TransportFactoryInterface
@@ -43,7 +44,7 @@ class WorkerFactory:
     the library's own receive loop or one a broker library brought with it.
     """
 
-    __slots__ = ("_bus", "_config", "_handlers", "_transports")
+    __slots__ = ("_bus", "_config", "_handlers", "_middleware", "_transports")
 
     def __init__(
         self,
@@ -51,6 +52,7 @@ class WorkerFactory:
         factories: Sequence[TransportFactoryInterface] | None = None,
         handlers: HandlersLocatorInterface | None = None,
         bus: MessageBusInterface | None = None,
+        middleware: Sequence[MiddlewareInterface] = (),
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -58,11 +60,17 @@ class WorkerFactory:
         worker dispatches through, which is the only place a handler is
         called — an adapter bringing its own worker, as the AMQP one does,
         dispatches into that bus too.
+
+        ``middleware`` runs on every message collected, ahead of handling —
+        where a :class:`~xtr_messenger.middleware.LoggingMiddleware` goes, so a
+        consuming process reports what it handled. It is ignored when ``bus``
+        is given, that bus being composed already.
         """
         self._config = config
         self._transports = TransportFactory(factories)
         self._handlers = handlers
         self._bus = bus
+        self._middleware = tuple(middleware)
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -97,7 +105,7 @@ class WorkerFactory:
         """
         if self._bus is not None:
             return self._bus
-        return MessageBus([HandleMessageMiddleware(self._handlers)])
+        return MessageBus([*self._middleware, HandleMessageMiddleware(self._handlers)])
 
     def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
         transports = self._config.transports

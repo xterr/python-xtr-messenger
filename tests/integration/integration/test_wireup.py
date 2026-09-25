@@ -12,6 +12,7 @@ import wireup
 from taskiq import InMemoryBroker
 from wireup import AsyncContainer, Inject, Injected, injectable
 from wireup.errors import WireupError
+from xtr_logging import Level, Logger, LoggerInterface, TestHandler
 
 from xtr_messenger import (
     Envelope,
@@ -32,7 +33,7 @@ from xtr_messenger.bridge.taskiq.broker import forget_started
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
 from xtr_messenger.integration.wireup import injectables
 from xtr_messenger.middleware import HandleMessageMiddleware, SendMessageMiddleware
-from xtr_messenger.stamp import HandledStamp
+from xtr_messenger.stamp import HandledStamp, SentStamp
 from xtr_messenger.transport.in_memory import InMemoryTransportFactory
 from xtr_messenger.transport.sender import SendersLocator
 from xtr_messenger.transport.sync import SyncTransportFactory
@@ -626,3 +627,62 @@ async def test_a_handler_declared_after_wiring_is_wired_too() -> None:
     [(_, db)] = calls("late")
     assert isinstance(db, Session)
     await wired.close()
+
+
+# ─── logging, wired by providing a logger and nothing else ───────
+
+
+def a_logging_container(handler: TestHandler) -> AsyncContainer:
+    """A container whose only addition is the ``LoggerInterface`` it provides."""
+    logger = Logger("messenger", [handler])
+    return a_container(services=[*SERVICES, wireup.instance(logger, as_type=LoggerInterface)])
+
+
+async def test_a_container_providing_a_logger_has_its_dispatches_logged() -> None:
+    handler = TestHandler()
+    wired = a_logging_container(handler)
+    try:
+        _ = await (await resolve(wired, MessageBusInterface)).dispatch(Ingest(uuid4()))
+    finally:
+        await wired.close()
+
+    assert handler.has_record("message dispatched", Level.NOTICE)
+
+
+async def test_a_container_without_a_logger_builds_and_dispatches_anyway() -> None:
+    """Looking for a logger there is none of is not an error — it adds nothing."""
+    wired = a_container()
+    try:
+        envelope = await (await resolve(wired, MessageBusInterface)).dispatch(Ingest(uuid4()))
+        await (await resolve(wired, WorkerFactory)).worker(["jobs"]).run()
+    finally:
+        await wired.close()
+
+    assert envelope.last(SentStamp) is not None
+    assert len(calls("ingest")) == 1
+
+
+async def test_the_worker_logs_what_it_handled_so_messenger_consume_reports() -> None:
+    handler = TestHandler()
+    wired = a_logging_container(handler)
+    try:
+        await drain(wired, Ingest(uuid4()))
+    finally:
+        await wired.close()
+
+    assert [record.context["handler"] for record in handler.records if record.level is Level.INFO]
+    assert handler.has_record("message handled", Level.INFO)
+
+
+async def test_a_worker_built_from_the_factory_logs_too() -> None:
+    """The path messenger:consume takes — a WorkerFactory resolved from the container."""
+    handler = TestHandler()
+    wired = a_logging_container(handler)
+    try:
+        _ = await (await resolve(wired, MessageBusInterface)).dispatch(Ingest(uuid4()))
+        handler.clear()
+        await (await resolve(wired, WorkerFactory)).worker(["jobs"]).run()
+    finally:
+        await wired.close()
+
+    assert handler.has_record("message handled", Level.INFO)

@@ -13,9 +13,11 @@ from xtr_messenger import (
     Envelope,
     HandlersLocator,
     MessageBusConfig,
+    MiddlewareInterface,
     NotConsumableError,
     ReceivedStamp,
     SenderInterface,
+    StackInterface,
     TransportConfig,
     TransportFactoryInterface,
     TransportInterface,
@@ -114,6 +116,19 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
         del group
         self.captured_bus = bus
         return self.built
+
+
+@final
+class Recording(MiddlewareInterface):
+    """Notes that it ran, then hands the envelope on untouched."""
+
+    def __init__(self, order: list[str]) -> None:
+        self._order = order
+
+    @override
+    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
+        self._order.append("recorded")
+        return await stack.next().handle(envelope, stack)
 
 
 @final
@@ -232,3 +247,41 @@ def test_a_send_only_transport_that_brings_no_worker_is_refused() -> None:
 
     with pytest.raises(NotConsumableError, match="WorkerProvidingInterface"):
         _ = WorkerFactory(config, [SendOnlyFactory()]).worker(["t"])
+
+
+async def test_middleware_runs_on_every_collected_message_before_handling() -> None:
+    seen: list[IngestDocument] = []
+    order: list[str] = []
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument) -> None:
+        order.append("handled")
+        seen.append(message)
+
+    first, second = ingest_document(), ingest_document()
+    factory = WholeTransportFactory({"t": FakeTransport([Envelope(first), Envelope(second)])})
+    config = MessageBusConfig(transports={"t": TransportConfig("whole://")})
+
+    worker = WorkerFactory(
+        config, [factory], handlers=handlers, middleware=[Recording(order)]
+    ).worker(["t"])
+    await worker.run()
+
+    assert seen == [first, second]
+    assert order == ["recorded", "handled", "recorded", "handled"]
+
+
+async def test_the_middleware_is_ignored_when_a_bus_is_given() -> None:
+    """That bus is already composed, so nothing may be inserted into it."""
+    order: list[str] = []
+    adapter = OwnWorkerFactory()
+    own_bus = RecordingBus()
+    config = MessageBusConfig(transports={"jobs": TransportConfig("own://")})
+
+    _ = WorkerFactory(config, [adapter], bus=own_bus, middleware=[Recording(order)]).worker(
+        ["jobs"]
+    )
+
+    assert adapter.captured_bus is own_bus
+    assert order == []
