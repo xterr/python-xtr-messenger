@@ -217,7 +217,11 @@ TransportConfig(
 | Queue | `queue`, `queue_type`, `queue_durable`, `queue_auto_delete`, `queue_exclusive`, `queue_max_priority`, `routing_key` |
 | Connection | `heartbeat`, `connect_timeout`, `connection_name`, `frame_max`, `channel_max` |
 | TLS | `cacert`, `cert`, `key`, `verify` |
-| Consumption | `prefetch_count`, `auto_setup` |
+| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup` |
+
+`max_async_tasks` is how many messages a worker handles at once: ten per CPU, capped at 100,
+unless set. A message is acked once handled, so `prefetch_count` (10 by default) caps it too —
+a worker handles the smaller of the two at once. Raise both together to go wider.
 
 An unrecognised setting is **refused** with `UnknownTransportOptionError`, naming what the scheme
 does accept, and a value it cannot use — `prefetch_count=lots` — with

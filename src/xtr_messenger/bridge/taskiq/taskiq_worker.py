@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, final
+from os import cpu_count
+from typing import TYPE_CHECKING, Final, final
 
 from taskiq.receiver import Receiver
 from typing_extensions import override
@@ -15,7 +16,21 @@ from .broker import forget_started
 if TYPE_CHECKING:
     from taskiq import AsyncBroker
 
-__all__ = ["TaskiqWorker"]
+__all__ = ["TaskiqWorker", "default_max_async_tasks"]
+
+_TASKS_PER_CPU: Final = 10
+_MAX_DEFAULT_TASKS: Final = 100
+
+
+def default_max_async_tasks() -> int:
+    """Return how many messages a worker handles at once, unless told otherwise.
+
+    Ten per CPU, capped at 100 — taskiq's own CLI default. The handlers share
+    one event loop, so the CPUs stand in for the size of the machine rather
+    than bound the concurrency; what bounds it in practice is what the
+    handlers wait on, a database pool say, which is why it is configurable.
+    """
+    return min(_MAX_DEFAULT_TASKS, _TASKS_PER_CPU * (cpu_count() or 1))
 
 
 @final
@@ -48,11 +63,22 @@ class TaskiqWorker(WorkerInterface):
         max_async_tasks: int | None = None,
         max_prefetch: int = 0,
     ) -> None:
-        """Consume from ``broker``, bounded by the given concurrency limits."""
+        """Consume from ``broker``, handling at most ``max_async_tasks`` at once.
+
+        ``None`` is :func:`default_max_async_tasks` — never unbounded, which
+        taskiq warns can end in undefined behaviour.
+        """
         self._broker = broker
-        self._max_async_tasks = max_async_tasks
+        self._max_async_tasks = (
+            max_async_tasks if max_async_tasks is not None else default_max_async_tasks()
+        )
         self._max_prefetch = max_prefetch
         self._finished: asyncio.Event | None = None
+
+    @property
+    def max_async_tasks(self) -> int:
+        """Return how many messages this worker handles at once, at most."""
+        return self._max_async_tasks
 
     @property
     def broker(self) -> AsyncBroker:

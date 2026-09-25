@@ -12,8 +12,9 @@ from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage
 from typing_extensions import override
 
 from xtr_messenger import WorkerInterface
+from xtr_messenger.bridge.taskiq import taskiq_worker
 from xtr_messenger.bridge.taskiq.broker import ensure_started, forget_started
-from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -99,6 +100,39 @@ def test_it_exposes_the_broker_it_wraps() -> None:
     broker = InMemoryBroker()
 
     assert TaskiqWorker(broker).broker is broker
+
+
+def test_it_is_never_unbounded_by_default() -> None:
+    assert TaskiqWorker(InMemoryBroker()).max_async_tasks == default_max_async_tasks()
+
+
+def test_it_takes_the_limit_it_is_given() -> None:
+    assert TaskiqWorker(InMemoryBroker(), max_async_tasks=3).max_async_tasks == 3
+
+
+@pytest.mark.parametrize(("cpus", "expected"), [(None, 10), (1, 10), (4, 40), (10, 100), (64, 100)])
+def test_the_default_is_ten_per_cpu_capped_at_a_hundred(
+    monkeypatch: pytest.MonkeyPatch, cpus: int | None, expected: int
+) -> None:
+    """``os.cpu_count()`` may not know, which counts as one."""
+    monkeypatch.setattr(taskiq_worker, "cpu_count", lambda: cpus)
+
+    assert default_max_async_tasks() == expected
+
+
+async def test_running_it_raises_no_unbounded_concurrency_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """taskiq warns when a worker has no limit; one built here always has one."""
+    broker = ScriptedBroker()
+    worker = TaskiqWorker(broker)
+    run = asyncio.create_task(worker.run())
+    _ = await asyncio.wait_for(broker.started.wait(), timeout=_TIMEOUT)
+
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert "unlimited number of async tasks" not in caplog.text
 
 
 async def test_it_restores_the_worker_flag_on_exit() -> None:

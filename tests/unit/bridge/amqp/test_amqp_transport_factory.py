@@ -25,7 +25,7 @@ from xtr_messenger import (
 )
 from xtr_messenger.bridge.amqp import AmqpTransportFactory, declared_queues
 from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
-from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
 from xtr_messenger.message_registry import declared_names
 
 _HOST = "amqp://guest:guest@localhost:5672/"
@@ -131,6 +131,22 @@ def test_the_worker_is_a_taskiq_worker() -> None:
 
     assert isinstance(worker, WorkerInterface)
     assert isinstance(worker, TaskiqWorker)
+
+
+def test_the_worker_handles_the_configured_number_of_messages_at_once() -> None:
+    group = {"high": TransportConfig(f"{_HOST}?queue=jobs_high&max_async_tasks=7")}
+
+    worker = AmqpTransportFactory().worker(group, RecordingBus())
+
+    assert isinstance(worker, TaskiqWorker)
+    assert worker.max_async_tasks == 7
+
+
+def test_the_worker_is_bounded_by_default() -> None:
+    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+
+    assert isinstance(worker, TaskiqWorker)
+    assert worker.max_async_tasks == default_max_async_tasks()
 
 
 def test_both_halves_share_one_serializer() -> None:

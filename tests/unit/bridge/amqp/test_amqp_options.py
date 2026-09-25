@@ -7,12 +7,14 @@ import pytest
 from xtr_messenger import InvalidTransportOptionError
 from xtr_messenger.bridge.amqp.amqp_options import AMQP_OPTIONS, AmqpOptions
 from xtr_messenger.bridge.amqp.reliability import Reliability
+from xtr_messenger.bridge.taskiq.taskiq_worker import default_max_async_tasks
 
 
 def test_the_defaults() -> None:
     options = AmqpOptions()
 
     assert options.prefetch_count == 10
+    assert options.max_async_tasks == default_max_async_tasks()
     assert options.auto_setup is True
     assert options.reliability == Reliability()
 
@@ -20,6 +22,7 @@ def test_the_defaults() -> None:
 def test_the_option_list_names_every_group() -> None:
     for setting in (
         "prefetch_count",
+        "max_async_tasks",
         "auto_setup",
         "max_attempts",
         "exchange",
@@ -65,6 +68,20 @@ def test_options_given_in_code_are_the_defaults_the_settings_override() -> None:
 def test_a_non_numeric_prefetch_count_is_refused() -> None:
     with pytest.raises(InvalidTransportOptionError, match="prefetch_count"):
         _ = AmqpOptions.from_settings({"prefetch_count": "many"})
+
+
+def test_max_async_tasks_is_read_from_the_settings() -> None:
+    assert AmqpOptions.from_settings({"max_async_tasks": "7"}).max_async_tasks == 7
+
+
+def test_max_async_tasks_given_in_code_is_kept_when_the_settings_say_nothing() -> None:
+    assert AmqpOptions.from_settings({}, AmqpOptions(max_async_tasks=3)).max_async_tasks == 3
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "many"])
+def test_a_max_async_tasks_that_is_not_a_positive_number_is_refused(value: str) -> None:
+    with pytest.raises(InvalidTransportOptionError, match="max_async_tasks"):
+        _ = AmqpOptions.from_settings({"max_async_tasks": value})
 
 
 def test_auto_setup_must_be_a_boolean() -> None:

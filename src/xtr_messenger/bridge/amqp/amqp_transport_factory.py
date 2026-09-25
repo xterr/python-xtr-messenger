@@ -72,7 +72,7 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
     @override
     def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
         """Build one broker for the group, and a sender per named queue."""
-        broker = self._broker_for(group)
+        broker = self._broker_for(group, self._options_for(group))
         queues = _queues_of(group)
         return {
             name: TaskiqSender(
@@ -99,13 +99,15 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
 
         Import the modules that declare your messages and handlers before
         calling this; a message that has not been declared cannot be bound.
+        It handles at most ``max_async_tasks`` messages at once.
 
         Raises:
             MixedDsnError: If the transports do not share one connection.
         """
-        broker = self._broker_for(group)
+        options = self._options_for(group)
+        broker = self._broker_for(group, options)
         _ = bind_bus(broker, bus, self._wire())
-        return TaskiqWorker(broker)
+        return TaskiqWorker(broker, max_async_tasks=options.max_async_tasks)
 
     def _wire(self) -> SerializerInterface:
         """Return the serializer both halves of this transport use.
@@ -137,8 +139,10 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
             merged.update(spec.settings)
         return AmqpOptions.from_settings(merged, self._options)
 
-    def _broker_for(self, group: Mapping[str, TransportConfig]) -> AioPikaBroker:
-        """Return the broker for ``group``'s connection.
+    def _broker_for(
+        self, group: Mapping[str, TransportConfig], options: AmqpOptions
+    ) -> AioPikaBroker:
+        """Return the broker for ``group``'s connection, configured by ``options``.
 
         Not shared between groups: the queues a group names are declared on
         the broker, so a worker serving one queue and a producer publishing
@@ -150,7 +154,7 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         connections = tuple(dict.fromkeys(spec.parsed.connection for spec in group.values()))
         if len(connections) != 1:
             raise MixedDsnError(connections)
-        return create_amqp_broker(connections[0], self._options_for(group), _queues_of(group))
+        return create_amqp_broker(connections[0], options, _queues_of(group))
 
 
 def _queues_of(group: Mapping[str, TransportConfig]) -> tuple[str, ...]:
