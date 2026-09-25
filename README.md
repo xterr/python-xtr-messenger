@@ -97,8 +97,7 @@ from xtr_messenger import as_message_handler
 
 
 @as_message_handler(IngestDocument)
-async def ingest(message: IngestDocument) -> None:
-    ...
+async def ingest(message: IngestDocument) -> None: ...
 ```
 
 Describe the transports and where messages go, then build a bus:
@@ -130,11 +129,11 @@ from xtr_messenger import Envelope, RedeliveryStamp, as_message_handler
 
 @as_message_handler(IngestDocument)
 async def ingest(message: IngestDocument, envelope: Envelope) -> None:
-    stamp = envelope.last(RedeliveryStamp)          # which delivery attempt this is
+    stamp = envelope.last(RedeliveryStamp)  # which delivery attempt this is
 
 
 @as_message_handler(IngestDocument)
-class AuditIngest:                                  # built once, on its first message
+class AuditIngest:  # built once, on its first message
     async def __call__(self, message: IngestDocument) -> None: ...
 ```
 
@@ -181,8 +180,8 @@ CONFIG = MessageBusConfig(
     },
     routing={
         UrgentJob: "high",
-        AuditRecorded: ["low", "test"],   # fan out
-        "*": "low",                       # catch-all
+        AuditRecorded: ["low", "test"],  # fan out
+        "*": "low",  # catch-all
     },
 )
 ```
@@ -308,7 +307,11 @@ import xtr_messenger.command  # noqa: F401
 from xtr_console.integration import wireup as console
 
 container = wireup.create_async_container(
-    injectables=[services, *messenger.injectables(CONFIG), *console.injectables(Application("app"))],
+    injectables=[
+        services,
+        *messenger.injectables(CONFIG),
+        *console.injectables(Application("app")),
+    ],
 )
 raise SystemExit(await (await container.get(Application)).run_async())
 ```
@@ -338,14 +341,14 @@ from xtr_messenger import Envelope, MiddlewareInterface, StackInterface
 class RejectOutOfHours(MiddlewareInterface):
     async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
         if not within_business_hours():
-            return envelope          # short-circuit: nothing downstream runs
+            return envelope  # short-circuit: nothing downstream runs
         return await stack.next().handle(envelope, stack)
 
 
 CONFIG = MessageBusConfig(
     transports={...},
     routing={...},
-    middleware=["logging", RejectOutOfHours()],   # in order, ahead of routing and handling
+    middleware=["logging", RejectOutOfHours()],  # in order, ahead of routing and handling
 )
 bus = MessageBusFactory(CONFIG, logger=logger).bus()
 ```
@@ -520,7 +523,7 @@ jobs = factories[0].create(CONFIG.transports)["jobs"]
 assert isinstance(jobs, InMemoryTransport)
 assert jobs.messages == (IngestDocument(document_id=doc_id, tenant_id=tenant_id),)
 
-await WorkerFactory(CONFIG, factories).worker(["jobs"]).run()   # returns once drained
+await WorkerFactory(CONFIG, factories).worker(["jobs"]).run()  # returns once drained
 assert jobs.rejected == ()
 ```
 
@@ -613,7 +616,7 @@ async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
 
 @as_message_handler(IssueInvoice)
 class IssueInvoiceHandler:
-    def __init__(self, invoices: InvoiceRepository) -> None:          # once
+    def __init__(self, invoices: InvoiceRepository) -> None:  # once
         self._invoices = invoices
 
     async def __call__(self, message: IssueInvoice, db: Injected[Session]) -> None:  # per message
