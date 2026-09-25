@@ -68,12 +68,6 @@ dev = [
     "xtr-logging>=0.4",
 ]
 
-# xtr-console is not on PyPI yet; resolve it from its repository meanwhile.
-[tool.uv.sources]
-xtr-console = { git = "https://github.com/xterr/python-xtr-console.git" }
-xtr-logging = { git = "https://github.com/xterr/python-xtr-logging.git" }
-xtr-logging-contracts = { git = "https://github.com/xterr/python-xtr-logging-contracts.git" }
-
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
