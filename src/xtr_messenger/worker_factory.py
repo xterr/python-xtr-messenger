@@ -17,7 +17,7 @@ from .worker_providing_interface import WorkerProvidingInterface
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from xtr_logging import LoggerInterface
+    from xtr_logging_contracts import LoggerInterface
 
     from .handler import HandlersLocatorInterface
     from .message_bus_config import MessageBusConfig

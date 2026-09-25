@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
-from xtr_logging import Level, Logger, TestHandler
+from xtr_logging import Logger, TestHandler
+from xtr_logging_contracts import Level
 
 from tests.support.fakes import RecordingBus, RecordingMiddleware
 from tests.support.messages import IngestDocument, ingest_document

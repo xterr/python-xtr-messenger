@@ -22,7 +22,8 @@ Dispatch wraps a message in an **envelope** and walks it through a **middleware 
 middleware records what it did by appending a **stamp**. A **routing table** maps a message
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
-- 🪶 **Three core dependencies** — `msgspec`, `typing-extensions` and `xtr-logging`. A broker is an extra.
+- 🪶 **Three core dependencies** — `msgspec`, `typing-extensions` and `xtr-logging-contracts`,
+  which is the logging interface alone. A broker is an extra.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
@@ -48,22 +49,22 @@ uv add "xtr-messenger[console]"         # + the messenger:consume console comman
 
 | Extra | Brings | For |
 | --- | --- | --- |
-| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging` | `sync://`, `in-memory://`, the whole core |
+| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging-contracts` | `sync://`, `in-memory://`, the whole core |
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
 | `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
 | `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
 
-Requires Python 3.11+. `xtr-logging` is not on PyPI yet; with uv, point it at git:
+Requires Python 3.11+. `xtr-logging-contracts` is not on PyPI yet; with uv, point it at git:
 
 ```toml
 [tool.uv.sources]
-xtr-logging = { git = "https://github.com/xterr/python-xtr-logging.git" }
+xtr-logging-contracts = { git = "https://github.com/xterr/python-xtr-logging-contracts.git" }
 ```
 
-That one entry is enough — uv reads a git dependency's own `tool.uv.sources`, so the `xtr-clock`
-that `xtr-logging` reads the time from is resolved from its repository too.
+The contract has one dependency of its own, so nothing else needs an entry. An application that
+wants records written somewhere adds `xtr-logging` itself, which brings its own sources with it.
 
 ## Quick start
 
@@ -366,8 +367,9 @@ instance in the configuration — or a container's one instance of a class — s
 the workers alike.
 
 `LoggingMiddleware` reports each dispatch through an
-[xtr-logging](https://github.com/xterr/python-xtr-logging) `LoggerInterface`, with everything it
-has to say travelling as context rather than baked into the text:
+[xtr-logging-contracts](https://github.com/xterr/python-xtr-logging-contracts) `LoggerInterface`,
+with everything it has to say travelling as context rather than baked into the text. Where those
+records go is the application's choice — below, [xtr-logging](https://github.com/xterr/python-xtr-logging):
 
 ```python
 from xtr_logging import ConsoleHandler, Logger

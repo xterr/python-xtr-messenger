@@ -57,7 +57,7 @@ import wireup
 from typing_extensions import override
 from wireup import AsyncContainer
 from wireup.errors import UnknownServiceRequestedError
-from xtr_logging import LoggerInterface
+from xtr_logging_contracts import LoggerInterface
 
 from xtr_messenger.exception import UnregisteredHandlerError
 from xtr_messenger.handler import Handler, HandlerDescriptor, HandlersLocator, default_registry

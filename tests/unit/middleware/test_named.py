@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from xtr_logging import Level, Logger, TestHandler
+from xtr_logging import Logger, TestHandler
+from xtr_logging_contracts import Level
 
 from tests.support.fakes import OneStep, RecordingMiddleware
 from tests.support.messages import ingest_document
