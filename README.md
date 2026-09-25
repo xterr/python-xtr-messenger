@@ -56,15 +56,8 @@ uv add "xtr-messenger[console]"         # + the messenger:consume console comman
 | `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
 | `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
 
-Requires Python 3.11+. `xtr-logging-contracts` is not on PyPI yet; with uv, point it at git:
-
-```toml
-[tool.uv.sources]
-xtr-logging-contracts = { git = "https://github.com/xterr/python-xtr-logging-contracts.git" }
-```
-
-The contract has one dependency of its own, so nothing else needs an entry. An application that
-wants records written somewhere adds `xtr-logging` itself, which brings its own sources with it.
+Requires Python 3.11+. An application that wants records written somewhere adds `xtr-logging`
+itself.
 
 ## Quick start
 
@@ -736,6 +729,10 @@ xtr_messenger/
 ```
 
 ## Development
+
+Developed in the [python-xtr](https://github.com/xterr/python-xtr) monorepo, under
+`packages/xtr-messenger`; run the commands below from there. The `python-xtr-messenger` repository is a
+read-only copy, so send issues and pull requests to the monorepo.
 
 ```sh
 uv sync --all-extras
