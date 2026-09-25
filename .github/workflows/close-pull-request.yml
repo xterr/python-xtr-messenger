@@ -1,0 +1,21 @@
+name: Close pull request
+
+# This repository is a read-only copy of packages/xtr-messenger in xterr/python-xtr.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr close "$NUMBER" --repo "$GITHUB_REPOSITORY" --comment "$COMMENT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          COMMENT: >-
+            Thank you! This repository is a read-only copy of `packages/xtr-messenger` in
+            https://github.com/xterr/python-xtr. Please send your pull request there.
