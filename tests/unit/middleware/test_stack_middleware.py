@@ -2,29 +2,18 @@
 
 from __future__ import annotations
 
-from typing import final
-
 import pytest
-from typing_extensions import override
 
-from xtr_messenger import Envelope, MiddlewareInterface, StackInterface, StackMiddleware
+from tests.support.fakes import RecordingMiddleware
+from xtr_messenger import Envelope, StackMiddleware
 
 pytestmark = pytest.mark.anyio
-
-
-@final
-class PassThrough(MiddlewareInterface):
-    """A middleware that does nothing but continue the chain."""
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        return await stack.next().handle(envelope, stack)
 
 
 def test_it_yields_each_middleware_in_order_then_itself() -> None:
     """Walking past the last middleware returns the cursor itself, so a
     middleware at the tail can delegate unconditionally."""
-    first, second = PassThrough(), PassThrough()
+    first, second = RecordingMiddleware(), RecordingMiddleware()
     stack = StackMiddleware([first, second])
 
     assert stack.next() is first
@@ -49,7 +38,7 @@ async def test_an_empty_chain_is_a_no_op_dispatch() -> None:
 
 
 def test_the_cursor_is_single_use_and_does_not_rewind() -> None:
-    only = PassThrough()
+    only = RecordingMiddleware()
     stack = StackMiddleware([only])
 
     assert stack.next() is only

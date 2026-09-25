@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterator, Mapping
+from dataclasses import dataclass, replace
 from typing import Annotated, Protocol, TypeVar, final
 from uuid import UUID, uuid4
 
 import pytest
 import wireup
 from taskiq import InMemoryBroker
+from typing_extensions import override
 from wireup import AsyncContainer, Inject, Injected, injectable
 from wireup.errors import WireupError
 from xtr_logging import Level, Logger, LoggerInterface, TestHandler
@@ -20,6 +21,8 @@ from xtr_messenger import (
     MessageBus,
     MessageBusConfig,
     MessageBusInterface,
+    MiddlewareInterface,
+    StackInterface,
     TransportConfig,
     UnregisteredHandlerError,
     Worker,
@@ -272,6 +275,7 @@ def a_container(
     transports: tuple[str, ...] = ("jobs",),
     handlers: HandlersLocator = HANDLERS,
     services: list[object] | None = None,
+    middleware: Mapping[str, type[MiddlewareInterface]] | None = None,
 ) -> AsyncContainer:
     return wireup.create_async_container(
         injectables=[
@@ -281,6 +285,7 @@ def a_container(
                 transports=transports,
                 factories=[InMemoryTransportFactory(), SyncTransportFactory()],
                 handlers=handlers,
+                middleware=middleware,
             ),
         ],
         config={"tenant": "acme", "dsn": "in-memory://"},
@@ -629,16 +634,20 @@ async def test_a_handler_declared_after_wiring_is_wired_too() -> None:
     await wired.close()
 
 
-# ─── logging, wired by providing a logger and nothing else ───────
+# ─── the container supplies a named middleware's collaborators ───
+
+LOGGED = replace(CONFIG, middleware=["logging"])
 
 
-def a_logging_container(handler: TestHandler) -> AsyncContainer:
-    """A container whose only addition is the ``LoggerInterface`` it provides."""
+def a_logging_container(handler: TestHandler, config: MessageBusConfig = LOGGED) -> AsyncContainer:
+    """A container providing a ``LoggerInterface`` for ``"logging"`` to be built with."""
     logger = Logger("messenger", [handler])
-    return a_container(services=[*SERVICES, wireup.instance(logger, as_type=LoggerInterface)])
+    return a_container(
+        config, services=[*SERVICES, wireup.instance(logger, as_type=LoggerInterface)]
+    )
 
 
-async def test_a_container_providing_a_logger_has_its_dispatches_logged() -> None:
+async def test_the_configured_logging_middleware_gets_the_containers_logger() -> None:
     handler = TestHandler()
     wired = a_logging_container(handler)
     try:
@@ -649,9 +658,22 @@ async def test_a_container_providing_a_logger_has_its_dispatches_logged() -> Non
     assert handler.has_record("message dispatched", Level.NOTICE)
 
 
-async def test_a_container_without_a_logger_builds_and_dispatches_anyway() -> None:
-    """Looking for a logger there is none of is not an error — it adds nothing."""
-    wired = a_container()
+async def test_a_logger_alone_logs_nothing_until_the_configuration_names_it() -> None:
+    """The container never decides the chain — only what a name is built with."""
+    handler = TestHandler()
+    wired = a_logging_container(handler, CONFIG)
+    try:
+        await drain(wired, Ingest(uuid4()))
+    finally:
+        await wired.close()
+
+    assert len(calls("ingest")) == 1
+    assert handler.records == ()
+
+
+async def test_naming_logging_without_a_logger_in_the_container_is_not_an_error() -> None:
+    """It falls back to a NullLogger rather than refusing to build."""
+    wired = a_container(LOGGED)
     try:
         envelope = await (await resolve(wired, MessageBusInterface)).dispatch(Ingest(uuid4()))
         await (await resolve(wired, WorkerFactory)).worker(["jobs"]).run()
@@ -672,6 +694,48 @@ async def test_the_worker_logs_what_it_handled_so_messenger_consume_reports() ->
 
     assert [record.context["handler"] for record in handler.records if record.level is Level.INFO]
     assert handler.has_record("message handled", Level.INFO)
+
+
+metered: list[tuple[UUID, object]] = []
+
+
+@final
+class Metered(MiddlewareInterface):
+    """Custom middleware with a dependency only the container can supply."""
+
+    def __init__(self, metrics: Metrics) -> None:
+        self._metrics = metrics
+        metered.append((metrics.identifier, "built"))
+
+    @override
+    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
+        metered.append((self._metrics.identifier, type(envelope.message).__name__))
+        return await stack.next().handle(envelope, stack)
+
+
+async def test_a_name_of_your_own_is_built_by_the_container_for_the_bus_and_the_worker() -> None:
+    metered.clear()
+    wired = a_container(replace(CONFIG, middleware=["audit"]), middleware={"audit": Metered})
+    try:
+        await drain(wired, Ingest(uuid4()))
+        metrics = await resolve(wired, Metrics)
+    finally:
+        await wired.close()
+
+    assert metered[0] == (metrics.identifier, "built")
+    assert [seen for _, seen in metered[1:]] == ["Ingest", "Ingest"]
+    assert len(calls("ingest")) == 1
+
+
+async def test_a_name_of_your_own_is_never_built_unless_the_configuration_names_it() -> None:
+    metered.clear()
+    wired = a_container(middleware={"audit": Metered})
+    try:
+        await drain(wired, Ingest(uuid4()))
+    finally:
+        await wired.close()
+
+    assert metered == []
 
 
 async def test_a_worker_built_from_the_factory_logs_too() -> None:

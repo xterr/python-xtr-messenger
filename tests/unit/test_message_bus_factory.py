@@ -5,20 +5,21 @@ from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
+from xtr_logging import Level, Logger, TestHandler
 
-from tests.support.fakes import RecordingSender
+from tests.support.fakes import RecordingMiddleware, RecordingSender
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     HandlersLocator,
     MessageBusConfig,
     MessageBusFactory,
-    MiddlewareInterface,
     NoSenderForMessageError,
     ReceivedStamp,
     SenderInterface,
     SentStamp,
     TransportConfig,
     TransportFactoryInterface,
+    UnknownMiddlewareError,
     UnsupportedDsnError,
     as_message_handler,
 )
@@ -26,7 +27,7 @@ from xtr_messenger import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from xtr_messenger import Dsn, Envelope, StackInterface
+    from xtr_messenger import Dsn, Envelope
 
 pytestmark = pytest.mark.anyio
 
@@ -71,17 +72,6 @@ class OrderingSender(SenderInterface):
     async def send(self, envelope: Envelope) -> Envelope:
         self._log.append("send")
         return envelope
-
-
-@final
-class OrderingMiddleware(MiddlewareInterface):
-    def __init__(self, log: list[str]) -> None:
-        self._log = log
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        self._log.append("middleware")
-        return await stack.next().handle(envelope, stack)
 
 
 async def test_the_factory_routes_by_the_config_map() -> None:
@@ -133,10 +123,10 @@ async def test_handle_unrouted_lets_an_unrouted_message_be_handled() -> None:
     async def handle(message: Unrouted) -> None:
         seen.append(message)
 
-    config = MessageBusConfig(transports={"fake": TransportConfig("fake://")})
+    config = MessageBusConfig(transports={"fake": TransportConfig("fake://")}, handle_unrouted=True)
     bus = MessageBusFactory(
         config, [FakeTransportFactory("fake", RecordingSender())], handlers=private
-    ).bus(handle_unrouted=True)
+    ).bus()
     message = Unrouted()
 
     _ = await bus.dispatch(message)
@@ -163,30 +153,13 @@ async def test_an_unrouted_message_is_not_handled_by_default() -> None:
 
 
 async def test_require_sender_rejects_an_unrouted_message() -> None:
-    config = MessageBusConfig(transports={"fake": TransportConfig("fake://")})
-    bus = MessageBusFactory(config, [FakeTransportFactory("fake", RecordingSender())]).bus(
-        require_sender=True
-    )
+    config = MessageBusConfig(transports={"fake": TransportConfig("fake://")}, require_sender=True)
+    bus = MessageBusFactory(config, [FakeTransportFactory("fake", RecordingSender())]).bus()
 
     with pytest.raises(NoSenderForMessageError) as excinfo:
         _ = await bus.dispatch(Unrouted())
 
     assert excinfo.value.message_type is Unrouted
-
-
-async def test_middleware_passed_to_the_bus_runs_before_the_send() -> None:
-    order: list[str] = []
-    config = MessageBusConfig(
-        transports={"fake": TransportConfig("fake://")},
-        routing={IngestDocument: "fake"},
-    )
-    bus = MessageBusFactory(config, [FakeTransportFactory("fake", OrderingSender(order))]).bus(
-        [OrderingMiddleware(order)]
-    )
-
-    _ = await bus.dispatch(ingest_document())
-
-    assert order == ["middleware", "send"]
 
 
 def test_an_unsupported_dsn_names_the_transport_that_failed() -> None:
@@ -197,3 +170,108 @@ def test_an_unsupported_dsn_names_the_transport_that_failed() -> None:
 
     assert excinfo.value.transport_name == "weird"
     assert excinfo.value.dsn == "carrier-pigeon://"
+
+
+async def test_configured_middleware_runs_before_the_send() -> None:
+    order: list[str] = []
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        routing={IngestDocument: "fake"},
+        middleware=[RecordingMiddleware(order)],
+    )
+
+    bus = MessageBusFactory(config, [FakeTransportFactory("fake", OrderingSender(order))]).bus()
+    _ = await bus.dispatch(ingest_document())
+
+    assert order == ["middleware", "send"]
+
+
+async def test_configured_middleware_runs_in_the_order_named() -> None:
+    order: list[str] = []
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        routing={IngestDocument: "fake"},
+        middleware=["first", RecordingMiddleware(order, "second")],
+    )
+
+    bus = MessageBusFactory(
+        config,
+        [FakeTransportFactory("fake", OrderingSender(order))],
+        named={"first": lambda: RecordingMiddleware(order, "first")},
+    ).bus()
+    _ = await bus.dispatch(ingest_document())
+
+    assert order == ["first", "second", "send"]
+
+
+async def test_the_logging_name_writes_through_the_logger_the_factory_is_given() -> None:
+    """No container needed: naming "logging" plus a logger is the whole of it."""
+    handler = TestHandler()
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        routing={IngestDocument: "fake"},
+        middleware=["logging"],
+    )
+
+    bus = MessageBusFactory(
+        config,
+        [FakeTransportFactory("fake", RecordingSender())],
+        logger=Logger("messenger", [handler]),
+    ).bus()
+    _ = await bus.dispatch(ingest_document())
+
+    assert handler.has_record("message dispatched", Level.NOTICE)
+
+
+async def test_a_name_of_your_own_is_built_from_the_table_given() -> None:
+    order: list[str] = []
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        routing={IngestDocument: "fake"},
+        middleware=["audit"],
+    )
+
+    bus = MessageBusFactory(
+        config,
+        [FakeTransportFactory("fake", OrderingSender(order))],
+        named={"audit": lambda: RecordingMiddleware(order, "audit")},
+    ).bus()
+    _ = await bus.dispatch(ingest_document())
+
+    assert order == ["audit", "send"]
+
+
+def test_a_middleware_name_nothing_is_registered_for_is_refused() -> None:
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")}, middleware=["loging"]
+    )
+
+    with pytest.raises(UnknownMiddlewareError) as excinfo:
+        _ = MessageBusFactory(config, [FakeTransportFactory("fake", RecordingSender())]).bus()
+
+    assert excinfo.value.name == "loging"
+    assert excinfo.value.known == ("logging",)
+
+
+async def test_default_middleware_off_leaves_routing_and_handling_out() -> None:
+    """Only what the configuration names runs, so nothing is sent or handled."""
+    order: list[str] = []
+    private = HandlersLocator()
+
+    @as_message_handler(IngestDocument, private)
+    async def handle(message: IngestDocument) -> None:
+        del message
+        order.append("handled")
+
+    sender = OrderingSender(order)
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        routing={IngestDocument: "fake"},
+        middleware=[RecordingMiddleware(order)],
+        default_middleware=False,
+    )
+
+    bus = MessageBusFactory(config, [FakeTransportFactory("fake", sender)], private).bus()
+    _ = await bus.dispatch(ingest_document())
+
+    assert order == ["middleware"]

@@ -15,6 +15,7 @@ from xtr_messenger import (
     NoSenderForMessageError,
     NotConsumableError,
     UnknownMessageNameError,
+    UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
     UnregisteredHandlerError,
@@ -34,6 +35,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     NoSenderForMessageError,
     NotConsumableError,
     UnknownMessageNameError,
+    UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
     UnregisteredHandlerError,
@@ -176,6 +178,19 @@ def test_unknown_transport_error_carries_the_names_and_known() -> None:
 
 def test_unknown_transport_error_shows_none_for_no_known_transports() -> None:
     assert "defined: <none>" in str(UnknownTransportError(("nowhere",), ()))
+
+
+def test_unknown_middleware_error_carries_the_name_and_known() -> None:
+    error = UnknownMiddlewareError("loging", ("logging",))
+
+    assert error.name == "loging"
+    assert error.known == ("logging",)
+    assert "unknown middleware: loging" in str(error)
+    assert "registered: logging" in str(error)
+
+
+def test_unknown_middleware_error_shows_none_for_no_registered_middleware() -> None:
+    assert "registered: <none>" in str(UnknownMiddlewareError("logging", ()))
 
 
 def test_unknown_transport_option_error_carries_the_scheme_unknown_and_known() -> None:

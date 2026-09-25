@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
+from tests.support.fakes import RecordingMiddleware
 from xtr_messenger import (
     Envelope,
     MessageBus,
@@ -23,18 +24,6 @@ pytestmark = pytest.mark.anyio
 @dataclass(frozen=True, slots=True)
 class Marker(StampInterface):
     value: str
-
-
-@final
-class Recording(MiddlewareInterface):
-    def __init__(self, name: str, calls: list[str]) -> None:
-        self._name = name
-        self._calls = calls
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        self._calls.append(self._name)
-        return await stack.next().handle(envelope, stack)
 
 
 @final
@@ -69,7 +58,7 @@ class Exploding(MiddlewareInterface):
 
 async def test_middleware_runs_in_composition_order() -> None:
     calls: list[str] = []
-    bus = MessageBus([Recording("first", calls), Recording("second", calls)])
+    bus = MessageBus([RecordingMiddleware(calls, "first"), RecordingMiddleware(calls, "second")])
 
     _ = await bus.dispatch("payload")
 
@@ -79,7 +68,11 @@ async def test_middleware_runs_in_composition_order() -> None:
 async def test_a_short_circuit_skips_everything_downstream() -> None:
     calls: list[str] = []
     bus = MessageBus(
-        [Recording("before", calls), ShortCircuit("stop", calls), Recording("after", calls)]
+        [
+            RecordingMiddleware(calls, "before"),
+            ShortCircuit("stop", calls),
+            RecordingMiddleware(calls, "after"),
+        ]
     )
 
     _ = await bus.dispatch("payload")
@@ -97,7 +90,7 @@ async def test_an_empty_chain_is_a_no_op_dispatch() -> None:
 async def test_delegating_past_the_last_middleware_returns_the_envelope() -> None:
     calls: list[str] = []
 
-    result = await MessageBus([Recording("only", calls)]).dispatch("payload")
+    result = await MessageBus([RecordingMiddleware(calls, "only")]).dispatch("payload")
 
     assert calls == ["only"]
     assert result.message == "payload"
@@ -131,7 +124,7 @@ async def test_an_existing_envelope_is_redispatched_with_its_stamps_intact() -> 
 
 async def test_each_dispatch_gets_a_fresh_cursor() -> None:
     calls: list[str] = []
-    bus = MessageBus([Recording("only", calls)])
+    bus = MessageBus([RecordingMiddleware(calls, "only")])
 
     _ = await bus.dispatch("one")
     _ = await bus.dispatch("two")
@@ -148,9 +141,9 @@ async def test_middleware_exceptions_propagate_untouched() -> None:
 
 async def test_mutating_the_middleware_list_afterwards_cannot_change_the_bus() -> None:
     calls: list[str] = []
-    middlewares = [Recording("only", calls)]
+    middlewares = [RecordingMiddleware(calls, "only")]
     bus = MessageBus(middlewares)
-    middlewares.append(Recording("sneaky", calls))
+    middlewares.append(RecordingMiddleware(calls, "sneaky"))
 
     _ = await bus.dispatch("payload")
 

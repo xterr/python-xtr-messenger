@@ -8,6 +8,7 @@ import pytest
 from typing_extensions import override
 from xtr_logging import Level, Logger, TestHandler
 
+from tests.support.fakes import OneStep
 from tests.support.messages import ingest_document
 from xtr_messenger import (
     Envelope,
@@ -46,18 +47,6 @@ class ExplodingTerminal(MiddlewareInterface):
     async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
         del envelope, stack
         raise RuntimeError("downstream boom")
-
-
-@final
-class OneStep(StackInterface):
-    """A stack that hands back a single terminal middleware."""
-
-    def __init__(self, terminal: MiddlewareInterface) -> None:
-        self._terminal = terminal
-
-    @override
-    def next(self) -> MiddlewareInterface:
-        return self._terminal
 
 
 def recording() -> tuple[Logger, TestHandler]:

@@ -10,7 +10,10 @@ arrived through taskiq, through the library's own worker, or through
 
     import app.handlers.ingest  # noqa: F401 — declares the message and its handler
 
-    bind_bus(broker, MessageBus([HandleMessageMiddleware()]))
+    bind_bus(broker, MessageBusFactory(CONFIG, logger=logger).bus())
+
+A bus from the factory runs the middleware the configuration names; what it
+dispatches arrives received, so it is handled rather than routed again.
 """
 
 from __future__ import annotations

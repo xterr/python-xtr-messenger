@@ -6,12 +6,59 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from xtr_messenger import Envelope, MessageBusInterface, ReceiverInterface, SenderInterface
+from xtr_messenger import (
+    Envelope,
+    MessageBusInterface,
+    MiddlewareInterface,
+    ReceiverInterface,
+    SenderInterface,
+    StackInterface,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
 
     from xtr_messenger import StampInterface
+
+
+@final
+class RecordingMiddleware(MiddlewareInterface):
+    """Notes ``label`` in ``calls``, then continues the chain."""
+
+    def __init__(self, calls: list[str] | None = None, label: str = "middleware") -> None:
+        self.calls = calls if calls is not None else []
+        self._label = label
+
+    @override
+    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
+        self.calls.append(self._label)
+        return await stack.next().handle(envelope, stack)
+
+
+@final
+class TerminalMiddleware(MiddlewareInterface):
+    """Ends the chain, keeping each envelope handed to it — proof the chain got this far."""
+
+    def __init__(self) -> None:
+        self.seen: list[Envelope] = []
+
+    @override
+    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
+        del stack
+        self.seen.append(envelope)
+        return envelope
+
+
+@final
+class OneStep(StackInterface):
+    """A stack that hands back a single middleware — the one under test's successor."""
+
+    def __init__(self, terminal: MiddlewareInterface | None = None) -> None:
+        self._terminal = terminal if terminal is not None else TerminalMiddleware()
+
+    @override
+    def next(self) -> MiddlewareInterface:
+        return self._terminal
 
 
 @final

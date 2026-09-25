@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
-
 import pytest
-from typing_extensions import override
 
+from tests.support.fakes import RecordingMiddleware
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     HandlersLocator,
@@ -14,29 +12,12 @@ from xtr_messenger import (
     InMemoryTransportFactory,
     MessageBusConfig,
     MessageBusFactory,
-    MiddlewareInterface,
     NoHandlerForMessageError,
     TransportConfig,
     as_message_handler,
 )
 
-if TYPE_CHECKING:
-    from xtr_messenger import Envelope, StackInterface
-
 pytestmark = pytest.mark.anyio
-
-
-@final
-class RecordingMiddleware(MiddlewareInterface):
-    """Notes that it ran, then continues the chain."""
-
-    def __init__(self, calls: list[str]) -> None:
-        self._calls = calls
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        self._calls.append("middleware")
-        return await stack.next().handle(envelope, stack)
 
 
 async def test_a_sync_transport_reaches_a_handler_from_the_given_locator() -> None:
@@ -91,16 +72,17 @@ async def test_an_in_memory_transport_records_what_was_dispatched() -> None:
     assert recorder.messages == (message,)
 
 
-async def test_middleware_passed_to_bus_runs_before_the_send() -> None:
+async def test_configured_middleware_runs_before_the_send() -> None:
     order: list[str] = []
     config = MessageBusConfig(
         transports={"test": TransportConfig("in-memory://")},
         routing={IngestDocument: "test"},
+        middleware=[RecordingMiddleware(order)],
     )
 
-    _ = await (
-        MessageBusFactory(config, handlers=HandlersLocator())
-        .bus([RecordingMiddleware(order)])
+    _ = (
+        await MessageBusFactory(config, handlers=HandlersLocator())
+        .bus()
         .dispatch(ingest_document())
     )
 

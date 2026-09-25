@@ -17,6 +17,7 @@ from .no_handler_for_message_error import NoHandlerForMessageError
 from .no_sender_for_message_error import NoSenderForMessageError
 from .not_consumable_error import NotConsumableError
 from .unknown_message_name_error import UnknownMessageNameError
+from .unknown_middleware_error import UnknownMiddlewareError
 from .unknown_transport_error import UnknownTransportError
 from .unknown_transport_option_error import UnknownTransportOptionError
 from .unregistered_handler_error import UnregisteredHandlerError
@@ -34,6 +35,7 @@ __all__ = [
     "NoSenderForMessageError",
     "NotConsumableError",
     "UnknownMessageNameError",
+    "UnknownMiddlewareError",
     "UnknownTransportError",
     "UnknownTransportOptionError",
     "UnregisteredHandlerError",

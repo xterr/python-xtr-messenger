@@ -208,7 +208,7 @@ TransportConfig(
 ```
 
 <details>
-<summary><b>All 25 settings an <code>amqp://</code> transport accepts</b></summary>
+<summary><b>All 26 settings an <code>amqp://</code> transport accepts</b></summary>
 
 | Group | Settings |
 | --- | --- |
@@ -323,10 +323,11 @@ attempt it is on in its `RedeliveryStamp`.
 
 ## Shaping the bus
 
-Every dispatch-side concern is middleware, so adding one changes no existing code:
+Every dispatch-side concern is middleware, and which middleware runs is configuration — the
+bus and every worker read the same list:
 
 ```python
-from xtr_messenger import Envelope, LoggingMiddleware, MiddlewareInterface, StackInterface
+from xtr_messenger import Envelope, MiddlewareInterface, StackInterface
 
 
 class RejectOutOfHours(MiddlewareInterface):
@@ -336,8 +337,29 @@ class RejectOutOfHours(MiddlewareInterface):
         return await stack.next().handle(envelope, stack)
 
 
-bus = MessageBusFactory(CONFIG).bus([LoggingMiddleware(logger), RejectOutOfHours()])
+CONFIG = MessageBusConfig(
+    transports={...},
+    routing={...},
+    middleware=["logging", RejectOutOfHours()],   # in order, ahead of routing and handling
+)
+bus = MessageBusFactory(CONFIG, logger=logger).bus()
 ```
+
+| Setting | Default | Means |
+| --- | --- | --- |
+| `middleware` | `()` | What runs, in order: a name, or middleware already built |
+| `default_middleware` | `True` | `False` leaves routing and handling out, on the bus and in workers |
+| `require_sender` | `False` | Refuse a message routed nowhere, with `NoSenderForMessageError` |
+| `handle_unrouted` | `False` | Handle a message routed nowhere in this process instead |
+
+`"logging"` is the one name the library ships. Add your own with `named=`, mapping a name to what
+builds it — `MessageBusFactory(CONFIG, named={"audit": Audit})` — or, with a container, with
+`injectables(middleware=...)`. A name nothing is registered for is refused with
+`UnknownMiddlewareError` when the bus or a worker is built.
+
+Middleware keeps no per-message state. One instance serves every dispatch, concurrently, and an
+instance in the configuration — or a container's one instance of a class — serves the bus and
+the workers alike.
 
 `LoggingMiddleware` reports each dispatch through an
 [xtr-logging](https://github.com/xterr/python-xtr-logging) `LoggerInterface`, with everything it
@@ -364,27 +386,33 @@ Nothing appears at normal verbosity — a dispatch is routine, and a bus running
 second should not say so unasked. Each tier adds what the one above it left out rather than
 repeating it, so `-vvv` on a worker reads as a trace and a plain run stays silent.
 
-Given no logger it writes to a `NullLogger`, so the middleware costs nothing until an
-application hands it one.
+It runs only where `middleware` names it. The `logger` given to `MessageBusFactory` and
+`WorkerFactory` is what `"logging"` writes through; without one it writes to a `NullLogger`.
 
-**With a container you add nothing at all.** A container that provides a `LoggerInterface` —
-xtr-logging's own
-[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container) does —
-has every dispatch logged, on the bus and in every worker, without being asked:
+With a container, name it and the container supplies the logger — xtr-logging's own
+[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container)
+provides one:
 
 ```python
+CONFIG = MessageBusConfig(transports={...}, routing={...}, middleware=["logging"])
+
 container = wireup.create_async_container(
-    injectables=[services, *logging.injectables(LOGGING), *messenger.injectables(CONFIG)],
+    injectables=[
+        services,
+        *logging.injectables(LOGGING),
+        *messenger.injectables(CONFIG, middleware={"audit": Audit}),  # your own names
+    ],
 )
 ```
 
-That is the whole of it. Under [xtr-console](https://github.com/xterr/python-xtr-console) the
-same container makes its console handlers follow every command it runs, so the `-v` flags do the
-rest and `messenger:consume -vv` reads out every handler that ran. Provide no logger and nothing
-is added.
+A class given in `middleware` is registered as a singleton with its constructor filled by the
+container, and built only when the configuration names it. Providing a logger never adds
+anything by itself. Under [xtr-console](https://github.com/xterr/python-xtr-console) the same
+container makes its console handlers follow every command, so `messenger:consume -vv` reads out
+every handler that ran.
 
-Your middleware runs first, in the order given. Routing and handling always come last, in that
-order, and two rules carry the producer/consumer split:
+What `middleware` names runs first, in that order. Routing and handling always come last, in
+that order, and two rules carry the producer/consumer split:
 
 - An envelope that arrived **from** a transport carries a `ReceivedStamp` and is never routed
   again, so a consumer cannot re-publish what it consumes.
@@ -397,8 +425,8 @@ itself, so what runs is the same whether a message is handled in-process, by the
 worker, or by a broker's own; and a message routed to be handled with nothing to handle it
 fails loudly everywhere, with `NoHandlerForMessageError`.
 
-A message routed nowhere passes quietly by default. `bus(require_sender=True)` refuses it with
-`NoSenderForMessageError`; `bus(handle_unrouted=True)` handles it in-process instead.
+A message routed nowhere passes quietly by default. `require_sender=True` in the configuration
+refuses it with `NoSenderForMessageError`; `handle_unrouted=True` handles it in-process instead.
 
 Routing resolves most specific first: a `TransportNamesStamp` on the envelope, then the table
 walking the message's bases, then `"*"`, then whatever the message declared.
@@ -455,6 +483,7 @@ typed attributes rather than only a message.
 | `UnknownTransportOptionError`, `InvalidTransportOptionError` | A setting is not accepted, or its value is not usable |
 | `UnsupportedDsnError` | No installed transport serves a scheme |
 | `UnknownTransportError` | A route or a worker names a transport the configuration does not define |
+| `UnknownMiddlewareError` | The configuration names middleware nothing is registered for |
 | `MixedDsnError` | One AMQP worker is asked to serve two servers |
 | `NotConsumableError` | A worker is asked to consume a transport that can only send |
 | `NoSenderForMessageError` | A message is routed nowhere and the bus requires a sender |

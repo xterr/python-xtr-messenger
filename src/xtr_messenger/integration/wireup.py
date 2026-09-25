@@ -64,8 +64,8 @@ from xtr_messenger.handler import Handler, HandlerDescriptor, HandlersLocator, d
 from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.message_bus_factory import MessageBusFactory
 from xtr_messenger.message_bus_interface import MessageBusInterface
-from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
+from xtr_messenger.middleware.named import MiddlewareBuilder, named_middleware
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 from xtr_messenger.worker_factory import WorkerFactory
@@ -80,6 +80,7 @@ def injectables(
     transports: Sequence[str] = (),
     factories: Sequence[TransportFactoryInterface] | None = None,
     handlers: HandlersLocator | None = None,
+    middleware: Mapping[str, type[MiddlewareInterface]] | None = None,
 ) -> list[object]:
     """Return what to spread into ``create_async_container(injectables=[...])``.
 
@@ -97,11 +98,11 @@ def injectables(
     handler, or a handler class's ``__call__``, has its ``Injected[...]``
     parameters filled on every call.
 
-    A container that also provides a ``LoggerInterface`` — xtr-logging's own
-    wireup integration does — has every dispatch logged, on the bus and in
-    every worker, without being asked. Configuring logging is the whole of
-    it; under xtr-console a command's ``-v`` flags then decide how much of a
-    dispatch it reports.
+    The chain is what the configuration's ``middleware`` names, and nothing
+    else. The container only supplies what a name is built with: the
+    ``LoggerInterface`` the ``"logging"`` middleware writes through, when it
+    provides one — xtr-logging's own wireup integration does — and whatever
+    the constructor of a class given in ``middleware`` asks for.
 
     Args:
         config: Which transports exist and where messages go. Omit it to
@@ -113,6 +114,10 @@ def injectables(
             needs a collaborator it cannot be discovered with.
         handlers: The locator handlers were declared into, when not the
             process-wide one.
+        middleware: Names of your own for the configuration to use, each
+            mapped to a middleware class. It is registered here as a
+            singleton, its constructor filled by the container, and built
+            only when the configuration names it.
 
     Returns:
         Injectables for ``create_async_container``.
@@ -122,24 +127,28 @@ def injectables(
     # the connection to a broker, the backlog of an in-memory transport.
     shared = [TransportFactory(factories)]
     registered = {declared: _registration_of(declared) for declared in _handler_classes(registry)}
+    custom = {name: _registration_of(declared) for name, declared in (middleware or {}).items()}
 
     async def message_bus(
         bus_config: MessageBusConfig, container: AsyncContainer
     ) -> MessageBusInterface:
         _wire(registry, container, registered)
-        return MessageBusFactory(bus_config, shared, registry).bus(await _logging(container))
+        named = await _names(bus_config, custom, container)
+        return MessageBusFactory(bus_config, shared, registry, named=named).bus()
 
     async def worker_factory(
         bus_config: MessageBusConfig, container: AsyncContainer
     ) -> WorkerFactory:
         _wire(registry, container, registered)
-        return WorkerFactory(bus_config, shared, registry, middleware=await _logging(container))
+        named = await _names(bus_config, custom, container)
+        return WorkerFactory(bus_config, shared, registry, named=named)
 
     def worker(workers: WorkerFactory) -> WorkerInterface:
         return workers.worker(transports)
 
     provided: list[object] = [wireup.injectable(message_bus), wireup.injectable(worker_factory)]
     provided.extend(wireup.injectable(registration) for registration in registered.values())
+    provided.extend(wireup.injectable(registration) for registration in custom.values())
     if config is not None:
         provided.append(wireup.instance(config, as_type=MessageBusConfig))
     if transports:
@@ -147,18 +156,31 @@ def injectables(
     return provided
 
 
-async def _logging(container: AsyncContainer) -> tuple[MiddlewareInterface, ...]:
-    """Return a ``LoggingMiddleware`` when ``container`` holds a logger, nothing otherwise.
+async def _names(
+    config: MessageBusConfig, custom: Mapping[str, type], container: AsyncContainer
+) -> dict[str, MiddlewareBuilder]:
+    """Return what each name means, the container supplying what they are built with.
 
-    Added unasked, because it is free until something listens: the records
-    are graded from ``NOTICE`` down, so nothing is written at normal
-    verbosity.
+    ``"logging"`` gets the container's logger; a custom name, the container's
+    one instance of its class — built only when ``config`` names it.
     """
+    built: dict[str, MiddlewareBuilder] = {}
+    for name, registration in custom.items():
+        if name in config.middleware:
+            built[name] = _returning(cast("MiddlewareInterface", await container.get(registration)))
+    return named_middleware(await _logger(container), built)
+
+
+def _returning(built: MiddlewareInterface) -> MiddlewareBuilder:
+    return lambda: built
+
+
+async def _logger(container: AsyncContainer) -> LoggerInterface | None:
+    """The container's logger, or none — as Symfony's ``ignoreOnInvalid()`` has it."""
     try:
-        logger = await container.get(LoggerInterface)
+        return await container.get(LoggerInterface)
     except UnknownServiceRequestedError:
-        return ()
-    return (LoggingMiddleware(logger),)
+        return None
 
 
 def _handler_classes(registry: HandlersLocator) -> set[type]:
@@ -170,21 +192,21 @@ def _handler_classes(registry: HandlersLocator) -> set[type]:
     }
 
 
-def _registration_of(handler_type: type) -> type:
-    """Return what registers ``handler_type`` with the container, as a singleton.
+def _registration_of(declared: type) -> type:
+    """Return what registers ``declared`` — a handler or middleware class — as a singleton.
 
     A private subclass rather than the class itself. ``@injectable`` works by
-    marking what it decorates, and a marked handler class would be registered
-    a second time by the container scanning the module that declares it.
+    marking what it decorates, and a marked class would be registered a
+    second time by the container scanning the module that declares it.
     Named and placed like the class, so the container's own messages read as
     if they were about it.
     """
 
     def namespace(body: dict[str, object]) -> None:
-        body["__module__"] = handler_type.__module__
-        body["__qualname__"] = handler_type.__qualname__
+        body["__module__"] = declared.__module__
+        body["__qualname__"] = declared.__qualname__
 
-    return types.new_class(handler_type.__name__, (handler_type,), exec_body=namespace)
+    return types.new_class(declared.__name__, (declared,), exec_body=namespace)
 
 
 def _wire(

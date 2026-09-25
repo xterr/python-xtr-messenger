@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import final
 
 import pytest
-from typing_extensions import override
 
+from tests.support.fakes import OneStep, TerminalMiddleware
 from tests.support.messages import (
     AnalyseDocument,
     IngestDocument,
@@ -19,9 +18,7 @@ from xtr_messenger import (
     HandledStamp,
     HandleMessageMiddleware,
     HandlersLocator,
-    MiddlewareInterface,
     NoHandlerForMessageError,
-    StackInterface,
     as_message,
     as_message_handler,
 )
@@ -33,32 +30,6 @@ pytestmark = pytest.mark.anyio
 @dataclass(frozen=True, slots=True)
 class HandleDefaultJob:
     """A message whose only handler lives in the process-wide registry."""
-
-
-@final
-class Terminal(MiddlewareInterface):
-    """Records the envelope handed to it — proof the chain continued past here."""
-
-    def __init__(self) -> None:
-        self.seen: list[Envelope] = []
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        del stack
-        self.seen.append(envelope)
-        return envelope
-
-
-@final
-class OneStep(StackInterface):
-    """A stack that hands back a single terminal middleware."""
-
-    def __init__(self, terminal: MiddlewareInterface) -> None:
-        self._terminal = terminal
-
-    @override
-    def next(self) -> MiddlewareInterface:
-        return self._terminal
 
 
 async def test_every_bound_handler_runs_stamped_in_order_and_the_chain_continues() -> None:
@@ -75,7 +46,7 @@ async def test_every_bound_handler_runs_stamped_in_order_and_the_chain_continues
 
     _ = registry.register(IngestDocument, first, name="first")
     _ = registry.register(IngestDocument, second, name="second")
-    terminal = Terminal()
+    terminal = TerminalMiddleware()
 
     result = await HandleMessageMiddleware(registry).handle(
         Envelope(ingest_document()),
@@ -99,7 +70,7 @@ async def test_no_handler_raises_listing_the_handled_types_sorted() -> None:
     with pytest.raises(NoHandlerForMessageError) as excinfo:
         _ = await HandleMessageMiddleware(registry).handle(
             Envelope(UndeclaredMessage("x")),
-            OneStep(Terminal()),
+            OneStep(TerminalMiddleware()),
         )
 
     assert excinfo.value.message_type is UndeclaredMessage
@@ -107,7 +78,7 @@ async def test_no_handler_raises_listing_the_handled_types_sorted() -> None:
 
 
 async def test_require_handler_false_passes_an_unhandled_message_quietly() -> None:
-    terminal = Terminal()
+    terminal = TerminalMiddleware()
 
     result = await HandleMessageMiddleware(HandlersLocator(), require_handler=False).handle(
         Envelope(UndeclaredMessage("x")),
@@ -130,7 +101,7 @@ async def test_a_handler_failure_propagates() -> None:
     with pytest.raises(RuntimeError, match="handler exploded"):
         _ = await HandleMessageMiddleware(registry).handle(
             Envelope(ingest_document()),
-            OneStep(Terminal()),
+            OneStep(TerminalMiddleware()),
         )
 
 
@@ -145,7 +116,9 @@ async def test_it_defaults_to_the_process_wide_registry() -> None:
 
     message = HandleDefaultJob()
 
-    result = await HandleMessageMiddleware().handle(Envelope(message), OneStep(Terminal()))
+    result = await HandleMessageMiddleware().handle(
+        Envelope(message), OneStep(TerminalMiddleware())
+    )
 
     assert seen == [message]
     assert result.last(HandledStamp) is not None

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, final
 from .exception import NotConsumableError, UnknownTransportError
 from .message_bus import MessageBus
 from .middleware import HandleMessageMiddleware
+from .middleware.named import chain, named_middleware
 from .transport.receiver.chained_receiver import ChainedReceiver
 from .transport.receiver.receiver_interface import ReceiverInterface
 from .transport.transport_factory import TransportFactory
@@ -16,10 +17,12 @@ from .worker_providing_interface import WorkerProvidingInterface
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from xtr_logging import LoggerInterface
+
     from .handler import HandlersLocatorInterface
     from .message_bus_config import MessageBusConfig
     from .message_bus_interface import MessageBusInterface
-    from .middleware.middleware_interface import MiddlewareInterface
+    from .middleware.named import MiddlewareBuilder
     from .transport.sender import SenderInterface
     from .transport.transport_config import TransportConfig
     from .transport.transport_factory_interface import TransportFactoryInterface
@@ -44,15 +47,17 @@ class WorkerFactory:
     the library's own receive loop or one a broker library brought with it.
     """
 
-    __slots__ = ("_bus", "_config", "_handlers", "_middleware", "_transports")
+    __slots__ = ("_bus", "_config", "_handlers", "_named", "_transports")
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — everything past `bus` is keyword-only
         self,
         config: MessageBusConfig,
         factories: Sequence[TransportFactoryInterface] | None = None,
         handlers: HandlersLocatorInterface | None = None,
         bus: MessageBusInterface | None = None,
-        middleware: Sequence[MiddlewareInterface] = (),
+        *,
+        logger: LoggerInterface | None = None,
+        named: Mapping[str, MiddlewareBuilder] | None = None,
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -61,16 +66,15 @@ class WorkerFactory:
         called — an adapter bringing its own worker, as the AMQP one does,
         dispatches into that bus too.
 
-        ``middleware`` runs on every message collected, ahead of handling —
-        where a :class:`~xtr_messenger.middleware.LoggingMiddleware` goes, so a
-        consuming process reports what it handled. It is ignored when ``bus``
-        is given, that bus being composed already.
+        ``logger`` and ``named`` mean what they do for
+        :class:`~xtr_messenger.message_bus_factory.MessageBusFactory`: what
+        the ``"logging"`` middleware writes through, and names of your own.
         """
         self._config = config
         self._transports = TransportFactory(factories)
         self._handlers = handlers
         self._bus = bus
-        self._middleware = tuple(middleware)
+        self._named = named_middleware(logger, named)
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -98,14 +102,23 @@ class WorkerFactory:
         configuration and then never use one — on AMQP that is a second
         connection per worker, opened and idle.
 
+        What the configuration names still runs, so a consuming process
+        reports the same way a publishing one does.
+
         A handler that publishes does so through the bus it was given, which
         is the producing one built by
         :class:`~xtr_messenger.message_bus_factory.MessageBusFactory`. Pass
-        ``bus`` to supply that here instead.
+        ``bus`` to supply that here instead, composed already.
+
+        Raises:
+            UnknownMiddlewareError: If the configuration names middleware
+                ``named`` has nothing registered for.
         """
         if self._bus is not None:
             return self._bus
-        return MessageBus([*self._middleware, HandleMessageMiddleware(self._handlers)])
+        return MessageBus(
+            chain(self._config, self._named, lambda: [HandleMessageMiddleware(self._handlers)])
+        )
 
     def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
         transports = self._config.transports

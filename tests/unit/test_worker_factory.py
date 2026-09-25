@@ -6,21 +6,21 @@ from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
+from xtr_logging import Level, Logger, TestHandler
 
-from tests.support.fakes import RecordingBus
+from tests.support.fakes import RecordingBus, RecordingMiddleware
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     Envelope,
     HandlersLocator,
     MessageBusConfig,
-    MiddlewareInterface,
     NotConsumableError,
     ReceivedStamp,
     SenderInterface,
-    StackInterface,
     TransportConfig,
     TransportFactoryInterface,
     TransportInterface,
+    UnknownMiddlewareError,
     UnknownTransportError,
     Worker,
     WorkerFactory,
@@ -116,19 +116,6 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
         del group
         self.captured_bus = bus
         return self.built
-
-
-@final
-class Recording(MiddlewareInterface):
-    """Notes that it ran, then hands the envelope on untouched."""
-
-    def __init__(self, order: list[str]) -> None:
-        self._order = order
-
-    @override
-    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
-        self._order.append("recorded")
-        return await stack.next().handle(envelope, stack)
 
 
 @final
@@ -249,7 +236,7 @@ def test_a_send_only_transport_that_brings_no_worker_is_refused() -> None:
         _ = WorkerFactory(config, [SendOnlyFactory()]).worker(["t"])
 
 
-async def test_middleware_runs_on_every_collected_message_before_handling() -> None:
+async def test_configured_middleware_runs_on_every_collected_message_before_handling() -> None:
     seen: list[IngestDocument] = []
     order: list[str] = []
     handlers = HandlersLocator()
@@ -261,27 +248,83 @@ async def test_middleware_runs_on_every_collected_message_before_handling() -> N
 
     first, second = ingest_document(), ingest_document()
     factory = WholeTransportFactory({"t": FakeTransport([Envelope(first), Envelope(second)])})
-    config = MessageBusConfig(transports={"t": TransportConfig("whole://")})
+    config = MessageBusConfig(
+        transports={"t": TransportConfig("whole://")},
+        middleware=[RecordingMiddleware(order, "recorded")],
+    )
 
-    worker = WorkerFactory(
-        config, [factory], handlers=handlers, middleware=[Recording(order)]
-    ).worker(["t"])
+    worker = WorkerFactory(config, [factory], handlers=handlers).worker(["t"])
     await worker.run()
 
     assert seen == [first, second]
     assert order == ["recorded", "handled", "recorded", "handled"]
 
 
-async def test_the_middleware_is_ignored_when_a_bus_is_given() -> None:
+async def test_configured_middleware_is_ignored_when_a_bus_is_given() -> None:
     """That bus is already composed, so nothing may be inserted into it."""
     order: list[str] = []
     adapter = OwnWorkerFactory()
     own_bus = RecordingBus()
-    config = MessageBusConfig(transports={"jobs": TransportConfig("own://")})
-
-    _ = WorkerFactory(config, [adapter], bus=own_bus, middleware=[Recording(order)]).worker(
-        ["jobs"]
+    config = MessageBusConfig(
+        transports={"jobs": TransportConfig("own://")},
+        middleware=[RecordingMiddleware(order, "recorded")],
     )
+
+    _ = WorkerFactory(config, [adapter], bus=own_bus).worker(["jobs"])
 
     assert adapter.captured_bus is own_bus
     assert order == []
+
+
+async def test_default_middleware_off_leaves_handling_out_as_the_bus_does() -> None:
+    """The worker dispatches into a bus, so the switch means the same there."""
+    seen: list[IngestDocument] = []
+    order: list[str] = []
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument) -> None:
+        seen.append(message)
+
+    factory = WholeTransportFactory({"t": FakeTransport([Envelope(ingest_document())])})
+    config = MessageBusConfig(
+        transports={"t": TransportConfig("whole://")},
+        middleware=[RecordingMiddleware(order, "recorded")],
+        default_middleware=False,
+    )
+
+    await WorkerFactory(config, [factory], handlers=handlers).worker(["t"]).run()
+
+    assert order == ["recorded"]
+    assert seen == []
+
+
+async def test_the_logging_name_writes_through_the_logger_the_factory_is_given() -> None:
+    handler = TestHandler()
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument) -> None:
+        del message
+
+    factory = WholeTransportFactory({"t": FakeTransport([Envelope(ingest_document())])})
+    config = MessageBusConfig(transports={"t": TransportConfig("whole://")}, middleware=["logging"])
+
+    await (
+        WorkerFactory(config, [factory], handlers=handlers, logger=Logger("messenger", [handler]))
+        .worker(["t"])
+        .run()
+    )
+
+    assert handler.has_record("message handled", Level.INFO)
+
+
+def test_a_middleware_name_nothing_is_registered_for_is_refused() -> None:
+    config = MessageBusConfig(transports={"t": TransportConfig("whole://")}, middleware=["nope"])
+    factory = WholeTransportFactory({"t": FakeTransport([])})
+
+    with pytest.raises(UnknownMiddlewareError) as excinfo:
+        _ = WorkerFactory(config, [factory]).worker(["t"])
+
+    assert excinfo.value.name == "nope"
+    assert excinfo.value.known == ("logging",)
