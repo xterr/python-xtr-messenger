@@ -11,7 +11,7 @@ from .logging_middleware import LoggingMiddleware
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
-    from xtr_logging import LoggerInterface
+    from xtr_logging_contracts import LoggerInterface
 
     from xtr_messenger.message_bus_config import MessageBusConfig
 

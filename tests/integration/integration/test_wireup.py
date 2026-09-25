@@ -13,7 +13,8 @@ from taskiq import InMemoryBroker
 from typing_extensions import override
 from wireup import AsyncContainer, Inject, Injected, injectable
 from wireup.errors import WireupError
-from xtr_logging import Level, Logger, LoggerInterface, TestHandler
+from xtr_logging import Logger, TestHandler
+from xtr_logging_contracts import Level, LoggerInterface
 
 from xtr_messenger import (
     Envelope,

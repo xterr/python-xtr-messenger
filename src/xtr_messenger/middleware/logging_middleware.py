@@ -5,14 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
-from xtr_logging import NullLogger
+from xtr_logging_contracts import NullLogger
 
 from xtr_messenger.stamp import HandledStamp, SentStamp, TransportMessageIdStamp
 
 from .middleware_interface import MiddlewareInterface
 
 if TYPE_CHECKING:
-    from xtr_logging import Context, LoggerInterface
+    from xtr_logging_contracts import Context, LoggerInterface
 
     from xtr_messenger.envelope import Envelope
 
