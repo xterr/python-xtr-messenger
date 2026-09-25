@@ -339,22 +339,40 @@ class RejectOutOfHours(MiddlewareInterface):
 bus = MessageBusFactory(CONFIG).bus([LoggingMiddleware(logger), RejectOutOfHours()])
 ```
 
-`LoggingMiddleware` writes one record per dispatch through an
-[xtr-logging](https://github.com/xterr/python-xtr-logging) `LoggerInterface` — the message type,
-and whatever the chain stamped, as context rather than baked into the text:
+`LoggingMiddleware` reports each dispatch through an
+[xtr-logging](https://github.com/xterr/python-xtr-logging) `LoggerInterface`, with everything it
+has to say travelling as context rather than baked into the text:
 
 ```python
-from xtr_logging import Level, Logger, StreamHandler
+from xtr_logging import ConsoleHandler, Logger
 
-logger = Logger("messenger", [StreamHandler("var/log/app.log", Level.INFO)])
-# [2026-09-24T12:30:45+03:00] messenger.INFO: message dispatched
+logger = Logger("messenger", [ConsoleHandler()])
+# [2026-09-24T12:30:45+03:00] messenger.NOTICE: message dispatched
 #   {"message_type":"IngestDocument","transport":"high","message_id":"id-1"} []
 ```
+
+**What it says is graded by severity, so a command's `-v` flags decide how much of a dispatch
+it shows.** A `ConsoleHandler` prints notices at `-v`, info at `-vv` and everything at `-vvv`:
+
+| Level | Shown at | Records |
+| --- | --- | --- |
+| `NOTICE` | `-v` | One per dispatch: the message type, the transport it went to, the id the broker gave it |
+| `INFO` | `-vv` | One per handler that ran, and what it returned |
+| `DEBUG` | `-vvv` | One per dispatch, carrying every stamp the envelope came back with |
+
+Nothing appears at normal verbosity — a dispatch is routine, and a bus running thousands a
+second should not say so unasked. Each tier adds what the one above it left out rather than
+repeating it, so `-vvv` on a worker reads as a trace and a plain run stays silent.
 
 Given no logger it writes to a `NullLogger`, so the middleware costs nothing until an
 application hands it one. Where a container owns the graph, xtr-logging's own
 [wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container)
-provides the `LoggerInterface` to inject here.
+provides the `LoggerInterface` to build it with.
+
+Under [xtr-console](https://github.com/xterr/python-xtr-console) a container holding a
+`LoggerFactory` has its console handlers follow every command it runs, so the `-v` flags on
+`messenger:consume` are what set the level — pass the middleware to the bus you build and
+`-vv` reads out every handler that ran.
 
 Your middleware runs first, in the order given. Routing and handling always come last, in that
 order, and two rules carry the producer/consumer split:
