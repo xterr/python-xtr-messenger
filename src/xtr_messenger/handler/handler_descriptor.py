@@ -43,8 +43,9 @@ class HandlerDescriptor:
 
         The bus calls a handler with the message, and with the envelope too
         when a second parameter is annotated :class:`Envelope`. Parameters a
-        dependency-injection container fills — wireup's ``Injected[T]`` — may
-        follow; they are the container's to supply, not the bus's.
+        dependency-injection container fills — xtr-dependency-injection's
+        ``Injected[T]`` — may follow; they are the container's to supply, not
+        the bus's.
 
         Raises:
             HandlerSignatureError: If the parameters are not a shape the bus
@@ -169,17 +170,13 @@ def _supplied_by_container(hint: object) -> bool:
 
 
 def _marks(metadata: object, marker: type) -> bool:
-    if isinstance(metadata, marker):
-        return True
-    # With FastAPI installed, wireup's Inject() hands back a Depends wrapping it.
-    dependency = getattr(metadata, "dependency", None)
-    return bool(getattr(dependency, "__is_wireup_depends__", False))
+    return isinstance(metadata, marker)
 
 
 @cache
 def _container_marker() -> type | None:
     try:
-        from wireup.ioc.types import InjectableType  # noqa: PLC0415
+        from xtr_dependency_injection import Autowire  # noqa: PLC0415
     except ImportError:
         return None
-    return InjectableType
+    return Autowire

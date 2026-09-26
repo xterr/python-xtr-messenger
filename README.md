@@ -43,7 +43,7 @@ uv add xtr-messenger                    # sync:// and in-memory://
 uv add "xtr-messenger[amqp]"            # + RabbitMQ
 uv add "xtr-messenger[taskiq]"          # + any other taskiq broker
 uv add "xtr-messenger[pydantic]"        # + pydantic messages
-uv add "xtr-messenger[wireup]"          # + a pre-wired DI container
+uv add "xtr-messenger[di]"              # + a MessengerBundle for xtr-dependency-injection
 uv add "xtr-messenger[console]"         # + the messenger:consume console command
 ```
 
@@ -53,7 +53,7 @@ uv add "xtr-messenger[console]"         # + the messenger:consume console comman
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
-| `wireup` | `wireup` | Everything pre-wired for a [wireup](https://github.com/maldoinc/wireup) container |
+| `di` | `xtr-dependency-injection` | A `MessengerBundle` for [xtr-dependency-injection](../xtr-dependency-injection) |
 | `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
 
 Requires Python 3.11+. An application that wants records written somewhere adds `xtr-logging`
@@ -291,23 +291,9 @@ uv run python -m app.console messenger:consume high --time-limit 3600
 ```
 
 SIGTERM, or the time limit running out, stops the worker once the message in hand is settled;
-Ctrl-C cancels it. With a [container](#wiring-with-a-container), skip `use_workers()`: import
-`xtr_messenger.command` before the console's `injectables()`, and the command is built from the
-`WorkerFactory` the messenger's `injectables()` provide — handlers wired to the container.
-
-```python
-import xtr_messenger.command  # noqa: F401
-from xtr_console.integration import wireup as console
-
-container = wireup.create_async_container(
-    injectables=[
-        services,
-        *messenger.injectables(CONFIG),
-        *console.injectables(Application("app")),
-    ],
-)
-raise SystemExit(await (await container.get(Application)).run_async())
-```
+Ctrl-C cancels it. With a [kernel](#kernel--bundle) the `MessengerBundle` builds the command
+from the `WorkerFactory` it provides — handlers wired to the container, and the console
+bundle picks the command up automatically when both bundles are active.
 
 ### Who retries
 
@@ -391,27 +377,12 @@ repeating it, so `-vvv` on a worker reads as a trace and a plain run stays silen
 It runs only where `middleware` names it. The `logger` given to `MessageBusFactory` and
 `WorkerFactory` is what `"logging"` writes through; without one it writes to a `NullLogger`.
 
-With a container, name it and the container supplies the logger — xtr-logging's own
-[wireup integration](https://github.com/xterr/python-xtr-logging#wiring-with-a-container)
-provides one:
-
-```python
-CONFIG = MessageBusConfig(transports={...}, routing={...}, middleware=["logging"])
-
-container = wireup.create_async_container(
-    injectables=[
-        services,
-        *logging.injectables(LOGGING),
-        *messenger.injectables(CONFIG, middleware={"audit": Audit}),  # your own names
-    ],
-)
-```
-
-A class given in `middleware` is registered as a singleton with its constructor filled by the
-container, and built only when the configuration names it. Providing a logger never adds
-anything by itself. Under [xtr-console](https://github.com/xterr/python-xtr-console) the same
-container makes its console handlers follow every command, so `messenger:consume -vv` reads out
-every handler that ran.
+With a [kernel](#kernel--bundle), name middleware with `@as_middleware("audit")` and the
+container supplies each named entry; the logging middleware writes through the
+``"messenger"`` channel that the messenger bundle prepends to logging's config. Under
+[xtr-console](https://github.com/xterr/python-xtr-console) the same container makes its
+console handlers follow every command, so `messenger:consume -vv` reads out every handler
+that ran.
 
 What `middleware` names runs first, in that order. Routing and handling always come last, in
 that order, and two rules carry the producer/consumer split:
@@ -490,7 +461,6 @@ typed attributes rather than only a message.
 | `NotConsumableError` | A worker is asked to consume a transport that can only send |
 | `NoSenderForMessageError` | A message is routed nowhere and the bus requires a sender |
 | `NoHandlerForMessageError` | A message is to be handled and nothing handles it |
-| `UnregisteredHandlerError` | A handler class is declared after the wireup container was built |
 | `MessageEncodingFailedError` | A message cannot be put on the wire |
 | `MessageDecodingFailedError`, `UnknownMessageNameError` | A payload cannot be turned back into its message |
 
@@ -587,19 +557,50 @@ If your broker owns its own consume loop, also implement `WorkerProvidingInterfa
 what it receives into the `bus` its `worker()` is given. Most transports should not: a whole
 transport is driven by the library's `Worker`.
 
-## Wiring with a container
+## Kernel / bundle
 
-Handlers usually need things — a database session, a client, a unit of work. Every collaborator
-here is a constructor argument and every contract is a `@runtime_checkable` Protocol, so a
-container can own the whole graph. Nothing requires one.
+An application using [xtr-dependency-injection](../xtr-dependency-injection) lists
+`MessengerBundle` in its `app/bundles.py` and configures it with `@configure`. Handlers ask
+for what they need the way any container-injected service does; import nothing from this
+library's integration:
 
-With the `wireup` extra, a handler asks for what it needs the way wireup always does:
+```sh
+uv add "xtr-messenger[di]"
+```
+
+```python
+# app/bundles.py
+from xtr_messenger.bundle import MessengerBundle
+
+BUNDLES = {MessengerBundle: {"all": True}}
+```
+
+```python
+# app/config/messenger.py
+from xtr_dependency_injection import configure
+
+from xtr_messenger import MessageBusConfig, TransportConfig
+
+from app.messages import IngestDocument
+
+
+@configure
+def messenger() -> MessageBusConfig:
+    return MessageBusConfig(
+        transports={"jobs": TransportConfig("amqp://queue")},
+        routing={IngestDocument: "jobs"},
+    )
+```
 
 ```python
 # app/handlers.py
-from wireup import Injected
+from xtr_dependency_injection import Injected, as_service
 
 from xtr_messenger import as_message_handler
+
+
+@as_service()
+class InvoiceRepository: ...
 
 
 @as_message_handler(IngestDocument)
@@ -609,93 +610,27 @@ async def ingest(message: IngestDocument, db: Injected[Session]) -> None:
 
 @as_message_handler(IssueInvoice)
 class IssueInvoiceHandler:
-    def __init__(self, invoices: InvoiceRepository) -> None:  # once
-        self._invoices = invoices
+    def __init__(self, invoices: InvoiceRepository) -> None: ...
 
-    async def __call__(self, message: IssueInvoice, db: Injected[Session]) -> None:  # per message
-        await self._invoices.issue(db, message.invoice_id)
+    async def __call__(self, message: IssueInvoice, db: Injected[Session]) -> None: ...
 ```
 
-Nothing from this library appears there beyond the decorator. Parameters marked `Injected[T]` —
-or `Annotated[T, Inject(config=...)]`, `Inject(qualifier=...)` — are recognised as the
-container's to fill, so the bus still calls the handler with just the message (and the envelope,
-if asked for). They must come after those.
+The bundle registers a `MessageBusInterface`, a `WorkerFactory` (and the `messenger:consume`
+command when the console bundle is active), and a per-kernel `HandlersLocator`. Every
+handler its scan finds is bound with `bind_callable` at boot, so a handler asking for
+something the container cannot provide fails at boot, not on its first message. Handler
+classes are singletons — their constructors take what lives as long as the handler; anything
+a single message needs goes on `__call__` as `Injected[T]`. `@required_bundle` pulls in the
+logging and console bundles when installed; the logging middleware writes through a
+``"messenger"`` channel added to logging's config automatically.
 
-A handler *class* needs no `@injectable`: the integration registers it with the container as a
-**singleton**. Its constructor is resolved once, so it takes what lives as long as the handler —
-a repository, a client. Whatever a single message needs goes on `__call__`, filled on every call.
-Ask the constructor for something scoped and the container refuses to build, naming the
-parameter; that dependency belongs on `__call__`.
+Middleware referred to by name in the config is resolved from the container: give the class
+a name with `@as_middleware("audit")`, or register it under `(MiddlewareInterface, name)`
+manually. The bundle uses a `ServiceLocator` for that lookup, so a class is built only when
+the configuration names it.
 
-Then one call, where the container is built:
-
-```python
-# app/worker.py
-import asyncio
-
-import wireup
-
-import app.handlers  # noqa: F401 — importing declares the handlers
-from app import services
-from xtr_messenger import WorkerInterface
-from xtr_messenger.integration import wireup as messenger
-
-
-async def main() -> None:
-    container = wireup.create_async_container(
-        injectables=[services, *messenger.injectables(CONFIG, transports=["jobs"])],
-    )
-    try:
-        await (await container.get(WorkerInterface)).run()
-    finally:
-        await container.close()
-
-
-asyncio.run(main())
-```
-
-The container now provides a `MessageBusInterface`, a `WorkerInterface` (only when `transports`
-names some — a process that only publishes leaves it out), a `WorkerFactory` for workers whose
-transports are chosen later, and the `MessageBusConfig`. The bus
-and the worker share their transports, so a handler publishing from inside the worker reuses its
-connection. Any service takes the bus like any other dependency:
-
-```python
-@injectable
-class OrderService:
-    def __init__(self, bus: MessageBusInterface) -> None:
-        self._bus = bus
-```
-
-Handler classes are registered as the container is built, so import the modules declaring them
-before calling `injectables()`; one declared afterwards is refused with
-`UnregisteredHandlerError`. Resolving the bus or the worker wires the handlers to the container,
-and a handler asking for something the container cannot provide is refused then, not on its first
-message. Wiring another container — one per test, say — rebinds them, and
-`container.override(...)` reaches handlers like anything else.
-
-**A scoped dependency is one per handler call.** A call asking for one gets a scope of its own,
-so a `lifetime="scoped"` session is built when the message arrives and released when the handler
-finishes, including on failure. A call asking for nothing scoped opens no scope at all.
-
-<details>
-<summary><b>Configuration from the container</b></summary>
-
-Leave `config` out and provide a `MessageBusConfig` yourself, when it is read from settings:
-
-```python
-@injectable
-def bus_config(dsn: Annotated[str, Inject(config="amqp_url")]) -> MessageBusConfig:
-    return MessageBusConfig(transports={"jobs": TransportConfig(dsn)}, routing={"*": "jobs"})
-
-
-container = wireup.create_async_container(
-    injectables=[services, bus_config, *messenger.injectables(transports=["jobs"])],
-    config={"amqp_url": os.environ["AMQP_URL"]},
-)
-```
-
-</details>
+Between messages a worker calls `ServicesResetter.reset()`, so services opting in with
+`ResetInterface` — or explicitly tagged `kernel.reset` — are cleared per unit of work.
 
 ## Layout
 
@@ -724,8 +659,7 @@ xtr_messenger/
 │   └── amqp/                RabbitMQ on top of it
 ├── command/
 │   └── consume.py           messenger:consume, on xtr-console
-└── integration/
-    └── wireup.py            everything pre-wired for a wireup container
+└── bundle/                  MessengerBundle for xtr-dependency-injection
 ```
 
 ## Development

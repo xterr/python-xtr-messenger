@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .transport.sender import SenderInterface
     from .transport.transport_config import TransportConfig
     from .transport.transport_factory_interface import TransportFactoryInterface
+    from .worker import AsyncResetter
     from .worker_interface import WorkerInterface
 
 __all__ = ["WorkerFactory"]
@@ -47,7 +48,7 @@ class WorkerFactory:
     the library's own receive loop or one a broker library brought with it.
     """
 
-    __slots__ = ("_bus", "_config", "_handlers", "_named", "_transports")
+    __slots__ = ("_bus", "_config", "_handlers", "_named", "_resetter", "_transports")
 
     def __init__(  # noqa: PLR0913 — everything past `bus` is keyword-only
         self,
@@ -58,6 +59,7 @@ class WorkerFactory:
         *,
         logger: LoggerInterface | None = None,
         named: Mapping[str, MiddlewareBuilder] | None = None,
+        resetter: AsyncResetter | None = None,
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -75,6 +77,7 @@ class WorkerFactory:
         self._handlers = handlers
         self._bus = bus
         self._named = named_middleware(logger, named)
+        self._resetter = resetter
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -91,7 +94,7 @@ class WorkerFactory:
         bus = self._dispatcher()
         if isinstance(factory, WorkerProvidingInterface):
             return factory.worker(group, bus)
-        return Worker(bus, _receiver_of(factory.create(group)))
+        return Worker(bus, _receiver_of(factory.create(group)), self._resetter)
 
     def _dispatcher(self) -> MessageBusInterface:
         """Return the bus a collected message is dispatched through.

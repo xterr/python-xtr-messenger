@@ -38,6 +38,10 @@ def _no_routes() -> dict[type | str, str | Sequence[str]]:
     return {}
 
 
+def _no_transports() -> dict[str, TransportConfig]:
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class MessageBusConfig:
     """The transports that exist, which messages go to them, and the chain.
@@ -66,7 +70,7 @@ class MessageBusConfig:
             rather than letting the dispatch pass quietly.
     """
 
-    transports: Mapping[str, TransportConfig]
+    transports: Mapping[str, TransportConfig] = field(default_factory=_no_transports)
     routing: Mapping[type | str, str | Sequence[str]] = field(default_factory=_no_routes)
     middleware: Sequence[str | MiddlewareInterface] = ()
     default_middleware: bool = True

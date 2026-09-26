@@ -18,7 +18,6 @@ from xtr_messenger import (
     UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
-    UnregisteredHandlerError,
     UnsupportedDsnError,
     exception,
 )
@@ -38,7 +37,6 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
-    UnregisteredHandlerError,
     UnsupportedDsnError,
 )
 
@@ -205,14 +203,6 @@ def test_unknown_transport_option_error_carries_the_scheme_unknown_and_known() -
 
 def test_unknown_transport_option_error_shows_none_for_no_known_options() -> None:
     assert "it accepts: <none>" in str(UnknownTransportOptionError("amqp", ("typo",), ()))
-
-
-def test_unregistered_handler_error_names_the_class_and_the_fix() -> None:
-    error = UnregisteredHandlerError("IssueInvoiceHandler")
-
-    assert error.handler_name == "IssueInvoiceHandler"
-    assert "IssueInvoiceHandler was declared after the container was built" in str(error)
-    assert "import the module declaring it" in str(error)
 
 
 def test_unsupported_dsn_error_carries_the_transport_name_and_dsn() -> None:

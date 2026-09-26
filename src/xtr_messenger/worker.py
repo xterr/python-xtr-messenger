@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
 
 from typing_extensions import override
 
@@ -17,7 +17,21 @@ if TYPE_CHECKING:
     from .message_bus_interface import MessageBusInterface
     from .transport.receiver.receiver_interface import ReceiverInterface
 
-__all__ = ["Worker"]
+__all__ = ["AsyncResetter", "Worker"]
+
+
+@runtime_checkable
+class AsyncResetter(Protocol):
+    """Something with ``async reset()`` — the shape ``ServicesResetter`` fits.
+
+    A structural protocol lets the worker call the kernel's resetter without
+    importing the container package, so a messenger process without a kernel
+    keeps its dependency count.
+    """
+
+    async def reset(self) -> None:
+        """Reset every service tracked since the last reset."""
+        ...
 
 
 @final
@@ -36,12 +50,24 @@ class Worker(WorkerInterface):
     every failure would be attempted the product of both policies.
     """
 
-    __slots__ = ("_bus", "_receiver", "_stopped")
+    __slots__ = ("_bus", "_receiver", "_resetter", "_stopped")
 
-    def __init__(self, bus: MessageBusInterface, receiver: ReceiverInterface) -> None:
-        """Dispatch messages collected from ``receiver`` through ``bus``."""
+    def __init__(
+        self,
+        bus: MessageBusInterface,
+        receiver: ReceiverInterface,
+        resetter: AsyncResetter | None = None,
+    ) -> None:
+        """Dispatch messages collected from ``receiver`` through ``bus``.
+
+        ``resetter``, when given, has ``reset()`` awaited after each handled
+        message — settled either way — so long-lived services (a logger's
+        fingers-crossed buffer, a request-scoped registry) are cleared between
+        units of work.
+        """
         self._bus = bus
         self._receiver = receiver
+        self._resetter = resetter
         self._stopped: asyncio.Event | None = None
 
     @override
@@ -82,8 +108,10 @@ class Worker(WorkerInterface):
         except Exception as error:  # noqa: BLE001 — one bad message must not stop the worker
             details = ErrorDetailsStamp(type(error).__name__, str(error))
             await self._receiver.reject(envelope.with_stamps(details))
-            return
-        await self._receiver.ack(envelope)
+        else:
+            await self._receiver.ack(envelope)
+        if self._resetter is not None:
+            await self._resetter.reset()
 
 
 async def _next_unless_stopped(

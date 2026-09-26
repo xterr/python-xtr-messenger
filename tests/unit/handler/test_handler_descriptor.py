@@ -4,7 +4,7 @@ import inspect
 from typing import Annotated, final, get_type_hints
 
 import pytest
-from wireup import Injected
+from xtr_dependency_injection import Injected
 
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import Envelope, HandlerDescriptor, HandlerSignatureError
@@ -20,7 +20,7 @@ class Session:
 # Held in module globals so get_type_hints resolves them at runtime; deferring the
 # imports to TYPE_CHECKING would make the shape check silently stop seeing them.
 InjectedSession = Injected[Session]
-PlainAnnotatedSession = Annotated[Session, "not a wireup marker"]
+PlainAnnotatedSession = Annotated[Session, "not a container marker"]
 
 
 @final

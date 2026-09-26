@@ -1,6 +1,6 @@
 [project]
 name = "xtr-messenger"
-version = "1.0.1"
+version = "1.1.0"
 description = "A message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,8 +26,8 @@ dependencies = [
 pydantic = [
     "pydantic>=2.0",
 ]
-wireup = [
-    "wireup>=2.12",
+di = [
+    "xtr-dependency-injection>=1.0,<2",
 ]
 console = [
     "xtr-console>=1.0,<2",
@@ -63,8 +63,8 @@ dev = [
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
-    "wireup>=2.12",
     "xtr-console>=1.0,<2",
+    "xtr-dependency-injection>=1.0,<2",
     "xtr-logging>=1.0,<2",
 ]
 
@@ -147,15 +147,12 @@ fixable = ["ALL"]
 unfixable = []
 
 [tool.ruff.lint.per-file-ignores]
-# wireup registers a factory under its return annotation, read at runtime.
-# Deferring these would register the factories under nothing.
-"src/xtr_messenger/integration/wireup.py" = ["TC001", "TC002", "TC003"]
 # xtr-console reads a command's annotations at runtime — the constructor's for
 # a container, __call__'s for the command line — so none can be deferred.
 "src/xtr_messenger/command/consume.py" = ["TC001", "TC002", "TC003"]
-# Same reason on the consuming side: wireup reads a factory's annotations at
-# runtime, so a test that registers one cannot defer them either.
-"tests/integration/integration/test_wireup.py" = ["TC001", "TC002", "TC003"]
+# The messenger bundle registers factory functions whose signatures the engine
+# reads at runtime; deferring these would register the factories under nothing.
+"src/xtr_messenger/bundle/*.py" = ["TC001", "TC002", "TC003"]
 "tests/**/*.py" = [
     "S101",    # assert is the point of pytest
     "S603",    # a fresh interpreter is the only way to assert a module was never imported

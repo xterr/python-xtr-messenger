@@ -18,9 +18,11 @@ handlers itself.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+import contextlib
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from xtr_messenger.handler.default_registry import default_registry
+from xtr_messenger.handler.handlers_registry import HANDLERS_ATTRIBUTE
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -59,6 +61,10 @@ def as_message_handler(
 
     def decorate(handler: HandlerT) -> HandlerT:
         _ = target.register(message_type, handler)
+        existing: object = getattr(handler, HANDLERS_ATTRIBUTE, ())
+        previous = cast("tuple[type, ...]", existing) if isinstance(existing, tuple) else ()
+        with contextlib.suppress(AttributeError, TypeError):
+            setattr(handler, HANDLERS_ATTRIBUTE, (*previous, message_type))
         return handler
 
     return decorate

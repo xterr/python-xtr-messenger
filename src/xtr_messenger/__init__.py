@@ -10,7 +10,7 @@ behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 
 from importlib.metadata import version
 
-from .decorator import as_message, as_message_handler
+from .decorator import as_message, as_message_handler, as_middleware
 from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
@@ -27,7 +27,6 @@ from .exception import (
     UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
-    UnregisteredHandlerError,
 )
 from .handler import (
     Handler,
@@ -147,7 +146,6 @@ __all__ = [
     "UnknownMiddlewareError",
     "UnknownTransportError",
     "UnknownTransportOptionError",
-    "UnregisteredHandlerError",
     "UnsupportedDsnError",
     "Worker",
     "WorkerFactory",
@@ -156,6 +154,7 @@ __all__ = [
     "__version__",
     "as_message",
     "as_message_handler",
+    "as_middleware",
     "default_codecs",
     "default_factories",
     "default_registry",

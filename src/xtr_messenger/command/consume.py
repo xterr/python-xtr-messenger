@@ -17,8 +17,8 @@ from xtr_messenger.worker_interface import WorkerInterface
 
 __all__ = ["ConsumeMessagesCommand"]
 
-# Typed as what a container fills the parameter with, so wireup still matches
-# it; ``WorkerFactory | None`` is a different type to wireup and never would be.
+# Typed as what a container fills the parameter with, so the engine still
+# matches it; ``WorkerFactory | None`` is a different type and never would be.
 _UNSET: Final = WorkerFactory(MessageBusConfig(transports={}))
 
 _NO_WORKERS: Final = (
@@ -31,9 +31,9 @@ _NO_WORKERS: Final = (
 class ConsumeMessagesCommand:
     """Consumes the transports named on the command line, until stopped.
 
-    A wireup container builds it with the ``WorkerFactory`` the messenger's
-    ``injectables()`` provide. Without one, the console builds it bare, and it
-    uses the factory given to :meth:`use_workers`.
+    An xtr-dependency-injection container builds it with the ``WorkerFactory``
+    the messenger bundle provides. Without one, the console builds it bare,
+    and it uses the factory given to :meth:`use_workers`.
     """
 
     __slots__ = ("_workers",)

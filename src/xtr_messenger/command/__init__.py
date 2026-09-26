@@ -3,20 +3,11 @@
 Install with the ``console`` extra. Importing this package declares
 ``messenger:consume`` with ``@as_command``, like any other command module.
 
-With a wireup container, import it before the console's ``injectables()``,
-and the container builds the command from the ``WorkerFactory`` the
-messenger's ``injectables()`` provide — handlers wired::
+The :class:`~xtr_messenger.bundle.MessengerBundle` loads this module for its
+kernel when the console bundle is active, so the container builds the command
+from the ``WorkerFactory`` the messenger bundle provides.
 
-    import xtr_messenger.command  # noqa: F401
-
-    container = wireup.create_async_container(
-        injectables=[
-            *messenger.injectables(CONFIG),
-            *console.injectables(Application("acme")),
-        ],
-    )
-
-Without one, tell the command which factory to build workers with::
+Without a kernel, tell the command which factory to build workers with::
 
     from xtr_messenger.command import ConsumeMessagesCommand
 

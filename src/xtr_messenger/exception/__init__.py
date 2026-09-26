@@ -20,7 +20,6 @@ from .unknown_message_name_error import UnknownMessageNameError
 from .unknown_middleware_error import UnknownMiddlewareError
 from .unknown_transport_error import UnknownTransportError
 from .unknown_transport_option_error import UnknownTransportOptionError
-from .unregistered_handler_error import UnregisteredHandlerError
 from .unsupported_dsn_error import UnsupportedDsnError
 
 __all__ = [
@@ -38,6 +37,5 @@ __all__ = [
     "UnknownMiddlewareError",
     "UnknownTransportError",
     "UnknownTransportOptionError",
-    "UnregisteredHandlerError",
     "UnsupportedDsnError",
 ]
