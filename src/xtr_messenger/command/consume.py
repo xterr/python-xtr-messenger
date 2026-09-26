@@ -6,9 +6,7 @@ import asyncio
 import signal
 from typing import Annotated, ClassVar, Final, final
 
-from cyclopts import Parameter, validators
-from rich.markup import escape
-from xtr_console import ConsoleStyle, ExitCode, as_command
+from xtr_console import ConsoleStyle, ExitCode, Option, Range, as_command, escape
 
 from xtr_messenger.exception import MessageBusError
 from xtr_messenger.message_bus_config import MessageBusConfig
@@ -53,7 +51,7 @@ class ConsumeMessagesCommand:
         self,
         io: ConsoleStyle,
         *transports: str,
-        time_limit: Annotated[float | None, Parameter(validator=validators.Number(gt=0))] = None,
+        time_limit: Annotated[float | None, Option(validator=Range(gt=0))] = None,
     ) -> int:
         """Consume messages from the named transports.
 
