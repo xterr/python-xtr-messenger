@@ -599,7 +599,7 @@ from xtr_dependency_injection import Injected, as_service
 from xtr_messenger import as_message_handler
 
 
-@as_service()
+@as_service
 class InvoiceRepository: ...
 
 
@@ -618,16 +618,66 @@ class IssueInvoiceHandler:
 The bundle registers a `MessageBusInterface`, a `WorkerFactory` (and the `messenger:consume`
 command when the console bundle is active), and a per-kernel `HandlersLocator`. Every
 handler its scan finds is bound with `bind_callable` at boot, so a handler asking for
-something the container cannot provide fails at boot, not on its first message. Handler
-classes are singletons — their constructors take what lives as long as the handler; anything
-a single message needs goes on `__call__` as `Injected[T]`. `@required_bundle` pulls in the
-logging and console bundles when installed; the logging middleware writes through a
-``"messenger"`` channel added to logging's config automatically.
+something the container cannot provide fails at boot, not on its first message.
+
+Container dependencies reach a handler only through `Injected[T]`. A **function handler**
+takes the message — and the `Envelope`, if it asks for one — as ordinary parameters; every
+other parameter it needs from the container **must** be annotated `Injected[T]`, because a
+bare `T` is not injected and would arrive unfilled:
+
+```python
+from xtr_dependency_injection import Injected
+
+from xtr_messenger import Envelope, as_message_handler
+
+
+@as_message_handler(IngestDocument)
+async def ingest(
+    message: IngestDocument,
+    envelope: Envelope,  # the message and its envelope arrive as-is
+    db: Injected[Session],  # everything from the container is Injected[...]
+    metrics: Injected[Metrics],
+) -> None:
+    await db.record(message.document_id)
+```
+
+A **handler class** is a singleton: its constructor takes what lives as long as the handler
+(plain parameters), and anything a single message needs goes on `__call__` as `Injected[T]`.
+
+`@required_bundle` pulls in the logging and console bundles when installed; the logging
+middleware writes through a ``"messenger"`` channel added to logging's config automatically.
 
 Middleware referred to by name in the config is resolved from the container: give the class
 a name with `@as_middleware("audit")`, or register it under `(MiddlewareInterface, name)`
 manually. The bundle uses a `ServiceLocator` for that lookup, so a class is built only when
 the configuration names it.
+
+A class in the application — or another bundle — that implements `TransportFactoryInterface`
+is registered automatically and consulted **ahead of** the factories discovery finds by entry
+point, in registration order. That is how an app serves a private DSN scheme, or overrides a
+discovered one, without passing a factory list by hand — the class needs no decorator beyond
+living in a scanned module and being buildable with no arguments. With none registered the
+bundle falls back to entry-point discovery, so a zero-config app keeps working:
+
+```python
+from collections.abc import Mapping
+
+from typing_extensions import override
+
+from xtr_messenger import Dsn, TransportConfig, TransportFactoryInterface
+from xtr_messenger.transport.sender import SenderInterface
+
+
+class KafkaTransportFactory(TransportFactoryInterface):
+    @override
+    def supports(self, dsn: Dsn) -> bool:
+        return dsn.scheme == "kafka"
+
+    @override
+    def create(
+        self, group: Mapping[str, TransportConfig]
+    ) -> Mapping[str, SenderInterface]: ...  # build a sender per name in `group`
+```
 
 Between messages a worker calls `ServicesResetter.reset()`, so services opting in with
 `ResetInterface` — or explicitly tagged `kernel.reset` — are cleared per unit of work.
