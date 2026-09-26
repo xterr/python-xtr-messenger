@@ -137,7 +137,8 @@ per message would cost a construction each, thousands of times a second. Message
 concurrently, so keep per-message state off `self`.
 
 **Every handler of a message runs**, in the order declared, and each leaves a `HandledStamp`
-behind. Lookup walks the message's bases, so a handler on a marker class still fires for a
+behind, carrying what it returned in `result` — `None` when it returns nothing. The value
+stays in the process; it is never sent anywhere, so it need not be serializable. Lookup walks the message's bases, so a handler on a marker class still fires for a
 subclass that has handlers of its own.
 
 Declaring writes to a process-wide registry, which is what lets a handler module import nothing

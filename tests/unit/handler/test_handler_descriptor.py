@@ -199,7 +199,7 @@ async def test_invoke_passes_only_the_message_when_the_envelope_is_not_wanted() 
 
     envelope = Envelope(ingest_document())
 
-    await HandlerDescriptor.of(handle).invoke(envelope)
+    _ = await HandlerDescriptor.of(handle).invoke(envelope)
 
     assert received == [envelope.message]
 
@@ -212,7 +212,7 @@ async def test_invoke_passes_the_envelope_when_it_is_wanted() -> None:
 
     envelope = Envelope(ingest_document())
 
-    await HandlerDescriptor.of(handle).invoke(envelope)
+    _ = await HandlerDescriptor.of(handle).invoke(envelope)
 
     assert received == [(envelope.message, envelope)]
 
@@ -234,8 +234,8 @@ async def test_a_class_handler_is_built_once_with_no_arguments_and_reused() -> N
     descriptor = HandlerDescriptor.of(Handler)
     envelope = Envelope(ingest_document())
 
-    await descriptor.invoke(envelope)
-    await descriptor.invoke(envelope)
+    _ = await descriptor.invoke(envelope)
+    _ = await descriptor.invoke(envelope)
 
     assert len(built) == 1
     assert called == [built[0], built[0]]
@@ -263,3 +263,26 @@ def test_a_qualified_parameter_is_taken_for_an_injected_one() -> None:
         del message, replica
 
     assert HandlerDescriptor.of(handle).wants_envelope is False
+
+
+async def test_invoke_returns_what_a_function_handler_returned() -> None:
+    async def count(message: IngestDocument) -> int:
+        del message
+        return 3
+
+    assert await HandlerDescriptor.of(count).invoke(Envelope(ingest_document())) == 3
+
+
+@final
+class Summariser:
+    """A handler class returning a value."""
+
+    async def __call__(self, message: IngestDocument, envelope: Envelope) -> str:
+        del message, envelope
+        return "summary"
+
+
+async def test_invoke_returns_what_a_class_handler_returned() -> None:
+    descriptor = HandlerDescriptor.of(Summariser)
+
+    assert await descriptor.invoke(Envelope(ingest_document())) == "summary"

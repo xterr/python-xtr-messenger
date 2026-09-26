@@ -69,8 +69,8 @@ class HandleMessageMiddleware(MiddlewareInterface):
             raise NoHandlerForMessageError(message_type, self._handled_type_names())
 
         for descriptor in descriptors:
-            await descriptor.invoke(envelope)
-            envelope = envelope.with_stamps(HandledStamp(descriptor.name))
+            result = await descriptor.invoke(envelope)
+            envelope = envelope.with_stamps(HandledStamp(descriptor.name, result))
         return await stack.next().handle(envelope, stack)
 
     def _handled_type_names(self) -> tuple[str, ...]:

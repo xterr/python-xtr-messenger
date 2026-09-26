@@ -11,7 +11,12 @@ __all__ = ["HandledStamp"]
 
 @dataclass(frozen=True, slots=True)
 class HandledStamp(NonSendableStampInterface):
-    """Records that a handler ran, and what it returned."""
+    """Records that a handler ran, and what it returned.
+
+    ``result`` is the handler's return value as it came back — never sent
+    anywhere, so it need not be serializable. ``None`` for a handler that
+    returns nothing.
+    """
 
     handler_name: str
-    result: str | None = None
+    result: object = None

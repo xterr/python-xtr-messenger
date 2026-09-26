@@ -122,3 +122,23 @@ async def test_it_defaults_to_the_process_wide_registry() -> None:
 
     assert seen == [message]
     assert result.last(HandledStamp) is not None
+
+
+async def test_each_handled_stamp_records_what_its_handler_returned() -> None:
+    registry = HandlersLocator()
+
+    async def counts(message: object) -> int:
+        del message
+        return 42
+
+    async def says_nothing(message: object) -> None:
+        del message
+
+    _ = registry.register(IngestDocument, counts, name="counts")
+    _ = registry.register(IngestDocument, says_nothing, name="silent")
+
+    result = await HandleMessageMiddleware(registry).handle(
+        Envelope(ingest_document()), OneStep(TerminalMiddleware())
+    )
+
+    assert result.all(HandledStamp) == (HandledStamp("counts", 42), HandledStamp("silent"))

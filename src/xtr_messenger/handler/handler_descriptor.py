@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Handler", "HandlerDescriptor"]
 
-Handler: TypeAlias = "Callable[..., Awaitable[None]]"
+Handler: TypeAlias = "Callable[..., Awaitable[object]]"
 
 _WITH_ENVELOPE = 2
 
@@ -59,12 +59,16 @@ class HandlerDescriptor:
             call=_built_once(handler) if isinstance(handler, type) else handler,
         )
 
-    async def invoke(self, envelope: Envelope) -> None:
-        """Call the handler with the message, and the envelope if it asked."""
+    async def invoke(self, envelope: Envelope) -> object:
+        """Call the handler with the message, and the envelope if it asked.
+
+        Returns:
+            What the handler returned, which the bus records on the
+            :class:`~xtr_messenger.stamp.HandledStamp` it leaves behind.
+        """
         if self.wants_envelope:
-            await self.call(envelope.message, envelope)
-        else:
-            await self.call(envelope.message)
+            return await self.call(envelope.message, envelope)
+        return await self.call(envelope.message)
 
 
 def _name_of(handler: Handler | type) -> str:
@@ -81,11 +85,11 @@ def _built_once(handler_type: type) -> Handler:
     """
     built: Handler | None = None
 
-    async def call(*args: object) -> None:
+    async def call(*args: object) -> object:
         nonlocal built
         if built is None:
             built = cast("Handler", handler_type())
-        await built(*args)
+        return await built(*args)
 
     return call
 
