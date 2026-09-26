@@ -58,15 +58,21 @@ from xtr_messenger.worker_factory import WorkerFactory
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["RECEIVER_TAG", "MessengerBundle"]
+__all__ = ["RECEIVER_TAG", "TRANSPORT_FACTORY_TAG", "MessengerBundle"]
 
 #: Tag a :class:`ReceiverInterface` service with this, and an ``alias``, for
 #: workers to consume it by that name beside the configured transports. The
 #: worker factory builds every tagged receiver, so building one must do no I/O.
 RECEIVER_TAG: Final = "messenger.receiver"
 
+#: Tag a :class:`TransportFactoryInterface` service with this — and alias it
+#: under that interface, qualified by the same name — for the bundle to consult
+#: it ahead of the factories discovery finds. What another bundle does to serve
+#: a scheme with services from the container.
+TRANSPORT_FACTORY_TAG: Final = "messenger.transport_factory"
+
 _HANDLES_TAG = "messenger.message_handler"
-_TRANSPORT_FACTORY_TAG = "messenger.transport_factory"
+_TRANSPORT_FACTORY_TAG = TRANSPORT_FACTORY_TAG
 _MESSENGER_CHANNEL = "messenger"
 
 
