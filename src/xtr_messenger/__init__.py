@@ -35,6 +35,7 @@ from .handler import (
     HandlersLocatorInterface,
     default_registry,
 )
+from .message import RedispatchMessage
 from .message_bus import MessageBus
 from .message_bus_config import MessageBusConfig
 from .message_bus_factory import MessageBusFactory
@@ -125,6 +126,7 @@ __all__ = [
     "ReceivedStamp",
     "ReceiverInterface",
     "RedeliveryStamp",
+    "RedispatchMessage",
     "SendMessageMiddleware",
     "SenderInterface",
     "SendersLocator",

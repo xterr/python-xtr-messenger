@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = ["as_message_handler"]
 
-HandlerT = TypeVar("HandlerT", bound="Callable[..., Awaitable[None]] | type")
+HandlerT = TypeVar("HandlerT", bound="Callable[..., Awaitable[object]] | type")
 
 
 def as_message_handler(

@@ -464,6 +464,31 @@ under its class name, so two declared stamps may not share one. A
 `NonSendableStampInterface` stamp never leaves the process and cannot be declared.
 `JsonSerializer(stamp_types=[...])` restores exactly the list given, declarations ignored.
 
+### Redispatching a message
+
+`RedispatchMessage` asks for a message to be dispatched again, **through routing**. Something
+that produces messages on a worker — a scheduler, a fan-out handler — decides only that a
+message goes out; routing decides where:
+
+```python
+from xtr_messenger import RedispatchMessage
+
+RedispatchMessage(BuildReport(report_id))  # wherever routing sends BuildReport
+RedispatchMessage(BuildReport(report_id), "urgent")  # to the "urgent" transport only
+```
+
+Handling it dispatches the carried envelope — or bare message — through a bus that routes,
+with the stamps that describe the current process (`ReceivedStamp` above all) removed, and a
+`TransportNamesStamp` when transports are named. The handler returns what the carried
+message's handler returned, when it was handled rather than sent.
+
+Nothing needs declaring: every bus from `MessageBusFactory` handles a redispatch through
+itself, and every worker from `WorkerFactory` through a publishing bus it builds from the same
+configuration on the first redispatch — a worker that never redispatches opens no extra
+connection. With a [kernel](#kernel--bundle) the container's bus does it. A `RedispatchMessage`
+holds an envelope, which no codec carries, so handle it in the process that creates it rather
+than routing it to a remote transport.
+
 ## Validating messages
 
 Dataclass messages are checked for **shape** by msgspec: a missing or wrongly typed field
@@ -762,6 +787,7 @@ xtr_messenger/
 ├── dsn.py                   reading a transport's DSN
 ├── decorator/               @as_message, @as_message_handler, @as_middleware, @as_stamp
 ├── event/                   what a worker announces about itself and each message
+├── message/                 messages the library handles itself: RedispatchMessage
 ├── handler/                 which function handles which message, and how to call it
 ├── middleware/              routing, handling, logging, the chain cursor
 ├── stamp/                   one class per module

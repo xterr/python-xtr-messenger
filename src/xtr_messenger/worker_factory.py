@@ -5,7 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 from .exception import NotConsumableError, UnknownTransportError
+from .handler import RedispatchingHandlers, default_registry
 from .message_bus import MessageBus
+from .message_bus_factory import MessageBusFactory
 from .middleware import HandleMessageMiddleware
 from .middleware.named import chain, named_middleware
 from .transport.receiver.chained_receiver import ChainedReceiver
@@ -55,6 +57,7 @@ class WorkerFactory:
         "_event_dispatcher",
         "_handlers",
         "_named",
+        "_publishing",
         "_resetter",
         "_transports",
     )
@@ -92,6 +95,7 @@ class WorkerFactory:
         self._named = named_middleware(logger, named)
         self._resetter = resetter
         self._event_dispatcher = event_dispatcher
+        self._publishing: MessageBusInterface | None = None
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -133,7 +137,13 @@ class WorkerFactory:
         A handler that publishes does so through the bus it was given, which
         is the producing one built by
         :class:`~xtr_messenger.message_bus_factory.MessageBusFactory`. Pass
-        ``bus`` to supply that here instead, composed already.
+        ``bus`` to supply that here instead, composed already — handling a
+        :class:`~xtr_messenger.message.RedispatchMessage` is then that
+        bus's business too.
+
+        Otherwise a :class:`~xtr_messenger.message.RedispatchMessage` with
+        no handler of its own is dispatched again through a publishing bus
+        built from this factory's configuration, on first use.
 
         Raises:
             UnknownMiddlewareError: If the configuration names middleware
@@ -141,9 +151,25 @@ class WorkerFactory:
         """
         if self._bus is not None:
             return self._bus
+        handlers = self._handlers if self._handlers is not None else default_registry()
+        handling = RedispatchingHandlers(handlers, self._publishing_bus)
         return MessageBus(
-            chain(self._config, self._named, lambda: [HandleMessageMiddleware(self._handlers)])
+            chain(self._config, self._named, lambda: [HandleMessageMiddleware(handling)])
         )
+
+    def _publishing_bus(self) -> MessageBusInterface:
+        """Return the bus a redispatch goes out through, built on the first one.
+
+        A redispatch must be routed, which the worker's own bus never does.
+        Built from the same configuration, transports and handlers, so it
+        routes exactly as the application's publishing bus does — and only
+        when needed, since it opens every sender's connection.
+        """
+        if self._publishing is None:
+            self._publishing = MessageBusFactory(
+                self._config, [self._transports], self._handlers, named=self._named
+            ).bus()
+        return self._publishing
 
     def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
         transports = self._config.transports

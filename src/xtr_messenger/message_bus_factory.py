@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
+from .handler import RedispatchingHandlers, default_registry
 from .message_bus import MessageBus
 from .middleware.handle_message_middleware import HandleMessageMiddleware
 from .middleware.named import chain, named_middleware
@@ -82,15 +83,22 @@ class MessageBusFactory:
                 ``named`` has nothing registered for.
             UnsupportedDsnError: If no factory recognises a transport's DSN.
         """
-        return MessageBus(chain(self._config, self._named, self._routing_and_handling))
+        built: list[MessageBus] = []
+        bus = MessageBus(
+            chain(self._config, self._named, lambda: self._routing_and_handling(built))
+        )
+        built.append(bus)
+        return bus
 
-    def _routing_and_handling(self) -> list[MiddlewareInterface]:
+    def _routing_and_handling(self, built: list[MessageBus]) -> list[MiddlewareInterface]:
+        """Route, then handle — a redispatch handled by dispatching through this same bus."""
         send = SendMessageMiddleware(
             self._locator(),
             require_sender=self._config.require_sender,
             handle_unrouted=self._config.handle_unrouted,
         )
-        return [send, HandleMessageMiddleware(self._handlers)]
+        handlers = self._handlers if self._handlers is not None else default_registry()
+        return [send, HandleMessageMiddleware(RedispatchingHandlers(handlers, lambda: built[0]))]
 
     def _locator(self) -> SendersLocatorInterface:
         return SendersLocator(self._config.routing, self._senders())

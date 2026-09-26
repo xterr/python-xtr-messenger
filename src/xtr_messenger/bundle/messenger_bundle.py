@@ -37,6 +37,8 @@ from xtr_service_contracts import ContainerInterface
 from xtr_messenger.handler.handler_descriptor import Handler, HandlerDescriptor
 from xtr_messenger.handler.handlers_locator import HandlersLocator
 from xtr_messenger.handler.handlers_registry import handlers_declared_on
+from xtr_messenger.handler.redispatch_message_handler import RedispatchMessageHandler
+from xtr_messenger.message import RedispatchMessage
 from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.message_bus_factory import MessageBusFactory
 from xtr_messenger.message_bus_interface import MessageBusInterface
@@ -207,8 +209,17 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         services: ServiceConfigurator,
         builder: ContainerBuilder,
     ) -> None:
-        """Register the shared TransportFactory, bus, worker factory, and command."""
+        """Register the shared TransportFactory, bus, worker factory, and command.
+
+        The redispatch handler is registered here rather than declared, so the
+        container builds it with the container's publishing bus — the factories
+        then find a handler for :class:`RedispatchMessage` and add none of their own.
+        """
         del config
+        _ = self._handlers.register(RedispatchMessage, RedispatchMessageHandler)
+        _ = services.set(RedispatchMessageHandler).add_tag(
+            _HANDLES_TAG, handles=qualified_name(RedispatchMessage)
+        )
         _ = services.instance(self._handlers)
         _ = services.set(_combined_transport_factory)
         _ = services.set(_named_middleware)
