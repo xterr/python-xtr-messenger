@@ -47,16 +47,18 @@ def test_settings_are_a_read_only_mapping() -> None:
     assert isinstance(settings, MappingProxyType)
 
 
-def test_the_dsn_is_parsed_once_and_kept() -> None:
+def test_the_dsn_is_parsed_when_read() -> None:
     spec = TransportConfig("amqp://rabbit:5672/?queue=jobs")
 
     assert isinstance(spec.parsed, Dsn)
     assert spec.parsed.scheme == "amqp"
 
 
-def test_a_malformed_dsn_is_refused_when_the_config_is_built() -> None:
-    """The DSN is read in __post_init__, so a bad one fails where it is written."""
+def test_a_malformed_dsn_is_refused_when_the_transport_reads_it() -> None:
+    """A DSN often arrives from the environment, read only when a transport is built."""
+    spec = TransportConfig("just-a-host")
+
     with pytest.raises(InvalidDsnError) as excinfo:
-        _ = TransportConfig("just-a-host")
+        _ = spec.parsed
 
     assert excinfo.value.dsn == "just-a-host"

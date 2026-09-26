@@ -36,34 +36,40 @@ class TransportConfig:
         options: Adapter settings, overriding any of the same name in the
             DSN. Values are strings so that both sources read alike and a
             setting can move between them without changing meaning.
-        parsed: The DSN, read once when the configuration is made.
-        settings: Every adapter setting — the DSN's, then ``options``, then
-            ``queue`` — as one read-only mapping.
     """
 
     dsn: str
     queue: str | None = None
     options: Mapping[str, str] = field(default_factory=_no_options)
-    parsed: Dsn = field(init=False, repr=False, compare=False)
-    settings: Mapping[str, str] = field(init=False, repr=False, compare=False)
 
-    def __post_init__(self) -> None:
-        """Read the DSN once, so a malformed one fails where it is written.
+    @property
+    def parsed(self) -> Dsn:
+        """The DSN, read when a transport is built from it.
 
-        ``settings`` merges every adapter setting, from the DSN and from
-        ``options``. ``options`` wins on conflict, so a DSN held in an
-        environment variable can be overridden in code without editing it.
+        Not read when the config is written: a DSN usually comes from an
+        environment variable, which a container reads only when the transport
+        is needed.
 
         Raises:
             InvalidDsnError: If the DSN carries no scheme.
         """
-        parsed = Dsn.parse(self.dsn)
-        merged = dict(parsed.options)
+        return Dsn.parse(self.dsn)
+
+    @property
+    def settings(self) -> Mapping[str, str]:
+        """Every adapter setting, from the DSN and from ``options``, read-only.
+
+        ``options`` wins on conflict, so a DSN held in an environment variable
+        can be overridden in code without editing it.
+
+        Raises:
+            InvalidDsnError: If the DSN carries no scheme.
+        """
+        merged = dict(self.parsed.options)
         merged.update(self.options)
         if self.queue is not None:
             merged["queue"] = self.queue
-        object.__setattr__(self, "parsed", parsed)
-        object.__setattr__(self, "settings", MappingProxyType(merged))
+        return MappingProxyType(merged)
 
     @property
     def queue_name(self) -> str | None:
