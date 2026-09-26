@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
     "msgspec>=0.18",
     "typing-extensions>=4.4",
+    "xtr-event-dispatcher-contracts>=1.0,<2",
     "xtr-logging-contracts>=1.0,<2",
 ]
 
@@ -65,6 +66,7 @@ dev = [
     "ty>=0.0.83",
     "xtr-console>=1.0,<2",
     "xtr-dependency-injection>=1.0,<2",
+    "xtr-event-dispatcher>=1.0,<2",
     "xtr-logging>=1.0,<2",
 ]
 

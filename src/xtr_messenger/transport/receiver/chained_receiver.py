@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from xtr_messenger.stamp import AckReceiptStamp
+from xtr_messenger.stamp import AckReceiptStamp, ReceivedStamp
 
 from .receiver_interface import ReceiverInterface
 
@@ -33,22 +33,39 @@ class ChainedReceiver(ReceiverInterface):
     including after later messages have already been settled.
     """
 
-    __slots__ = ("_outstanding", "_receivers", "_tickets")
+    __slots__ = ("_names", "_outstanding", "_receivers", "_tickets")
 
-    def __init__(self, receivers: Sequence[ReceiverInterface]) -> None:
-        """Drain ``receivers`` in the order given."""
+    def __init__(
+        self,
+        receivers: Sequence[ReceiverInterface],
+        names: Sequence[str] | None = None,
+    ) -> None:
+        """Drain ``receivers`` in the order given.
+
+        ``names``, one per receiver, are the transport names they serve: each
+        message is stamped with a :class:`~xtr_messenger.stamp.ReceivedStamp`
+        naming the transport it came from, so a worker draining several can
+        tell which one a message belongs to.
+
+        Raises:
+            ValueError: If ``names`` does not name every receiver exactly once.
+        """
         self._receivers = tuple(receivers)
+        self._names = tuple(names) if names is not None else None
+        if self._names is not None and len(self._names) != len(self._receivers):
+            raise ValueError("ChainedReceiver needs one name per receiver")
         self._outstanding: dict[int, tuple[ReceiverInterface, Envelope]] = {}
         self._tickets = count(1)
 
     @override
     async def get(self) -> AsyncIterator[Envelope]:
         """Yield from each receiver in turn, tagging every message with a ticket."""
-        for receiver in self._receivers:
+        for position, receiver in enumerate(self._receivers):
+            named = () if self._names is None else (ReceivedStamp(self._names[position]),)
             async for envelope in receiver.get():
                 ticket = next(self._tickets)
                 self._outstanding[ticket] = (receiver, envelope)
-                yield envelope.with_stamps(AckReceiptStamp(ticket))
+                yield envelope.with_stamps(*named, AckReceiptStamp(ticket))
 
     @override
     async def ack(self, envelope: Envelope) -> None:

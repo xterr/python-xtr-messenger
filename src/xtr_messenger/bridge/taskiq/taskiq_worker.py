@@ -9,12 +9,14 @@ from typing import TYPE_CHECKING, Final, final
 from taskiq.receiver import Receiver
 from typing_extensions import override
 
+from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
 from xtr_messenger.worker_interface import WorkerInterface
 
 from .broker import forget_started
 
 if TYPE_CHECKING:
     from taskiq import AsyncBroker
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
 __all__ = ["TaskiqWorker", "default_max_async_tasks"]
 
@@ -55,19 +57,28 @@ class TaskiqWorker(WorkerInterface):
     application does.
     """
 
-    __slots__ = ("_broker", "_finished", "_max_async_tasks", "_max_prefetch")
+    __slots__ = ("_broker", "_dispatcher", "_finished", "_max_async_tasks", "_max_prefetch")
 
     def __init__(
         self,
         broker: AsyncBroker,
         max_async_tasks: int | None = None,
         max_prefetch: int = 0,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> None:
         """Consume from ``broker``, handling at most ``max_async_tasks`` at once.
 
         ``None`` is :func:`default_max_async_tasks` — never unbounded, which
         taskiq warns can end in undefined behaviour.
+
+        ``event_dispatcher`` hears this worker start and stop. The events
+        about each message come from the tasks
+        :func:`~xtr_messenger.bridge.taskiq.binding.bind_bus` registers; a
+        running event after each message is not dispatched, since taskiq
+        runs messages concurrently and reports none of them back here.
         """
+        self._dispatcher = event_dispatcher
         self._broker = broker
         self._max_async_tasks = (
             max_async_tasks if max_async_tasks is not None else default_max_async_tasks()
@@ -121,6 +132,8 @@ class TaskiqWorker(WorkerInterface):
             run_startup=True,
         )
         try:
+            if self._dispatcher is not None:
+                _ = await self._dispatcher.dispatch(WorkerStartedEvent(self))
             await receiver.listen(self._finished)
         finally:
             try:
@@ -129,6 +142,8 @@ class TaskiqWorker(WorkerInterface):
                 forget_started(self._broker)
                 self._broker.is_worker_process = claimed
                 self._finished = None
+                if self._dispatcher is not None:
+                    _ = await self._dispatcher.dispatch(WorkerStoppedEvent(self))
 
     @override
     def stop(self) -> None:

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
+
     from .message_bus_interface import MessageBusInterface
     from .transport.transport_config import TransportConfig
     from .worker_interface import WorkerInterface
@@ -34,6 +36,13 @@ class WorkerProvidingInterface(Protocol):
         self,
         group: Mapping[str, TransportConfig],
         bus: MessageBusInterface,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> WorkerInterface:
-        """Build what a worker process runs to consume exactly ``group``."""
+        """Build what a worker process runs to consume exactly ``group``.
+
+        ``event_dispatcher``, when given, hears the worker events of
+        :mod:`xtr_messenger.event` — for every message, and for the worker
+        starting and stopping — the same as from the library's own worker.
+        """
         ...

@@ -18,6 +18,8 @@ from xtr_messenger.transport.in_memory import InMemoryTransport
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
+
     from xtr_messenger import MessageBusInterface, WorkerInterface
     from xtr_messenger.transport.sender import SenderInterface
 
@@ -53,7 +55,11 @@ class WorkerBringingFactory(TransportFactoryInterface, WorkerProvidingInterface)
 
     @override
     def worker(
-        self, group: Mapping[str, TransportConfig], bus: MessageBusInterface
+        self,
+        group: Mapping[str, TransportConfig],
+        bus: MessageBusInterface,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> WorkerInterface:
         raise NotImplementedError
 

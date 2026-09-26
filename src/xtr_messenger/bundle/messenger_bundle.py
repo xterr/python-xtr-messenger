@@ -5,7 +5,8 @@ An application listing :class:`MessengerBundle` in its ``bundles.py`` gets a
 scan finds already wired to the container. When the console bundle is
 active, ``messenger:consume`` is registered too; when the logging bundle is,
 the ``"messenger"`` channel is added to its config and the logging
-middleware writes through that channel's logger.
+middleware writes through that channel's logger; when the event dispatcher
+bundle is, every worker announces itself and its messages through it.
 """
 
 from __future__ import annotations
@@ -25,9 +26,11 @@ from xtr_dependency_injection import (
     as_bundle,
     bind_callable,
     bundle_active,
+    optional_service,
     qualified_name,
     required_bundle,
 )
+from xtr_event_dispatcher_contracts import EventDispatcherInterface
 from xtr_logging_contracts import LoggerInterface
 from xtr_service_contracts import ContainerInterface
 
@@ -135,6 +138,7 @@ async def _named_from_config(
 @final
 @required_bundle("xtr_logging.bundle:LoggingBundle", ignore_on_invalid=True)
 @required_bundle("xtr_console.bundle:ConsoleBundle", ignore_on_invalid=True)
+@required_bundle("xtr_event_dispatcher.bundle:EventDispatcherBundle", ignore_on_invalid=True)
 @as_bundle("messenger", config=MessageBusConfig)
 class MessengerBundle(Bundle[MessageBusConfig]):
     """Turns a :class:`MessageBusConfig` into a bus and worker factory in the container."""
@@ -273,20 +277,26 @@ def _message_bus(
     return MessageBusFactory(config, [transports], handlers, named=named.builders).bus()
 
 
-def _worker_factory(
+async def _worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per injected service
     config: MessageBusConfig,
     handlers: HandlersLocator,
     transports: TransportFactory,
     named: _NamedMiddleware,
     resetter: ServicesResetter,
+    container: ContainerInterface,
 ) -> WorkerFactory:
-    """Build the worker factory — every worker resets services after each message."""
+    """Build the worker factory — every worker resets services after each message.
+
+    Workers announce themselves and their messages through the event
+    dispatcher when the container has one, and stay silent otherwise.
+    """
     return WorkerFactory(
         config,
         [transports],
         handlers,
         named=named.builders,
         resetter=cast("AsyncResetter", resetter),
+        event_dispatcher=await optional_service(container, EventDispatcherInterface),
     )
 
 

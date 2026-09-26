@@ -7,11 +7,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 from taskiq import InMemoryBroker
+from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.fakes import RecordingBus
 from tests.support.messages import ingest_document
 from xtr_messenger import (
     Envelope,
+    ErrorDetailsStamp,
     JsonSerializer,
     MessageDecodingFailedError,
     ReceivedStamp,
@@ -19,7 +21,13 @@ from xtr_messenger import (
 )
 from xtr_messenger.bridge.taskiq.binding import bind_bus
 from xtr_messenger.bridge.taskiq.broker import forget_started
-from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, RETRIES_LABEL
+from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
+from xtr_messenger.event import (
+    AbstractWorkerMessageEvent,
+    WorkerMessageFailedEvent,
+    WorkerMessageHandledEvent,
+    WorkerMessageReceivedEvent,
+)
 from xtr_messenger.message_registry import declared_names
 
 if TYPE_CHECKING:
@@ -182,3 +190,121 @@ async def test_binding_twice_lets_the_last_bus_win(broker: InMemoryBroker) -> No
     assert names_first == names_second
     assert first.dispatched == []
     assert len(second.dispatched) == 1
+
+
+def _names_seen(dispatcher: EventDispatcher) -> list[str]:
+    seen: list[str] = []
+
+    def record(event: AbstractWorkerMessageEvent) -> None:
+        seen.append(f"{type(event).__name__}:{event.receiver_name}")
+
+    for event_type in (
+        WorkerMessageReceivedEvent,
+        WorkerMessageHandledEvent,
+        WorkerMessageFailedEvent,
+    ):
+        dispatcher.add_listener(event_type, record)
+    return seen
+
+
+async def test_a_task_announces_its_message_as_the_library_worker_does(
+    broker: InMemoryBroker,
+) -> None:
+    dispatcher = EventDispatcher()
+    seen = _names_seen(dispatcher)
+    _ = bind_bus(broker, RecordingBus(), event_dispatcher=dispatcher, receiver_names={None: "jobs"})
+    body, headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+
+    assert seen == ["WorkerMessageReceivedEvent:jobs", "WorkerMessageHandledEvent:jobs"]
+
+
+async def test_the_received_stamp_names_the_transport_by_its_queue(
+    broker: InMemoryBroker,
+) -> None:
+    bus = RecordingBus()
+    _ = bind_bus(broker, bus, receiver_names={None: "default", "urgent": "high"})
+    body, headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+    _ = await _kick(
+        broker,
+        _INGEST,
+        body,
+        **{RETRIES_LABEL: 0, HEADERS_LABEL: headers, QUEUE_LABEL: "urgent"},
+    )
+
+    assert [e.last(ReceivedStamp) for e in bus.dispatched] == [
+        ReceivedStamp("default"),
+        ReceivedStamp("high"),
+    ]
+
+
+async def test_a_queue_no_transport_serves_reads_as_taskiq(broker: InMemoryBroker) -> None:
+    bus = RecordingBus()
+    _ = bind_bus(broker, bus, receiver_names={"a": "first", "b": "second"})
+    body, headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+
+    assert bus.dispatched[0].last(ReceivedStamp) == ReceivedStamp("taskiq")
+
+
+async def test_a_skipped_message_returns_normally_without_dispatching(
+    broker: InMemoryBroker,
+) -> None:
+    dispatcher = EventDispatcher()
+
+    def skip(event: WorkerMessageReceivedEvent) -> None:
+        _ = event.should_handle(value=False)
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, skip)
+    bus = RecordingBus()
+    _ = bind_bus(broker, bus, event_dispatcher=dispatcher)
+    body, headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+    result = await handle.wait_result()
+
+    assert not result.is_err
+    assert bus.dispatched == []
+
+
+@pytest.mark.parametrize(
+    ("attempt", "will_retry"),
+    [(0, True), (1, True), (2, False)],
+)
+async def test_a_failure_is_announced_then_raised_saying_whether_it_is_retried(
+    broker: InMemoryBroker, attempt: int, will_retry: bool
+) -> None:
+    dispatcher = EventDispatcher()
+    failures: list[WorkerMessageFailedEvent] = []
+    dispatcher.add_listener(WorkerMessageFailedEvent, failures.append)
+    _ = bind_bus(
+        broker,
+        RecordingBus(failure=RuntimeError("boom")),
+        event_dispatcher=dispatcher,
+        max_attempts=3,
+    )
+    body, headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: attempt, HEADERS_LABEL: headers})
+    result = await handle.wait_result()
+
+    assert isinstance(result.error, RuntimeError)
+    [failed] = failures
+    assert failed.will_retry is will_retry
+    assert failed.envelope.last(ErrorDetailsStamp) == ErrorDetailsStamp("RuntimeError", "boom")
+
+
+async def test_without_max_attempts_no_failure_claims_a_retry(broker: InMemoryBroker) -> None:
+    dispatcher = EventDispatcher()
+    failures: list[WorkerMessageFailedEvent] = []
+    dispatcher.add_listener(WorkerMessageFailedEvent, failures.append)
+    _ = bind_bus(broker, RecordingBus(failure=RuntimeError("boom")), event_dispatcher=dispatcher)
+    body, headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+
+    assert failures[0].will_retry is False

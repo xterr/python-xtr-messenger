@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from tests.support.fakes import StubReceiver
-from xtr_messenger import AckReceiptStamp, Envelope, ErrorDetailsStamp
+from xtr_messenger import AckReceiptStamp, Envelope, ErrorDetailsStamp, ReceivedStamp
 from xtr_messenger.transport.receiver.chained_receiver import ChainedReceiver
 
 pytestmark = pytest.mark.anyio
@@ -127,3 +127,21 @@ async def test_settling_the_same_message_twice_is_a_no_op() -> None:
     await chained.ack(collected[0])
 
     assert len(origin.acked) == 1
+
+
+async def test_named_receivers_stamp_each_message_with_its_transport() -> None:
+    chained = ChainedReceiver(
+        [StubReceiver([Envelope("a")]), StubReceiver([Envelope("b")])], ["first", "second"]
+    )
+
+    collected = [envelope async for envelope in chained.get()]
+
+    assert [e.last(ReceivedStamp) for e in collected] == [
+        ReceivedStamp("first"),
+        ReceivedStamp("second"),
+    ]
+
+
+def test_names_must_match_the_receivers_one_for_one() -> None:
+    with pytest.raises(ValueError, match="one name per receiver"):
+        _ = ChainedReceiver([StubReceiver()], ["a", "b"])

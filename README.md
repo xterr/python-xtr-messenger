@@ -5,7 +5,7 @@
 **A message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
 <img alt="python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A5%203.11-3776AB?logo=python&logoColor=white">
-<img alt="core dependencies: 3" src="https://img.shields.io/badge/core%20deps-3-3FB950">
+<img alt="core dependencies: 4" src="https://img.shields.io/badge/core%20deps-4-3FB950">
 <img alt="typed" src="https://img.shields.io/badge/typed-ty%20%2B%20basedpyright-1f6feb">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue">
 
@@ -22,8 +22,8 @@ Dispatch wraps a message in an **envelope** and walks it through a **middleware 
 middleware records what it did by appending a **stamp**. A **routing table** maps a message
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
-- 🪶 **Three core dependencies** — `msgspec`, `typing-extensions` and `xtr-logging-contracts`,
-  which is the logging interface alone. A broker is an extra.
+- 🪶 **Four core dependencies** — `msgspec`, `typing-extensions`, and two interface-only
+  packages, `xtr-logging-contracts` and `xtr-event-dispatcher-contracts`. A broker is an extra.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
@@ -49,7 +49,7 @@ uv add "xtr-messenger[console]"         # + the messenger:consume console comman
 
 | Extra | Brings | For |
 | --- | --- | --- |
-| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging-contracts` | `sync://`, `in-memory://`, the whole core |
+| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core |
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
 | `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
 | `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
@@ -307,6 +307,41 @@ On AMQP that means a retry ladder and real dead-lettering. When attempts run out
 is republished to `taskiq.dlq` — or the `dead_letter_queue` you name — in its original wire
 format, so it can be inspected and replayed. A handler that asks for the envelope sees which
 attempt it is on in its `RedeliveryStamp`.
+
+### Worker events
+
+Give a worker an event dispatcher — any `EventDispatcherInterface`, such as
+[xtr-event-dispatcher](../xtr-event-dispatcher)'s — and it announces itself and every message:
+
+| Event | When | A listener can |
+| --- | --- | --- |
+| `WorkerStartedEvent` | once, as the worker starts | |
+| `WorkerMessageReceivedEvent` | a message was collected | add stamps; `should_handle(value=False)` to skip it |
+| `WorkerMessageHandledEvent` | handled, before it is acknowledged | add stamps |
+| `WorkerMessageFailedEvent` | handling raised, before it is rejected | read `error`, `will_retry`; add stamps |
+| `WorkerRunningEvent` | after each message is settled | `event.worker.stop()` |
+| `WorkerStoppedEvent` | once, however the worker stopped | |
+
+```python
+from xtr_event_dispatcher import EventDispatcher
+from xtr_messenger.event import WorkerMessageFailedEvent
+
+events = EventDispatcher()
+events.add_listener(WorkerMessageFailedEvent, lambda e: alert(e.receiver_name, e.error))
+
+worker = WorkerFactory(CONFIG, event_dispatcher=events).worker(["high"])
+```
+
+A skipped message is **acknowledged**, not rejected: skipping is a decision, and a rejection
+sends a message wherever failed ones go. A listener raising while a message is received or
+handled fails that message like a handler would; one raising on a failure is a bug in the
+listener, so the message is rejected first and the exception stops the worker.
+
+Each message event names the transport it came from in `receiver_name`. The events are the
+same under taskiq's worker, where they come from the task running the message: a failure
+there is announced, then raised for taskiq's retry and dead-letter middleware, and
+`will_retry` says whether another attempt follows. taskiq runs messages concurrently and
+reports none back to the worker, so no `WorkerRunningEvent` is dispatched there.
 
 ## Shaping the bus
 
@@ -646,8 +681,11 @@ async def ingest(
 A **handler class** is a singleton: its constructor takes what lives as long as the handler
 (plain parameters), and anything a single message needs goes on `__call__` as `Injected[T]`.
 
-`@required_bundle` pulls in the logging and console bundles when installed; the logging
-middleware writes through a ``"messenger"`` channel added to logging's config automatically.
+`@required_bundle` pulls in the logging, console and event dispatcher bundles when installed;
+the logging middleware writes through a ``"messenger"`` channel added to logging's config
+automatically, and with the event dispatcher bundle active every worker announces
+[its events](#worker-events) through the container's dispatcher — a subscriber in the
+application hears them with no wiring.
 
 Middleware referred to by name in the config is resolved from the container: give the class
 a name with `@as_middleware("audit")`, or register it under `(MiddlewareInterface, name)`
@@ -697,6 +735,7 @@ xtr_messenger/
 ├── worker.py                the other loop — collect, dispatch, ack or reject
 ├── dsn.py                   reading a transport's DSN
 ├── decorator/               @as_message, @as_message_handler
+├── event/                   what a worker announces about itself and each message
 ├── handler/                 which function handles which message, and how to call it
 ├── middleware/              routing, handling, logging, the chain cursor
 ├── stamp/                   one class per module

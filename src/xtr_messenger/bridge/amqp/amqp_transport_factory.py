@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from taskiq_aio_pika import AioPikaBroker
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from xtr_messenger.dsn import Dsn
     from xtr_messenger.message_bus_interface import MessageBusInterface
@@ -88,6 +89,8 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         self,
         group: Mapping[str, TransportConfig],
         bus: MessageBusInterface,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> WorkerInterface:
         """Build a runnable worker consuming only ``group``.
 
@@ -101,13 +104,27 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         calling this; a message that has not been declared cannot be bound.
         It handles at most ``max_async_tasks`` messages at once.
 
+        ``event_dispatcher`` hears the worker events, each message reported
+        as received from the transport whose queue it arrived on.
+
         Raises:
             MixedDsnError: If the transports do not share one connection.
         """
         options = self._options_for(group)
         broker = self._broker_for(group, options)
-        _ = bind_bus(broker, bus, self._wire())
-        return TaskiqWorker(broker, max_async_tasks=options.max_async_tasks)
+        _ = bind_bus(
+            broker,
+            bus,
+            self._wire(),
+            event_dispatcher=event_dispatcher,
+            receiver_names={spec.queue_name: name for name, spec in group.items()},
+            max_attempts=options.reliability.max_attempts,
+        )
+        return TaskiqWorker(
+            broker,
+            max_async_tasks=options.max_async_tasks,
+            event_dispatcher=event_dispatcher,
+        )
 
     def _wire(self) -> SerializerInterface:
         """Return the serializer both halves of this transport use.

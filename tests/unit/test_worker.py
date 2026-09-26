@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
+from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.fakes import RecordingBus, StubReceiver
 from xtr_messenger import (
+    DelayStamp,
     Envelope,
     ErrorDetailsStamp,
     MessageBusInterface,
@@ -18,6 +20,14 @@ from xtr_messenger import (
     StampInterface,
     Worker,
     WorkerInterface,
+)
+from xtr_messenger.event import (
+    WorkerMessageFailedEvent,
+    WorkerMessageHandledEvent,
+    WorkerMessageReceivedEvent,
+    WorkerRunningEvent,
+    WorkerStartedEvent,
+    WorkerStoppedEvent,
 )
 
 if TYPE_CHECKING:
@@ -259,3 +269,161 @@ async def test_cancellation_propagates_and_leaves_the_message_unsettled() -> Non
 async def test_a_receiver_that_raises_while_collecting_propagates_out_of_run() -> None:
     with pytest.raises(RuntimeError, match="cannot collect"):
         await Worker(RecordingBus(), ExplodingReceiver()).run()
+
+
+def _recording(dispatcher: EventDispatcher, seen: list[str], *events: type) -> None:
+    def listener(event: object) -> None:
+        name = type(event).__name__.removeprefix("Worker").removesuffix("Event")
+        seen.append(name)
+
+    for event_type in events:
+        dispatcher.add_listener(event_type, listener)
+
+
+_EVERY_EVENT = (
+    WorkerStartedEvent,
+    WorkerMessageReceivedEvent,
+    WorkerMessageHandledEvent,
+    WorkerMessageFailedEvent,
+    WorkerRunningEvent,
+    WorkerStoppedEvent,
+)
+
+
+async def test_it_announces_itself_and_every_message_in_order() -> None:
+    dispatcher = EventDispatcher()
+    seen: list[str] = []
+    _recording(dispatcher, seen, *_EVERY_EVENT)
+
+    await Worker(RecordingBus(), StubReceiver([Envelope("a")]), event_dispatcher=dispatcher).run()
+
+    assert seen == ["Started", "MessageReceived", "MessageHandled", "Running", "Stopped"]
+
+
+async def test_a_failure_is_announced_with_its_reason_before_rejecting() -> None:
+    dispatcher = EventDispatcher()
+    failures: list[WorkerMessageFailedEvent] = []
+    dispatcher.add_listener(WorkerMessageFailedEvent, failures.append)
+    receiver = StubReceiver([Envelope("a")])
+
+    await Worker(
+        RecordingBus(failure=ValueError("boom")), receiver, event_dispatcher=dispatcher
+    ).run()
+
+    [failed] = failures
+    assert isinstance(failed.error, ValueError)
+    assert failed.will_retry is False
+    assert failed.envelope.last(ErrorDetailsStamp) == ErrorDetailsStamp("ValueError", "boom")
+    assert receiver.rejected == [failed.envelope]
+
+
+async def test_a_skipped_message_is_acknowledged_and_never_dispatched() -> None:
+    dispatcher = EventDispatcher()
+
+    def skip(event: WorkerMessageReceivedEvent) -> None:
+        _ = event.should_handle(value=False)
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, skip)
+    receiver = StubReceiver([Envelope("a")])
+    bus = RecordingBus()
+
+    await Worker(bus, receiver, event_dispatcher=dispatcher).run()
+
+    assert bus.dispatched == []
+    assert receiver.acked == [Envelope("a")]
+    assert receiver.rejected == []
+
+
+async def test_stamps_a_listener_adds_reach_the_bus_and_the_acknowledgement() -> None:
+    dispatcher = EventDispatcher()
+
+    def stamp_received(event: WorkerMessageReceivedEvent) -> None:
+        event.add_stamps(DelayStamp(1))
+
+    def stamp_handled(event: WorkerMessageHandledEvent) -> None:
+        event.add_stamps(DelayStamp(2))
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, stamp_received)
+    dispatcher.add_listener(WorkerMessageHandledEvent, stamp_handled)
+    receiver = StubReceiver([Envelope("a")])
+    bus = RecordingBus()
+
+    await Worker(bus, receiver, event_dispatcher=dispatcher).run()
+
+    assert bus.dispatched[0].all(DelayStamp) == (DelayStamp(1),)
+    assert receiver.acked[0].all(DelayStamp) == (DelayStamp(1), DelayStamp(2))
+
+
+async def test_a_received_listener_raising_fails_that_message_only() -> None:
+    dispatcher = EventDispatcher()
+
+    def refuse(event: WorkerMessageReceivedEvent) -> None:
+        if event.envelope.message == "bad":
+            raise ValueError("listener")
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, refuse)
+    receiver = StubReceiver([Envelope("bad"), Envelope("good")])
+    bus = RecordingBus()
+
+    await Worker(bus, receiver, event_dispatcher=dispatcher).run()
+
+    assert [e.message for e in bus.dispatched] == ["good"]
+    assert [e.message for e in receiver.rejected] == ["bad"]
+    assert [e.message for e in receiver.acked] == ["good"]
+
+
+async def test_a_failed_listener_raising_rejects_first_then_stops_the_worker() -> None:
+    dispatcher = EventDispatcher()
+
+    def broken(event: WorkerMessageFailedEvent) -> None:
+        del event
+        raise RuntimeError("listener bug")
+
+    dispatcher.add_listener(WorkerMessageFailedEvent, broken)
+    stopped: list[WorkerStoppedEvent] = []
+    dispatcher.add_listener(WorkerStoppedEvent, stopped.append)
+    receiver = StubReceiver([Envelope("a"), Envelope("b")])
+
+    with pytest.raises(RuntimeError, match="listener bug"):
+        await Worker(
+            RecordingBus(failure=ValueError("boom")), receiver, event_dispatcher=dispatcher
+        ).run()
+
+    assert [e.message for e in receiver.rejected] == ["a"]
+    assert len(stopped) == 1
+
+
+async def test_a_running_listener_can_stop_the_worker_between_messages() -> None:
+    dispatcher = EventDispatcher()
+    receiver = StubReceiver([Envelope("a"), Envelope("b")])
+    bus = RecordingBus()
+
+    def stop(event: WorkerRunningEvent) -> None:
+        event.worker.stop()
+
+    dispatcher.add_listener(WorkerRunningEvent, stop)
+
+    await Worker(bus, receiver, event_dispatcher=dispatcher).run()
+
+    assert [e.message for e in bus.dispatched] == ["a"]
+
+
+async def test_events_name_the_transport_given_or_the_one_stamped() -> None:
+    dispatcher = EventDispatcher()
+    names: list[str] = []
+
+    def record(event: WorkerMessageReceivedEvent) -> None:
+        names.append(event.receiver_name)
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, record)
+    stamped = Envelope("a").with_stamps(ReceivedStamp("from-stamp"))
+
+    await Worker(RecordingBus(), StubReceiver([stamped]), event_dispatcher=dispatcher).run()
+    await Worker(
+        RecordingBus(),
+        StubReceiver([stamped]),
+        event_dispatcher=dispatcher,
+        receiver_name="given",
+    ).run()
+
+    assert names == ["from-stamp", "given"]

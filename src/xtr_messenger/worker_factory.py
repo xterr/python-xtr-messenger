@@ -17,6 +17,7 @@ from .worker_providing_interface import WorkerProvidingInterface
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
     from xtr_logging_contracts import LoggerInterface
 
     from .handler import HandlersLocatorInterface
@@ -48,7 +49,15 @@ class WorkerFactory:
     the library's own receive loop or one a broker library brought with it.
     """
 
-    __slots__ = ("_bus", "_config", "_handlers", "_named", "_resetter", "_transports")
+    __slots__ = (
+        "_bus",
+        "_config",
+        "_event_dispatcher",
+        "_handlers",
+        "_named",
+        "_resetter",
+        "_transports",
+    )
 
     def __init__(  # noqa: PLR0913 — everything past `bus` is keyword-only
         self,
@@ -60,6 +69,7 @@ class WorkerFactory:
         logger: LoggerInterface | None = None,
         named: Mapping[str, MiddlewareBuilder] | None = None,
         resetter: AsyncResetter | None = None,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -71,6 +81,9 @@ class WorkerFactory:
         ``logger`` and ``named`` mean what they do for
         :class:`~xtr_messenger.message_bus_factory.MessageBusFactory`: what
         the ``"logging"`` middleware writes through, and names of your own.
+
+        ``event_dispatcher`` is handed to every worker built, which announce
+        themselves and each message through it — see :mod:`xtr_messenger.event`.
         """
         self._config = config
         self._transports = TransportFactory(factories)
@@ -78,6 +91,7 @@ class WorkerFactory:
         self._bus = bus
         self._named = named_middleware(logger, named)
         self._resetter = resetter
+        self._event_dispatcher = event_dispatcher
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -93,8 +107,16 @@ class WorkerFactory:
         factory = self._transports.serving(group)
         bus = self._dispatcher()
         if isinstance(factory, WorkerProvidingInterface):
-            return factory.worker(group, bus)
-        return Worker(bus, _receiver_of(factory.create(group)), self._resetter)
+            return factory.worker(group, bus, event_dispatcher=self._event_dispatcher)
+        built = factory.create(group)
+        names = tuple(built)
+        return Worker(
+            bus,
+            _receiver_of(built),
+            self._resetter,
+            event_dispatcher=self._event_dispatcher,
+            receiver_name=names[0] if len(names) == 1 else None,
+        )
 
     def _dispatcher(self) -> MessageBusInterface:
         """Return the bus a collected message is dispatched through.
@@ -141,4 +163,4 @@ def _receiver_of(built: Mapping[str, SenderInterface]) -> ReceiverInterface:
     receivers = [made for made in built.values() if isinstance(made, ReceiverInterface)]
     if len(receivers) != len(built):
         raise NotConsumableError(tuple(built), "transport")
-    return receivers[0] if len(receivers) == 1 else ChainedReceiver(receivers)
+    return receivers[0] if len(receivers) == 1 else ChainedReceiver(receivers, tuple(built))

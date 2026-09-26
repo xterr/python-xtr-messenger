@@ -10,11 +10,13 @@ from uuid import uuid4
 import pytest
 from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage
 from typing_extensions import override
+from xtr_event_dispatcher import EventDispatcher
 
 from xtr_messenger import WorkerInterface
 from xtr_messenger.bridge.taskiq import taskiq_worker
 from xtr_messenger.bridge.taskiq.broker import ensure_started, forget_started
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
+from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -219,4 +221,21 @@ async def test_a_producer_sharing_the_broker_opens_it_again_after_the_worker_sto
     await ensure_started(broker)
 
     assert broker.startups == 3
+    forget_started(broker)
+
+
+async def test_it_announces_starting_and_stopping() -> None:
+    dispatcher = EventDispatcher()
+    seen: list[object] = []
+    dispatcher.add_listener(WorkerStartedEvent, seen.append)
+    dispatcher.add_listener(WorkerStoppedEvent, seen.append)
+    broker = ScriptedBroker()
+    worker = TaskiqWorker(broker, event_dispatcher=dispatcher)
+    run = asyncio.create_task(worker.run())
+    await asyncio.sleep(0)
+
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert [type(event) for event in seen] == [WorkerStartedEvent, WorkerStoppedEvent]
     forget_started(broker)

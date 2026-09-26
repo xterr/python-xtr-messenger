@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, final
 
 import pytest
 from typing_extensions import override
+from xtr_event_dispatcher import EventDispatcher
 from xtr_logging import Logger, TestHandler
 from xtr_logging_contracts import Level
 
@@ -29,9 +30,12 @@ from xtr_messenger import (
     WorkerProvidingInterface,
     as_message_handler,
 )
+from xtr_messenger.event import WorkerMessageReceivedEvent
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable, Mapping
+
+    from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from xtr_messenger import Dsn, MessageBusInterface
 
@@ -97,6 +101,7 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
 
     def __init__(self) -> None:
         self.captured_bus: MessageBusInterface | None = None
+        self.captured_dispatcher: EventDispatcherInterface | None = None
         self.built = FakeWorker()
 
     @override
@@ -113,9 +118,12 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
         self,
         group: Mapping[str, TransportConfig],
         bus: MessageBusInterface,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
     ) -> WorkerInterface:
         del group
         self.captured_bus = bus
+        self.captured_dispatcher = event_dispatcher
         return self.built
 
 
@@ -329,3 +337,38 @@ def test_a_middleware_name_nothing_is_registered_for_is_refused() -> None:
 
     assert excinfo.value.name == "nope"
     assert excinfo.value.known == ("logging",)
+
+
+async def test_workers_it_builds_announce_through_its_event_dispatcher() -> None:
+    dispatcher = EventDispatcher()
+    names: list[str] = []
+
+    def record(event: WorkerMessageReceivedEvent) -> None:
+        names.append(event.receiver_name)
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, record)
+    factory = WholeTransportFactory(
+        {
+            "a": FakeTransport([Envelope(ingest_document())]),
+            "b": FakeTransport([Envelope(ingest_document())]),
+        },
+    )
+    config = MessageBusConfig(
+        transports={"a": TransportConfig("whole://"), "b": TransportConfig("whole://")},
+    )
+    workers = WorkerFactory(config, [factory], bus=RecordingBus(), event_dispatcher=dispatcher)
+
+    await workers.worker(["a"]).run()
+    await workers.worker(["a", "b"]).run()
+
+    assert names == ["a", "a", "b"]
+
+
+def test_a_worker_providing_factory_is_handed_the_event_dispatcher() -> None:
+    adapter = OwnWorkerFactory()
+    dispatcher = EventDispatcher()
+    config = MessageBusConfig(transports={"jobs": TransportConfig("own://")})
+
+    _ = WorkerFactory(config, [adapter], event_dispatcher=dispatcher).worker(["jobs"])
+
+    assert adapter.captured_dispatcher is dispatcher
