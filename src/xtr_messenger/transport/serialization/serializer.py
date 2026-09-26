@@ -24,10 +24,10 @@ from xtr_messenger.exception import (
 )
 from xtr_messenger.message_registry import name_of, type_for_name
 from xtr_messenger.stamp import (
-    DEFAULT_STAMP_TYPES,
     NonSendableStampInterface,
     StampInterface,
 )
+from xtr_messenger.stamp_registry import stamp_type_for
 
 from .codec import default_codecs
 from .encoded_envelope import EncodedEnvelope
@@ -59,9 +59,9 @@ class JsonSerializer(SerializerInterface):
 
     Decoding is an allow-list: a stamp header names a class this process
     must import, so an unrecognised one is dropped rather than resolved.
-    The list defaults to the stamps the library ships — pass ``stamp_types``
-    to add your own, which you must do for a custom stamp to survive the
-    trip.
+    The list defaults to the stamps the library ships plus every stamp
+    declared with :func:`~xtr_messenger.decorator.as_stamp` — declare a
+    custom stamp, or pass ``stamp_types``, for it to survive the trip.
 
     Stamps inheriting
     :class:`~xtr_messenger.stamp.NonSendableStampInterface` never leave the
@@ -77,12 +77,15 @@ class JsonSerializer(SerializerInterface):
     ) -> None:
         """Restore ``stamp_types`` on decode; convert messages via ``codecs``.
 
-        Omitting ``stamp_types`` restores the stamps the library ships. Pass
-        an explicit iterable to widen it with your own, or ``()`` to restore
-        none at all.
+        Omitting ``stamp_types`` restores the stamps the library ships and
+        every stamp declared with :func:`~xtr_messenger.decorator.as_stamp`
+        — including one declared after this serializer was built. Pass an
+        explicit iterable to restore exactly those, or ``()`` to restore none
+        at all.
         """
-        restored = DEFAULT_STAMP_TYPES if stamp_types is None else stamp_types
-        self._stamp_types = {t.__name__: t for t in restored}
+        self._stamp_types: dict[str, type[StampInterface]] | None = (
+            None if stamp_types is None else {t.__name__: t for t in stamp_types}
+        )
         self._codecs: tuple[MessageCodecInterface, ...] = tuple(codecs) or default_codecs()
 
     @override
@@ -124,6 +127,11 @@ class JsonSerializer(SerializerInterface):
         message = codec.decode(message_type, _load(encoded.body, name))
         return Envelope(message, self._decode_stamps(encoded.headers, name))
 
+    def _stamp_type_for(self, name: str) -> type[StampInterface] | None:
+        if self._stamp_types is None:
+            return stamp_type_for(name)
+        return self._stamp_types.get(name)
+
     def _codec_for(self, message_type: type) -> MessageCodecInterface | None:
         return next((codec for codec in self._codecs if codec.supports(message_type)), None)
 
@@ -132,7 +140,7 @@ class JsonSerializer(SerializerInterface):
         for header, value in headers.items():
             if not header.startswith(STAMP_HEADER_PREFIX):
                 continue
-            stamp_type = self._stamp_types.get(header[len(STAMP_HEADER_PREFIX) :])
+            stamp_type = self._stamp_type_for(header[len(STAMP_HEADER_PREFIX) :])
             if stamp_type is None:
                 continue
             stamps.extend(_decode_stamp_list(stamp_type, value, name))

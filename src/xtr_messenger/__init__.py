@@ -10,7 +10,7 @@ behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 
 from importlib.metadata import version
 
-from .decorator import as_message, as_message_handler, as_middleware
+from .decorator import as_message, as_message_handler, as_middleware, as_stamp
 from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
@@ -155,6 +155,7 @@ __all__ = [
     "as_message",
     "as_message_handler",
     "as_middleware",
+    "as_stamp",
     "default_codecs",
     "default_factories",
     "default_registry",

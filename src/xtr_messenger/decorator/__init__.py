@@ -7,5 +7,6 @@ something else in Python, and these are decorators.
 from .as_message import as_message
 from .as_message_handler import as_message_handler
 from .as_middleware import as_middleware
+from .as_stamp import as_stamp
 
-__all__ = ["as_message", "as_message_handler", "as_middleware"]
+__all__ = ["as_message", "as_message_handler", "as_middleware", "as_stamp"]

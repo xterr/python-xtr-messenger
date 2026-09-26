@@ -440,6 +440,30 @@ refuses it with `NoSenderForMessageError`; `handle_unrouted=True` handles it in-
 Routing resolves most specific first: a `TransportNamesStamp` on the envelope, then the table
 walking the message's bases, then `"*"`, then whatever the message declared.
 
+### Stamps of your own
+
+A stamp is a frozen dataclass deriving from `StampInterface`. One that should reach the
+consumer must be declared, because decoding is an allow-list — a stamp header names a class
+the consumer has to build, so an unknown one is dropped rather than resolved:
+
+```python
+from dataclasses import dataclass
+
+from xtr_messenger import StampInterface, as_stamp
+
+
+@as_stamp
+@dataclass(frozen=True, slots=True)
+class TenantStamp(StampInterface):
+    tenant_id: str
+```
+
+Every `JsonSerializer` built without `stamp_types` restores the stamps the library ships plus
+every declared one — including one declared after the serializer was built. A stamp travels
+under its class name, so two declared stamps may not share one. A
+`NonSendableStampInterface` stamp never leaves the process and cannot be declared.
+`JsonSerializer(stamp_types=[...])` restores exactly the list given, declarations ignored.
+
 ## Validating messages
 
 Dataclass messages are checked for **shape** by msgspec: a missing or wrongly typed field
@@ -729,13 +753,14 @@ Between messages a worker calls `ServicesResetter.reset()`, so services opting i
 xtr_messenger/
 ├── envelope.py              the message plus its stamps
 ├── message_registry.py      what @as_message declared: names, default transports
+├── stamp_registry.py        what @as_stamp declared: stamps serializers restore
 ├── message_bus_config.py    which transports exist, and where messages go
 ├── message_bus_factory.py   builds the bus a process publishes through
 ├── xtr_messenger.py           the loop — wrap, then walk the middleware chain
 ├── worker_factory.py        builds what a worker process runs
 ├── worker.py                the other loop — collect, dispatch, ack or reject
 ├── dsn.py                   reading a transport's DSN
-├── decorator/               @as_message, @as_message_handler
+├── decorator/               @as_message, @as_message_handler, @as_middleware, @as_stamp
 ├── event/                   what a worker announces about itself and each message
 ├── handler/                 which function handles which message, and how to call it
 ├── middleware/              routing, handling, logging, the chain cursor

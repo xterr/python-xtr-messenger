@@ -18,8 +18,10 @@ from xtr_messenger import (
     NonSendableStampInterface,
     ReceivedStamp,
     RedeliveryStamp,
+    StampInterface,
     TransportMessageIdStamp,
     as_message,
+    as_stamp,
 )
 from xtr_messenger.stamp import DEFAULT_STAMP_TYPES, DelayStamp
 from xtr_messenger.transport.serialization import TYPE_HEADER
@@ -212,3 +214,44 @@ def test_the_wire_header_names_are_pinned() -> None:
 
     assert "type" in headers
     assert "X-Message-Stamp-TransportMessageIdStamp" in headers
+
+
+@as_stamp
+@dataclass(frozen=True, slots=True)
+class DeclaredTenantStamp(StampInterface):
+    """A stamp an application declares."""
+
+    tenant_id: str
+
+
+def test_a_declared_stamp_survives_a_default_round_trip() -> None:
+    wire = JsonSerializer()
+    envelope = Envelope(ingest_document()).with_stamps(DeclaredTenantStamp("acme"))
+
+    decoded = wire.decode(wire.encode(envelope))
+
+    assert decoded.last(DeclaredTenantStamp) == DeclaredTenantStamp("acme")
+
+
+def test_a_stamp_declared_after_the_serializer_was_built_still_decodes() -> None:
+    wire = JsonSerializer()
+
+    @as_stamp
+    @dataclass(frozen=True, slots=True)
+    class LateDeclaredStamp(StampInterface):
+        value: int
+
+    decoded = wire.decode(
+        wire.encode(Envelope(ingest_document()).with_stamps(LateDeclaredStamp(1)))
+    )
+
+    assert decoded.last(LateDeclaredStamp) == LateDeclaredStamp(1)
+
+
+def test_an_explicit_stamp_list_ignores_declared_stamps() -> None:
+    wire = JsonSerializer(stamp_types=[RedeliveryStamp])
+    envelope = Envelope(ingest_document()).with_stamps(DeclaredTenantStamp("acme"))
+
+    decoded = wire.decode(wire.encode(envelope))
+
+    assert decoded.last(DeclaredTenantStamp) is None
