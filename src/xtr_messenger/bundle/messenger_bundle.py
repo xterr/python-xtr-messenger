@@ -10,12 +10,10 @@ middleware writes through that channel's logger.
 
 from __future__ import annotations
 
-import dataclasses
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Annotated, cast, final
 
-import msgspec
 from typing_extensions import override
 from xtr_dependency_injection import (
     Bundle,
@@ -60,16 +58,13 @@ _MESSENGER_CHANNEL = "messenger"
 
 
 def _add_messenger_channel(config: object) -> object:
-    channels_attr: object = getattr(config, "channels", None)
-    if not isinstance(channels_attr, tuple) or _MESSENGER_CHANNEL in channels_attr:
-        return config
-    channels: tuple[object, ...] = cast("tuple[object, ...]", channels_attr)
-    updated: tuple[object, ...] = (*channels, _MESSENGER_CHANNEL)
-    if dataclasses.is_dataclass(config) and not isinstance(config, type):
-        return replace(config, channels=updated)
-    if isinstance(config, msgspec.Struct):
-        return msgspec.structs.replace(config, channels=updated)
-    return config
+    """Declare the ``messenger`` channel through the logging config's own ``with_channels``.
+
+    Duck-typed: this bundle depends on the logging *contracts* only, never on xtr-logging,
+    so it asks the config it is handed rather than importing its type.
+    """
+    with_channels = cast("Callable[[str], object] | None", getattr(config, "with_channels", None))
+    return with_channels(_MESSENGER_CHANNEL) if with_channels is not None else config
 
 
 def _combined_transport_factory() -> TransportFactory:
