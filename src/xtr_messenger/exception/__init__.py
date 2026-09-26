@@ -7,6 +7,7 @@ forcing a message to be parsed.
 """
 
 from .handler_signature_error import HandlerSignatureError
+from .incompatible_receivers_error import IncompatibleReceiversError
 from .invalid_dsn_error import InvalidDsnError
 from .invalid_transport_option_error import InvalidTransportOptionError
 from .message_bus_error import MessageBusError
@@ -24,6 +25,7 @@ from .unsupported_dsn_error import UnsupportedDsnError
 
 __all__ = [
     "HandlerSignatureError",
+    "IncompatibleReceiversError",
     "InvalidDsnError",
     "InvalidTransportOptionError",
     "MessageBusError",

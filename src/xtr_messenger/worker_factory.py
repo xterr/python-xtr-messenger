@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, final
 
-from .exception import NotConsumableError, UnknownTransportError
+from .exception import IncompatibleReceiversError, NotConsumableError, UnknownTransportError
 from .handler import RedispatchingHandlers, default_registry
 from .message_bus import MessageBus
 from .message_bus_factory import MessageBusFactory
@@ -58,6 +58,7 @@ class WorkerFactory:
         "_handlers",
         "_named",
         "_publishing",
+        "_receivers",
         "_resetter",
         "_transports",
     )
@@ -73,6 +74,7 @@ class WorkerFactory:
         named: Mapping[str, MiddlewareBuilder] | None = None,
         resetter: AsyncResetter | None = None,
         event_dispatcher: EventDispatcherInterface | None = None,
+        receivers: Mapping[str, ReceiverInterface] | None = None,
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -87,6 +89,11 @@ class WorkerFactory:
 
         ``event_dispatcher`` is handed to every worker built, which announce
         themselves and each message through it — see :mod:`xtr_messenger.event`.
+
+        ``receivers`` are consumable by name beside the configured transports:
+        something that only receives — messages a process generates, say —
+        and so has no DSN to configure. A configured transport of the same
+        name wins.
         """
         self._config = config
         self._transports = TransportFactory(factories)
@@ -96,6 +103,7 @@ class WorkerFactory:
         self._resetter = resetter
         self._event_dispatcher = event_dispatcher
         self._publishing: MessageBusInterface | None = None
+        self._receivers: dict[str, ReceiverInterface] = dict(receivers or {})
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -103,23 +111,35 @@ class WorkerFactory:
         Import the modules that declare your handlers first — a handler that
         has not been declared cannot be found.
 
+        A name is a configured transport or a registered receiver; a worker
+        may consume both kinds at once, unless a configured transport brings
+        its own worker.
+
         Raises:
-            UnknownTransportError: If a name is not configured.
+            UnknownTransportError: If a name is neither.
             UnsupportedDsnError: If no factory recognises their DSN.
+            IncompatibleReceiversError: If a transport bringing its own worker
+                is named together with a registered receiver.
         """
         group = self._select(names)
-        factory = self._transports.serving(group)
+        registered = {name: self._receivers[name] for name in names if name not in group}
         bus = self._dispatcher()
-        if isinstance(factory, WorkerProvidingInterface):
-            return factory.worker(group, bus, event_dispatcher=self._event_dispatcher)
-        built = factory.create(group)
-        names = tuple(built)
+        found: dict[str, ReceiverInterface] = {}
+        if group:
+            factory = self._transports.serving(group)
+            if isinstance(factory, WorkerProvidingInterface):
+                if registered:
+                    raise IncompatibleReceiversError(tuple(group), tuple(registered))
+                return factory.worker(group, bus, event_dispatcher=self._event_dispatcher)
+            found = _receivers_of(factory.create(group))
+        found.update(registered)
+        ordered = [name for name in names if name in found]
         return Worker(
             bus,
-            _receiver_of(built),
+            _one_receiver([found[name] for name in ordered], ordered),
             self._resetter,
             event_dispatcher=self._event_dispatcher,
-            receiver_name=names[0] if len(names) == 1 else None,
+            receiver_name=ordered[0] if len(ordered) == 1 else None,
         )
 
     def _dispatcher(self) -> MessageBusInterface:
@@ -172,21 +192,35 @@ class WorkerFactory:
         return self._publishing
 
     def _select(self, names: Sequence[str]) -> dict[str, TransportConfig]:
+        """Return the configured transports among ``names``.
+
+        Raises:
+            UnknownTransportError: If a name is neither configured nor registered.
+        """
         transports = self._config.transports
-        missing = tuple(name for name in names if name not in transports)
+        missing = tuple(n for n in names if n not in transports and n not in self._receivers)
         if missing:
-            raise UnknownTransportError(missing, tuple(transports))
-        return {name: transports[name] for name in names}
+            raise UnknownTransportError(missing, (*transports, *self._receivers))
+        return {name: transports[name] for name in names if name in transports}
 
 
-def _receiver_of(built: Mapping[str, SenderInterface]) -> ReceiverInterface:
-    """Return the receive half of what a factory built.
+def _receivers_of(built: Mapping[str, SenderInterface]) -> dict[str, ReceiverInterface]:
+    """Return the receive half of what a factory built, by transport name.
 
     Raises:
         NotConsumableError: If a transport sends but cannot be consumed,
             which means its adapter should have provided a worker instead.
     """
-    receivers = [made for made in built.values() if isinstance(made, ReceiverInterface)]
+    receivers: dict[str, ReceiverInterface] = {
+        name: made for name, made in built.items() if isinstance(made, ReceiverInterface)
+    }
     if len(receivers) != len(built):
         raise NotConsumableError(tuple(built), "transport")
-    return receivers[0] if len(receivers) == 1 else ChainedReceiver(receivers, tuple(built))
+    return receivers
+
+
+def _one_receiver(
+    receivers: Sequence[ReceiverInterface], names: Sequence[str]
+) -> ReceiverInterface:
+    """Return the single receiver, or one draining them all, each message named by origin."""
+    return receivers[0] if len(receivers) == 1 else ChainedReceiver(receivers, names)

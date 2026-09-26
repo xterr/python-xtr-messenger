@@ -540,10 +540,11 @@ typed attributes rather than only a message.
 | `InvalidDsnError` | A DSN has no scheme |
 | `UnknownTransportOptionError`, `InvalidTransportOptionError` | A setting is not accepted, or its value is not usable |
 | `UnsupportedDsnError` | No installed transport serves a scheme |
-| `UnknownTransportError` | A route or a worker names a transport the configuration does not define |
+| `UnknownTransportError` | A route or a worker names a transport neither configured nor registered |
 | `UnknownMiddlewareError` | The configuration names middleware nothing is registered for |
 | `MixedDsnError` | One AMQP worker is asked to serve two servers |
 | `NotConsumableError` | A worker is asked to consume a transport that can only send |
+| `IncompatibleReceiversError` | A worker is asked to drain a registered receiver beside a transport with its own worker |
 | `NoSenderForMessageError` | A message is routed nowhere and the bus requires a sender |
 | `NoHandlerForMessageError` | A message is to be handled and nothing handles it |
 | `MessageEncodingFailedError` | A message cannot be put on the wire |
@@ -768,6 +769,30 @@ class KafkaTransportFactory(TransportFactoryInterface):
         self, group: Mapping[str, TransportConfig]
     ) -> Mapping[str, SenderInterface]: ...  # build a sender per name in `group`
 ```
+
+A service implementing `ReceiverInterface` and tagged `RECEIVER_TAG` (`"messenger.receiver"`)
+with an `alias` is consumable under that alias — `messenger:consume <alias>` — with no entry in
+`MessageBusConfig.transports`. That is for something that only receives: messages a process
+generates rather than reads from a broker, which have no DSN to configure. Another bundle can
+register one this way for the application; a configured transport of the same name wins, which
+is how an application overrides it. Every tagged receiver is built with the `WorkerFactory`, so
+building one must do no I/O. Two receivers under one alias fail the build.
+
+```python
+from xtr_dependency_injection import as_service, autoconfigure
+
+from xtr_messenger.bundle import RECEIVER_TAG
+
+
+@autoconfigure(tags=[(RECEIVER_TAG, {"alias": "ticks"})])
+@as_service
+class TickReceiver(ReceiverInterface): ...
+```
+
+Without a container, pass them to the factory — `WorkerFactory(CONFIG, receivers={"ticks":
+TickReceiver()})`. One worker may drain registered receivers and configured transports
+together, except a transport that brings its own worker, which cannot share it
+(`IncompatibleReceiversError`).
 
 Between messages a worker calls `ServicesResetter.reset()`, so services opting in with
 `ResetInterface` — or explicitly tagged `kernel.reset` — are cleared per unit of work.

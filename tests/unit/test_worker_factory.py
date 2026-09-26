@@ -10,11 +10,12 @@ from xtr_event_dispatcher import EventDispatcher
 from xtr_logging import Logger, TestHandler
 from xtr_logging_contracts import Level
 
-from tests.support.fakes import RecordingBus, RecordingMiddleware
+from tests.support.fakes import RecordingBus, RecordingMiddleware, StubReceiver
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     Envelope,
     HandlersLocator,
+    IncompatibleReceiversError,
     MessageBusConfig,
     NotConsumableError,
     ReceivedStamp,
@@ -372,3 +373,76 @@ def test_a_worker_providing_factory_is_handed_the_event_dispatcher() -> None:
     _ = WorkerFactory(config, [adapter], event_dispatcher=dispatcher).worker(["jobs"])
 
     assert adapter.captured_dispatcher is dispatcher
+
+
+async def test_a_registered_receiver_is_consumed_by_its_name() -> None:
+    seen: list[IngestDocument] = []
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument) -> None:
+        seen.append(message)
+
+    message = ingest_document()
+    receiver = StubReceiver([Envelope(message)])
+    config = MessageBusConfig(transports={})
+
+    worker = WorkerFactory(config, handlers=handlers, receivers={"generated": receiver})
+    await worker.worker(["generated"]).run()
+
+    assert seen == [message]
+    assert receiver.acked != []
+
+
+async def test_a_configured_transport_wins_over_a_registered_receiver_of_its_name() -> None:
+    configured = FakeTransport([Envelope(ingest_document())])
+    registered = StubReceiver([Envelope(ingest_document())])
+    config = MessageBusConfig(transports={"a": TransportConfig("whole://")})
+    factory = WholeTransportFactory({"a": configured})
+
+    workers = WorkerFactory(config, [factory], bus=RecordingBus(), receivers={"a": registered})
+    await workers.worker(["a"]).run()
+
+    assert registered.acked == []
+
+
+async def test_registered_receivers_and_configured_transports_drain_together_by_name() -> None:
+    dispatcher = EventDispatcher()
+    names: list[str] = []
+
+    def record(event: WorkerMessageReceivedEvent) -> None:
+        names.append(event.receiver_name)
+
+    dispatcher.add_listener(WorkerMessageReceivedEvent, record)
+    config = MessageBusConfig(transports={"a": TransportConfig("whole://")})
+    factory = WholeTransportFactory({"a": FakeTransport([Envelope(ingest_document())])})
+    registered = StubReceiver([Envelope(ingest_document())])
+    workers = WorkerFactory(
+        config,
+        [factory],
+        bus=RecordingBus(),
+        event_dispatcher=dispatcher,
+        receivers={"generated": registered},
+    )
+
+    await workers.worker(["generated", "a"]).run()
+
+    assert names == ["generated", "a"]
+
+
+def test_an_unknown_name_lists_configured_and_registered_names() -> None:
+    config = MessageBusConfig(transports={"high": TransportConfig("sync://")})
+    workers = WorkerFactory(config, receivers={"generated": StubReceiver()})
+
+    with pytest.raises(UnknownTransportError) as caught:
+        _ = workers.worker(["nope"])
+
+    assert caught.value.known == ("high", "generated")
+
+
+def test_a_transport_bringing_its_own_worker_cannot_share_it_with_a_receiver() -> None:
+    config = MessageBusConfig(transports={"jobs": TransportConfig("own://")})
+    workers = WorkerFactory(config, [OwnWorkerFactory()], receivers={"generated": StubReceiver()})
+
+    with pytest.raises(IncompatibleReceiversError):
+        _ = workers.worker(["jobs", "generated"])

@@ -15,6 +15,7 @@ from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
     HandlerSignatureError,
+    IncompatibleReceiversError,
     InvalidTransportOptionError,
     MessageBusError,
     MessageDecodingFailedError,
@@ -105,6 +106,7 @@ __all__ = [
     "HandlersLocatorInterface",
     "InMemoryTransport",
     "InMemoryTransportFactory",
+    "IncompatibleReceiversError",
     "InvalidDsnError",
     "InvalidTransportOptionError",
     "JsonSerializer",

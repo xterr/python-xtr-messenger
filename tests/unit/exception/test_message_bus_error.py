@@ -5,6 +5,7 @@ import pytest
 import xtr_messenger
 from xtr_messenger import (
     HandlerSignatureError,
+    IncompatibleReceiversError,
     InvalidDsnError,
     InvalidTransportOptionError,
     MessageBusError,
@@ -24,6 +25,7 @@ from xtr_messenger import (
 
 EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     HandlerSignatureError,
+    IncompatibleReceiversError,
     InvalidDsnError,
     InvalidTransportOptionError,
     MessageBusError,
@@ -211,3 +213,10 @@ def test_unsupported_dsn_error_carries_the_transport_name_and_dsn() -> None:
     assert error.transport_name == "jobs"
     assert error.dsn == "kafka://host"
     assert "no transport factory for 'jobs'" in str(error)
+
+
+def test_incompatible_receivers_error_names_both_sides() -> None:
+    error = IncompatibleReceiversError(("jobs",), ("scheduler_default",))
+
+    assert (error.brokered, error.registered) == (("jobs",), ("scheduler_default",))
+    assert "cannot consume jobs together with scheduler_default" in str(error)

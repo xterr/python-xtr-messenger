@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Annotated, cast, final
+from typing import TYPE_CHECKING, Annotated, Final, cast, final
 
 from typing_extensions import override
 from xtr_dependency_injection import (
     Bundle,
     ContainerBuilder,
     ServiceConfigurator,
+    ServiceKey,
     ServiceLocator,
     ServicesResetter,
     Target,
@@ -34,6 +35,7 @@ from xtr_event_dispatcher_contracts import EventDispatcherInterface
 from xtr_logging_contracts import LoggerInterface
 from xtr_service_contracts import ContainerInterface
 
+from xtr_messenger.exception import MessageBusError
 from xtr_messenger.handler.handler_descriptor import Handler, HandlerDescriptor
 from xtr_messenger.handler.handlers_locator import HandlersLocator
 from xtr_messenger.handler.handlers_registry import handlers_declared_on
@@ -46,6 +48,7 @@ from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
 from xtr_messenger.middleware.named import MiddlewareBuilder
+from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_discovery import default_factories
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
@@ -55,7 +58,12 @@ from xtr_messenger.worker_factory import WorkerFactory
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-__all__ = ["MessengerBundle"]
+__all__ = ["RECEIVER_TAG", "MessengerBundle"]
+
+#: Tag a :class:`ReceiverInterface` service with this, and an ``alias``, for
+#: workers to consume it by that name beside the configured transports. The
+#: worker factory builds every tagged receiver, so building one must do no I/O.
+RECEIVER_TAG: Final = "messenger.receiver"
 
 _HANDLES_TAG = "messenger.message_handler"
 _TRANSPORT_FACTORY_TAG = "messenger.transport_factory"
@@ -235,13 +243,17 @@ class MessengerBundle(Bundle[MessageBusConfig]):
                 target_qualifier="logging",
             )
         _ = services.set(_message_bus)
-        _ = services.set(_worker_factory)
+        _ = services.set(_worker_factory).set_argument("receiver_keys", {})
         if bundle_active(builder, "console"):
             services.load("xtr_messenger.command")
 
     @override
     def process(self, builder: ContainerBuilder) -> None:
-        """Consult app-registered transport factories ahead of discovered ones.
+        """Hand workers the tagged receivers; consult app-registered transport factories first.
+
+        Every service tagged :data:`RECEIVER_TAG` becomes consumable under its
+        ``alias`` — collected here, after every bundle and compiler pass before
+        this one has registered what it will.
 
         Autoconfiguration tags every class registered under
         :class:`TransportFactoryInterface`. When at least one exists, the shared
@@ -250,6 +262,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         discovery-only factory loaded in :meth:`load_extension` stays, since the
         engine cannot resolve an empty collection.
         """
+        _ = builder.get_definition(WorkerFactory).set_argument("receiver_keys", _receivers(builder))
         if not builder.find_tagged_service_ids(_TRANSPORT_FACTORY_TAG):
             return
         builder.get_definition(TransportFactory).provider = _combined_transport_factory_with
@@ -263,6 +276,26 @@ class MessengerBundle(Bundle[MessageBusConfig]):
             raise RuntimeError(message)
         binding = _ContainerBinding(container)
         self._handlers.decorate(binding)
+
+
+def _receivers(builder: ContainerBuilder) -> dict[str, ServiceKey]:
+    """Return every tagged receiver's service key, by the alias workers consume it under.
+
+    Raises:
+        MessageBusError: If a tagged receiver has no alias, or two share one.
+    """
+    found: dict[str, ServiceKey] = {}
+    for key, tags in builder.find_tagged_service_ids(RECEIVER_TAG).items():
+        for attributes in tags:
+            alias = attributes.get("alias")
+            if not isinstance(alias, str) or not alias:
+                raise MessageBusError(f"receiver {key[0].__qualname__} is tagged with no alias")
+            if alias in found and found[alias] != key:
+                other = found[alias][0].__qualname__
+                message = f"receivers {other} and {key[0].__qualname__} share the alias {alias!r}"
+                raise MessageBusError(message)
+            found[alias] = key
+    return found
 
 
 def _transport_factories_in(obj: object) -> Iterable[type]:
@@ -295,12 +328,17 @@ async def _worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per injec
     named: _NamedMiddleware,
     resetter: ServicesResetter,
     container: ContainerInterface,
+    receiver_keys: Mapping[str, ServiceKey],
 ) -> WorkerFactory:
     """Build the worker factory — every worker resets services after each message.
 
     Workers announce themselves and their messages through the event
-    dispatcher when the container has one, and stay silent otherwise.
+    dispatcher when the container has one, and stay silent otherwise. Every
+    tagged receiver is built here, consumable under its alias.
     """
+    receivers: dict[str, ReceiverInterface] = {}
+    for alias, (service, qualifier) in receiver_keys.items():
+        receivers[alias] = cast("ReceiverInterface", await container.get(service, qualifier))
     return WorkerFactory(
         config,
         [transports],
@@ -308,6 +346,7 @@ async def _worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per injec
         named=named.builders,
         resetter=cast("AsyncResetter", resetter),
         event_dispatcher=await optional_service(container, EventDispatcherInterface),
+        receivers=receivers,
     )
 
 
