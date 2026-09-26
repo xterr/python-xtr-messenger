@@ -32,3 +32,21 @@ async def test_a_class_handler_receives_a_dispatched_message() -> None:
         assert ledger.done == [job_id]
     finally:
         await booted.shutdown()
+
+
+async def test_a_function_handler_receives_a_qualified_service() -> None:
+    kernel = Kernel("tests.fixtures.app_messenger", env="test")
+    booted = await kernel.boot()
+    try:
+        container: ContainerInterface = booted.container
+        bus = await container.get(MessageBusInterface)
+        job_id = uuid4()
+
+        _ = await bus.dispatch(Envelope(DoWork(job_id)))
+
+        archive = await container.get(Ledger, "archive")
+        default = await container.get(Ledger)
+        assert (archive.done, default.done) == ([job_id], [job_id])
+        assert archive is not default
+    finally:
+        await booted.shutdown()

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Annotated, final
 
-from xtr_dependency_injection import Injected, as_service
+from xtr_dependency_injection import Injected, Target, as_service
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -40,3 +40,15 @@ class HandleDoWork:
 async def audit(message: AuditEvent, ledger: Injected[Ledger]) -> None:
     """Function handler; the ledger is filled by the container."""
     ledger.audited.append(message.subject)
+
+
+@as_service(qualifier="archive")
+def archive_ledger() -> Ledger:
+    """A second ledger, told apart by its qualifier."""
+    return Ledger()
+
+
+@as_message_handler(DoWork)
+async def archive(message: DoWork, ledger: Annotated[Ledger, Target("archive")]) -> None:
+    """Function handler; the qualified ledger is filled by the container."""
+    ledger.done.append(message.job_id)

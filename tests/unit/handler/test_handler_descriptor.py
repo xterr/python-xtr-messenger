@@ -4,7 +4,7 @@ import inspect
 from typing import Annotated, final, get_type_hints
 
 import pytest
-from xtr_dependency_injection import Injected
+from xtr_dependency_injection import Injected, Target
 
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import Envelope, HandlerDescriptor, HandlerSignatureError
@@ -21,6 +21,7 @@ class Session:
 # imports to TYPE_CHECKING would make the shape check silently stop seeing them.
 InjectedSession = Injected[Session]
 PlainAnnotatedSession = Annotated[Session, "not a container marker"]
+QualifiedSession = Annotated[Session, Target("replica")]
 
 
 @final
@@ -255,3 +256,10 @@ def test_declaring_a_class_handler_builds_nothing() -> None:
     _ = HandlerDescriptor.of(Handler)
 
     assert built == []
+
+
+def test_a_qualified_parameter_is_taken_for_an_injected_one() -> None:
+    async def handle(message: IngestDocument, replica: QualifiedSession) -> None:
+        del message, replica
+
+    assert HandlerDescriptor.of(handle).wants_envelope is False

@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, Annotated, TypeAlias, cast, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, TypeAlias, cast, get_type_hints
 
 from xtr_messenger.envelope import Envelope
 from xtr_messenger.exception import HandlerSignatureError
@@ -158,25 +158,20 @@ def _hints_of(target: object) -> dict[str, object]:
 def _supplied_by_container(hint: object) -> bool:
     """Report whether a container fills a parameter annotated ``hint``.
 
+    Asked of the container package itself — ``Injected[T]``, ``Autowire(...)`` and
+    ``Target(...)`` all count — so the bus and the container never disagree.
     Detected rather than required, the same way a pydantic codec is: with no
     container installed there is nothing to recognise, so this cannot change
     behaviour.
     """
-    marker = _container_marker()
-    if marker is None or get_origin(hint) is not Annotated:
-        return False
-    metadata: tuple[object, ...] = get_args(hint)[1:]
-    return any(_marks(annotation, marker) for annotation in metadata)
-
-
-def _marks(metadata: object, marker: type) -> bool:
-    return isinstance(metadata, marker)
+    check = _container_check()
+    return check is not None and check(hint)
 
 
 @cache
-def _container_marker() -> type | None:
+def _container_check() -> Callable[[object], bool] | None:
     try:
-        from xtr_dependency_injection import Autowire  # noqa: PLC0415
+        from xtr_dependency_injection import is_container_supplied  # noqa: PLC0415
     except ImportError:
         return None
-    return Autowire
+    return is_container_supplied

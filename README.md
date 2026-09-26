@@ -620,10 +620,12 @@ command when the console bundle is active), and a per-kernel `HandlersLocator`. 
 handler its scan finds is bound with `bind_callable` at boot, so a handler asking for
 something the container cannot provide fails at boot, not on its first message.
 
-Container dependencies reach a handler only through `Injected[T]`. A **function handler**
-takes the message — and the `Envelope`, if it asks for one — as ordinary parameters; every
-other parameter it needs from the container **must** be annotated `Injected[T]`, because a
-bare `T` is not injected and would arrive unfilled:
+Container dependencies reach a handler only through a container marker. A **function
+handler** takes the message — and the `Envelope`, if it asks for one — as ordinary
+parameters; every other parameter it needs from the container **must** be annotated
+`Injected[T]`, `Annotated[T, Target("name")]` for a qualified service, or
+`Annotated[T, Autowire(param=... | env=...)]`, because a bare `T` is not injected and would
+arrive unfilled:
 
 ```python
 from xtr_dependency_injection import Injected
