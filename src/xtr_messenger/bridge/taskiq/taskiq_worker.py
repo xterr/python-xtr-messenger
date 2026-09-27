@@ -57,7 +57,14 @@ class TaskiqWorker(WorkerInterface):
     application does.
     """
 
-    __slots__ = ("_broker", "_dispatcher", "_finished", "_max_async_tasks", "_max_prefetch")
+    __slots__ = (
+        "_broker",
+        "_dispatcher",
+        "_finished",
+        "_max_async_tasks",
+        "_max_prefetch",
+        "_stop_requested",
+    )
 
     def __init__(
         self,
@@ -85,6 +92,7 @@ class TaskiqWorker(WorkerInterface):
         )
         self._max_prefetch = max_prefetch
         self._finished: asyncio.Event | None = None
+        self._stop_requested = False
 
     @property
     def max_async_tasks(self) -> int:
@@ -125,6 +133,9 @@ class TaskiqWorker(WorkerInterface):
         claimed = self._broker.is_worker_process
         self._broker.is_worker_process = True
         self._finished = asyncio.Event()
+        if self._stop_requested:
+            self._stop_requested = False
+            self._finished.set()
         receiver = Receiver(
             self._broker,
             max_async_tasks=self._max_async_tasks,
@@ -147,10 +158,12 @@ class TaskiqWorker(WorkerInterface):
 
     @override
     def stop(self) -> None:
-        """Ask a running worker to finish what it has and return.
+        """Ask the worker to finish what it has and return.
 
-        Safe to call before :meth:`run`, or after it returns: a worker that
-        is not running has nothing to wind down.
+        Asked while not running — before :meth:`run` has started, say — the
+        next run returns without consuming anything.
         """
         if self._finished is not None:
             self._finished.set()
+        else:
+            self._stop_requested = True

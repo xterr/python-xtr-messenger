@@ -239,13 +239,43 @@ async def test_stop_between_messages_leaves_the_next_one_untouched() -> None:
     assert receiver.rejected == []
 
 
-async def test_stop_before_run_and_after_it_returned_are_no_ops() -> None:
+async def test_a_stop_before_run_makes_the_run_return_at_once() -> None:
+    receiver = StubReceiver([Envelope("a")])
+    worker = Worker(RecordingBus(), receiver)
+
+    worker.stop()
+    await asyncio.wait_for(worker.run(), timeout=_TIMEOUT)
+
+    assert receiver.acked == []
+
+
+async def test_a_stop_before_run_stops_only_that_run() -> None:
     receiver = StubReceiver([Envelope("a")])
     worker = Worker(RecordingBus(), receiver)
 
     worker.stop()
     await worker.run()
+    await worker.run()
+
+    assert [envelope.message for envelope in receiver.acked] == ["a"]
+
+
+async def test_a_stop_before_the_run_task_is_scheduled_is_honoured() -> None:
+    worker = Worker(RecordingBus(), IdleReceiver())
+
+    run = asyncio.ensure_future(worker.run())
     worker.stop()
+
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+
+async def test_a_stop_while_not_running_applies_to_the_next_run() -> None:
+    receiver = StubReceiver([Envelope("a")])
+    worker = Worker(RecordingBus(), receiver)
+
+    await worker.run()
+    worker.stop()
+    await worker.run()
 
     assert [envelope.message for envelope in receiver.acked] == ["a"]
 

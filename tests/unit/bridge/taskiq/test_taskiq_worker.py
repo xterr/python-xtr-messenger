@@ -94,8 +94,13 @@ def test_it_is_a_worker_interface() -> None:
     assert isinstance(TaskiqWorker(InMemoryBroker()), WorkerInterface)
 
 
-def test_stopping_a_worker_that_never_ran_is_harmless() -> None:
-    TaskiqWorker(InMemoryBroker()).stop()
+async def test_a_stop_before_the_run_task_is_scheduled_is_honoured() -> None:
+    worker = TaskiqWorker(ScriptedBroker())
+
+    run = asyncio.create_task(worker.run())
+    worker.stop()
+
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
 
 
 def test_it_exposes_the_broker_it_wraps() -> None:

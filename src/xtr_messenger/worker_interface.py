@@ -29,9 +29,10 @@ class WorkerInterface(Protocol):
         ...
 
     def stop(self) -> None:
-        """Ask a running worker to finish the message in hand and return.
+        """Ask the worker to finish the message in hand and return.
 
-        Safe to call before :meth:`run` or after it returns: a worker that is
-        not running has nothing to wind down.
+        A stop asked for while the worker is not running — before :meth:`run`
+        starts, say, from a task created but not yet scheduled — is not lost:
+        the next run returns at once, without collecting anything.
         """
         ...

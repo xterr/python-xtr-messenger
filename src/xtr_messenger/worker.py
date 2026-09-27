@@ -53,7 +53,15 @@ class Worker(WorkerInterface):
     every failure would be attempted the product of both policies.
     """
 
-    __slots__ = ("_bus", "_dispatcher", "_receiver", "_receiver_name", "_resetter", "_stopped")
+    __slots__ = (
+        "_bus",
+        "_dispatcher",
+        "_receiver",
+        "_receiver_name",
+        "_resetter",
+        "_stop_requested",
+        "_stopped",
+    )
 
     def __init__(
         self,
@@ -83,6 +91,7 @@ class Worker(WorkerInterface):
         self._dispatcher = event_dispatcher
         self._receiver_name = receiver_name
         self._stopped: asyncio.Event | None = None
+        self._stop_requested = False
 
     @override
     async def run(self) -> None:
@@ -110,6 +119,9 @@ class Worker(WorkerInterface):
         stopped listeners propagate too.
         """
         stopped = asyncio.Event()
+        if self._stop_requested:
+            self._stop_requested = False
+            stopped.set()
         self._stopped = stopped
         await self._announce(WorkerStartedEvent(self))
         collected = self._receiver.get()
@@ -123,9 +135,15 @@ class Worker(WorkerInterface):
 
     @override
     def stop(self) -> None:
-        """Ask a running worker to finish the message in hand and return."""
+        """Ask the worker to finish the message in hand and return.
+
+        Asked while not running — before :meth:`run` has started, say — the
+        next run returns without collecting anything.
+        """
         if self._stopped is not None:
             self._stopped.set()
+        else:
+            self._stop_requested = True
 
     async def _settle(self, envelope: Envelope) -> None:
         name = receiver_name_of(envelope, self._receiver_name)
