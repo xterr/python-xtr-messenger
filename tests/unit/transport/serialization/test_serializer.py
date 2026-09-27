@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from typing_extensions import override
 
-from tests.support.messages import IngestDocument, ingest_document
+from tests.support.messages import IngestDocument, UndeclaredMessage, ingest_document
 from xtr_messenger import (
     EncodedEnvelope,
     Envelope,
@@ -23,6 +23,7 @@ from xtr_messenger import (
     as_message,
     as_stamp,
 )
+from xtr_messenger.message_registry import register_message
 from xtr_messenger.stamp import DEFAULT_STAMP_TYPES, DelayStamp
 from xtr_messenger.transport.serialization import TYPE_HEADER
 from xtr_messenger.transport.serialization.codec import JsonValue, MessageCodecInterface
@@ -149,6 +150,13 @@ def test_decoding_an_unknown_message_name_fails_loudly() -> None:
         _ = serializer().decode(encoded)
 
 
+def test_decoding_an_undeclared_message_fails_loudly() -> None:
+    encoded = serializer().encode(Envelope(UndeclaredMessage("x")))
+
+    with pytest.raises(MessageDecodingFailedError, match="UndeclaredMessage"):
+        _ = serializer().decode(encoded)
+
+
 def test_decoding_a_malformed_body_fails_loudly() -> None:
     encoded = EncodedEnvelope(body="{not json", headers={TYPE_HEADER: "test.ingest.v1"})
 
@@ -189,8 +197,15 @@ def test_encoding_a_message_no_codec_handles_fails_loudly() -> None:
     assert excinfo.value.message_name == "builtins:str"
 
 
+class _NoCodecMessage:
+    """Declared, but neither a dataclass nor a model: no codec handles it."""
+
+
+register_message(_NoCodecMessage, "test.unit.serializer.no_codec.v1")
+
+
 def test_decoding_a_type_no_codec_handles_fails_loudly() -> None:
-    encoded = EncodedEnvelope(body="{}", headers={TYPE_HEADER: "builtins:str"})
+    encoded = EncodedEnvelope(body="{}", headers={TYPE_HEADER: "test.unit.serializer.no_codec.v1"})
 
     with pytest.raises(MessageDecodingFailedError, match="no codec"):
         _ = JsonSerializer().decode(encoded)

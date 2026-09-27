@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 import pytest
@@ -14,11 +15,6 @@ from xtr_messenger import (
     type_for_name,
 )
 from xtr_messenger.message_registry import declared_names, register_message
-
-
-class Outer:
-    class Inner:
-        """A nested class, reachable only by walking the qualname part by part."""
 
 
 def test_an_explicit_name_is_recorded() -> None:
@@ -130,13 +126,19 @@ def test_type_for_name_resolves_a_registered_name() -> None:
     assert type_for_name("test.unit.message_registry.resolve.v1") is Message
 
 
-def test_type_for_name_falls_back_to_importing_module_qualname() -> None:
-    """An undeclared class still resolves through its ``module:QualName`` import path."""
-    assert type_for_name("tests.support.messages:UndeclaredMessage") is UndeclaredMessage
+def test_an_undeclared_class_is_not_resolved_by_its_import_path() -> None:
+    with pytest.raises(UnknownMessageNameError):
+        _ = type_for_name(f"{UndeclaredMessage.__module__}:{UndeclaredMessage.__qualname__}")
 
 
-def test_type_for_name_resolves_a_nested_qualname() -> None:
-    assert type_for_name(f"{Outer.Inner.__module__}:{Outer.Inner.__qualname__}") is Outer.Inner
+def test_resolving_a_name_never_imports_the_module_it_names() -> None:
+    """The name comes off the wire: whoever produced it must not choose what gets imported."""
+    assert "tabnanny" not in sys.modules
+
+    with pytest.raises(UnknownMessageNameError):
+        _ = type_for_name("tabnanny:NannyNag")
+
+    assert "tabnanny" not in sys.modules
 
 
 def test_a_name_without_a_colon_cannot_be_resolved() -> None:

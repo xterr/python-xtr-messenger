@@ -83,6 +83,12 @@ defaults to `module:QualName`, which changes if the class moves — pin an expli
 name for anything that outlives a deploy. `@as_message(transport="jobs")` gives the message a
 default transport, used when the routing table says nothing about it.
 
+A consumer decodes only the messages it declared: the name on the wire is looked up among the
+declared ones and never used to import a module, so whoever produces a message cannot choose
+what the consumer imports. A message that crosses a serializer — any transport but `sync://` —
+must therefore be declared on the consuming side; an unknown name fails with
+`MessageDecodingFailedError`.
+
 A handler is a function that imports nothing but the message:
 
 ```python

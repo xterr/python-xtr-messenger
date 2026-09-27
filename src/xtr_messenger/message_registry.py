@@ -24,8 +24,6 @@ process carry the same message under the same name.
 
 from __future__ import annotations
 
-import importlib
-
 from .exception import MessageBusError, UnknownMessageNameError
 
 __all__ = ["declared_names", "name_of", "register_message", "transports_of", "type_for_name"]
@@ -95,32 +93,19 @@ def transports_of(message_type: type) -> tuple[str, ...]:
 
 
 def type_for_name(name: str) -> type:
-    """Resolve a wire name back to its message class.
+    """Resolve a wire name back to its declared message class.
 
-    Looks in the registry first, then falls back to importing a derived
-    ``module:QualName`` name.
+    Only declared messages resolve. The name arrives from whoever produced
+    the message, so it is never used to import a module: a consumer decodes
+    what it declared, and nothing else.
 
     Raises:
-        UnknownMessageNameError: If the name resolves to nothing importable.
+        UnknownMessageNameError: If no message was declared under ``name``.
     """
     registered = _TYPE_BY_NAME.get(name)
-    if registered is not None:
-        return registered
-    if ":" not in name:
+    if registered is None:
         raise UnknownMessageNameError(name)
-    module_name, _, qualname = name.partition(":")
-    try:
-        module = importlib.import_module(module_name)
-    except ImportError as exc:
-        raise UnknownMessageNameError(name) from exc
-    resolved: object = module
-    for part in qualname.split("."):
-        resolved = getattr(resolved, part, None)
-        if resolved is None:
-            raise UnknownMessageNameError(name)
-    if not isinstance(resolved, type):
-        raise UnknownMessageNameError(name)
-    return resolved
+    return registered
 
 
 def _claim(name: str, message_type: type) -> None:
