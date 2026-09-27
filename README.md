@@ -643,6 +643,30 @@ If your broker owns its own consume loop, also implement `WorkerProvidingInterfa
 what it receives into the `bus` its `worker()` is given. Most transports should not: a whole
 transport is driven by the library's `Worker`.
 
+## Use in an application
+
+Everything adding this package to an application on
+[xtr-dependency-injection](../xtr-dependency-injection) takes — and, read backwards, what removing it undoes.
+
+- **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
+  what you use.
+- **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported
+  from `xtr_messenger.bundle`.
+- **Brings along** — the logging, console and event dispatcher bundles, when those packages
+  are installed.
+- **Configure** — needed to move a message: with no configuration there are no transports, and
+  a message routed nowhere is neither sent nor handled. Transports and routing go in
+  `<app>/config/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
+  [Kernel / bundle](#kernel--bundle).
+- **Environment** — nothing required; a broker DSN is usually `env("MESSENGER_DSN")`, read
+  only when the bus is built.
+- **Ignore** — nothing.
+- **Run** — a worker is `<script> messenger:consume <transport>`.
+- **Remove** — drop the `BUNDLES` entry, delete `<app>/config/messenger.py`, then
+  `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
+- **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
+  messenger` shows the resolved transports and routing.
+
 ## Kernel / bundle
 
 An application using [xtr-dependency-injection](../xtr-dependency-injection) lists
