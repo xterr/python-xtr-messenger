@@ -17,6 +17,7 @@ from xtr_messenger import (
     Envelope,
     HandledStamp,
     HandleMessageMiddleware,
+    HandlersFailedError,
     HandlersLocator,
     NoHandlerForMessageError,
     as_message,
@@ -98,11 +99,47 @@ async def test_a_handler_failure_propagates() -> None:
 
     _ = registry.register(IngestDocument, boom)
 
-    with pytest.raises(RuntimeError, match="handler exploded"):
+    with pytest.raises(HandlersFailedError, match="handler exploded") as caught:
         _ = await HandleMessageMiddleware(registry).handle(
             Envelope(ingest_document()),
             OneStep(TerminalMiddleware()),
         )
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+async def test_every_handler_runs_when_one_fails_and_each_failure_is_kept() -> None:
+    registry = HandlersLocator()
+    ran: list[str] = []
+
+    async def first(message: object) -> None:
+        del message
+        ran.append("first")
+        raise RuntimeError("first failed")
+
+    async def second(message: object) -> str:
+        del message
+        ran.append("second")
+        return "done"
+
+    async def third(message: object) -> None:
+        del message
+        ran.append("third")
+        raise ValueError("third failed")
+
+    for handler in (first, second, third):
+        _ = registry.register(IngestDocument, handler)
+
+    with pytest.raises(HandlersFailedError) as caught:
+        _ = await HandleMessageMiddleware(registry).handle(
+            Envelope(ingest_document()),
+            OneStep(TerminalMiddleware()),
+        )
+
+    assert ran == ["first", "second", "third"]
+    assert [type(error) for error in caught.value.errors.values()] == [RuntimeError, ValueError]
+    handled = caught.value.envelope.all(HandledStamp)
+    assert [stamp.result for stamp in handled] == ["done"]
 
 
 async def test_it_defaults_to_the_process_wide_registry() -> None:

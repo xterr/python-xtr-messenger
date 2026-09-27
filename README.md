@@ -147,6 +147,12 @@ behind, carrying what it returned in `result` — `None` when it returns nothing
 stays in the process; it is never sent anywhere, so it need not be serializable. Lookup walks the message's bases, so a handler on a marker class still fires for a
 subclass that has handlers of its own.
 
+A handler that raises does not stop the others: every one runs, and then the dispatch fails with
+one `HandlersFailedError` carrying what each failed handler raised, by name, in `errors`, and the
+envelope with a `HandledStamp` for each that succeeded. A worker records the first handler's
+error on the rejected message. A retry runs **every** handler again, those that succeeded
+included — so keep handlers idempotent.
+
 Declaring writes to a process-wide registry, which is what lets a handler module import nothing
 but the message. Where one registry per process is too coarse — two applications in one test
 run, say — declare into a `HandlersLocator` of your own and hand it to the bus or the worker:
@@ -553,6 +559,7 @@ typed attributes rather than only a message.
 | `IncompatibleReceiversError` | A worker is asked to drain a registered receiver beside a transport with its own worker |
 | `NoSenderForMessageError` | A message is routed nowhere and the bus requires a sender |
 | `NoHandlerForMessageError` | A message is to be handled and nothing handles it |
+| `HandlersFailedError` | One or more handlers raised, once every handler has run |
 | `MessageEncodingFailedError` | A message cannot be put on the wire |
 | `MessageDecodingFailedError`, `UnknownMessageNameError` | A payload cannot be turned back into its message |
 

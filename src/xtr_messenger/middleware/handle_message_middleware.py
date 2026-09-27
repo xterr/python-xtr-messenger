@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from xtr_messenger.exception import NoHandlerForMessageError
+from xtr_messenger.exception import HandlersFailedError, NoHandlerForMessageError
 from xtr_messenger.handler import default_registry
 from xtr_messenger.stamp import HandledStamp
 
@@ -60,17 +60,28 @@ class HandleMessageMiddleware(MiddlewareInterface):
     async def handle(self, envelope: Envelope, stack: StackInterface) -> Envelope:
         """Invoke each bound handler, then continue down the chain.
 
+        Every handler runs, whichever of them raise: they are independent, and
+        one failing must not silence the others.
+
         Raises:
             NoHandlerForMessageError: If nothing is bound and handlers are required.
+            HandlersFailedError: If any handler raised, once every one has run.
         """
         message_type = type(envelope.message)
         descriptors = self._registry.handlers_for(message_type)
         if not descriptors and self._require_handler:
             raise NoHandlerForMessageError(message_type, self._handled_type_names())
 
+        errors: dict[str, Exception] = {}
         for descriptor in descriptors:
-            result = await descriptor.invoke(envelope)
-            envelope = envelope.with_stamps(HandledStamp(descriptor.name, result))
+            try:
+                result = await descriptor.invoke(envelope)
+            except Exception as error:  # noqa: BLE001 — collected, and raised once every handler ran
+                errors[descriptor.name] = error
+            else:
+                envelope = envelope.with_stamps(HandledStamp(descriptor.name, result))
+        if errors:
+            raise HandlersFailedError(envelope, errors) from next(iter(errors.values()))
         return await stack.next().handle(envelope, stack)
 
     def _handled_type_names(self) -> tuple[str, ...]:

@@ -16,6 +16,7 @@ from .event import (
     WorkerMessageHandledEvent,
     WorkerMessageReceivedEvent,
 )
+from .exception import HandlersFailedError
 from .stamp import ErrorDetailsStamp, ReceivedStamp
 
 if TYPE_CHECKING:
@@ -105,7 +106,9 @@ async def announce_failure(
     first, since a collected message must be settled whatever happens.
     """
     error = failed.error
-    envelope = failed.envelope.with_stamps(ErrorDetailsStamp(type(error).__name__, str(error)))
+    # What went wrong is what a handler raised, not that handlers failed.
+    cause = next(iter(error.errors.values())) if isinstance(error, HandlersFailedError) else error
+    envelope = failed.envelope.with_stamps(ErrorDetailsStamp(type(cause).__name__, str(cause)))
     if dispatcher is None:
         await settle(envelope)
         return

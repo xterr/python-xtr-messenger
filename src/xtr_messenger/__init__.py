@@ -14,6 +14,7 @@ from .decorator import as_message, as_message_handler, as_middleware, as_stamp
 from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
+    HandlersFailedError,
     HandlerSignatureError,
     IncompatibleReceiversError,
     InvalidTransportOptionError,
@@ -102,6 +103,7 @@ __all__ = [
     "Handler",
     "HandlerDescriptor",
     "HandlerSignatureError",
+    "HandlersFailedError",
     "HandlersLocator",
     "HandlersLocatorInterface",
     "InMemoryTransport",
