@@ -38,6 +38,12 @@ class ReceiverInterface(Protocol):
         envelope carries whatever handle the transport needs to settle it
         later, so it must be passed back to :meth:`ack` or :meth:`reject`
         rather than reconstructed.
+
+        A worker that is stopped while waiting cancels the pending step, so
+        cancellation may arrive at any ``await`` in here. A message taken from
+        the transport but not yet yielded must not be lost to it: yield
+        without awaiting in between, or hand the message back to the
+        transport — left unacknowledged, on a broker — when cancelled.
         """
         ...
 
