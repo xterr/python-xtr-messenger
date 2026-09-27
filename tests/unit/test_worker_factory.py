@@ -16,10 +16,12 @@ from xtr_messenger import (
     Envelope,
     HandlersLocator,
     IncompatibleReceiversError,
+    InMemoryTransportFactory,
     MessageBusConfig,
     NotConsumableError,
     ReceivedStamp,
     SenderInterface,
+    SyncTransportFactory,
     TransportConfig,
     TransportFactoryInterface,
     TransportInterface,
@@ -194,6 +196,30 @@ async def test_several_receivers_on_one_connection_drain_through_one_loop() -> N
     await worker.run()
 
     assert seen == [from_a, from_b]
+
+
+async def test_transports_on_different_schemes_are_each_built_by_their_own_factory() -> None:
+    seen: list[IngestDocument] = []
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument) -> None:
+        seen.append(message)
+
+    queued = ingest_document()
+    config = MessageBusConfig(
+        transports={"plain": TransportConfig("sync://"), "mem": TransportConfig("in-memory://")},
+    )
+    factories: list[TransportFactoryInterface] = [
+        SyncTransportFactory(),
+        InMemoryTransportFactory(),
+    ]
+    memory = factories[1].create({"mem": config.transports["mem"]})["mem"]
+    _ = await memory.send(Envelope(queued))
+
+    await WorkerFactory(config, factories, handlers=handlers).worker(["plain", "mem"]).run()
+
+    assert seen == [queued]
 
 
 async def test_a_worker_providing_factory_returns_its_own_worker_over_a_handling_bus() -> None:

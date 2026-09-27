@@ -125,13 +125,16 @@ class WorkerFactory:
         registered = {name: self._receivers[name] for name in names if name not in group}
         bus = self._dispatcher()
         found: dict[str, ReceiverInterface] = {}
-        if group:
-            factory = self._transports.serving(group)
-            if isinstance(factory, WorkerProvidingInterface):
-                if registered:
-                    raise IncompatibleReceiversError(tuple(group), tuple(registered))
-                return factory.worker(group, bus, event_dispatcher=self._event_dispatcher)
-            found = _receivers_of(factory.create(group))
+        served = [(self._transports.serving(part), part) for part in _by_connection(group)]
+        providing = [
+            factory for factory, _ in served if isinstance(factory, WorkerProvidingInterface)
+        ]
+        if providing:
+            if registered:
+                raise IncompatibleReceiversError(tuple(group), tuple(registered))
+            return providing[0].worker(group, bus, event_dispatcher=self._event_dispatcher)
+        for factory, part in served:
+            found.update(_receivers_of(factory.create(part)))
         found.update(registered)
         ordered = [name for name in names if name in found]
         return Worker(
@@ -202,6 +205,14 @@ class WorkerFactory:
         if missing:
             raise UnknownTransportError(missing, (*transports, *self._receivers))
         return {name: transports[name] for name in names if name in transports}
+
+
+def _by_connection(group: Mapping[str, TransportConfig]) -> list[dict[str, TransportConfig]]:
+    """Split ``group`` by the server each transport addresses, in the order first named."""
+    parts: dict[str, dict[str, TransportConfig]] = {}
+    for name, transport in group.items():
+        parts.setdefault(transport.parsed.connection, {})[name] = transport
+    return list(parts.values())
 
 
 def _receivers_of(built: Mapping[str, SenderInterface]) -> dict[str, ReceiverInterface]:
