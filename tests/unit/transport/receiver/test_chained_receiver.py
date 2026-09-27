@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+from typing import TYPE_CHECKING, cast, final
+
 import pytest
+from typing_extensions import override
 
 from tests.support.fakes import StubReceiver
 from xtr_messenger import AckReceiptStamp, Envelope, ErrorDetailsStamp, ReceivedStamp
 from xtr_messenger.transport.receiver.chained_receiver import ChainedReceiver
+from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
 
 pytestmark = pytest.mark.anyio
 
@@ -13,14 +21,50 @@ async def drain(receiver: ChainedReceiver) -> list[Envelope]:
     return [envelope async for envelope in receiver.get()]
 
 
-async def test_it_drains_its_receivers_in_order() -> None:
+async def test_it_drains_every_receiver_keeping_each_ones_order() -> None:
     first = StubReceiver([Envelope("a"), Envelope("b")])
     second = StubReceiver([Envelope("c")])
     chained = ChainedReceiver([first, second])
 
-    collected = await drain(chained)
+    collected = [str(envelope.message) for envelope in await drain(chained)]
 
-    assert [envelope.message for envelope in collected] == ["a", "b", "c"]
+    assert sorted(collected) == ["a", "b", "c"]
+    assert collected.index("a") < collected.index("b")
+
+
+@final
+class EndlessReceiver(ReceiverInterface):
+    """A subscription that never runs dry, delivering a message whenever asked."""
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        while True:
+            await asyncio.sleep(0)
+            yield Envelope("endless")
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        del envelope
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        del envelope
+
+
+async def test_a_receiver_that_never_runs_dry_does_not_starve_the_others() -> None:
+    chained = ChainedReceiver([EndlessReceiver(), StubReceiver([Envelope("finite")])])
+    collected: list[object] = []
+
+    stream = chained.get()
+    try:
+        async for envelope in stream:
+            collected.append(envelope.message)
+            if "finite" in collected or len(collected) > 50:
+                break
+    finally:
+        await cast("AsyncGenerator[Envelope]", stream).aclose()
+
+    assert "finite" in collected
 
 
 async def test_each_collected_envelope_carries_its_own_ticket() -> None:
