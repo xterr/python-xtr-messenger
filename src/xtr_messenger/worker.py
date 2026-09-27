@@ -9,6 +9,7 @@ from typing_extensions import override
 
 from ._handling import Failed, Handled, Skipped, announce_failure, handle, receiver_name_of
 from .event import WorkerRunningEvent, WorkerStartedEvent, WorkerStoppedEvent
+from .transport.receiver._close_stream import close_stream
 from .worker_interface import WorkerInterface
 
 if TYPE_CHECKING:
@@ -131,6 +132,7 @@ class Worker(WorkerInterface):
                 await self._announce(WorkerRunningEvent(self))
         finally:
             self._stopped = None
+            await close_stream(collected)
             await self._announce(WorkerStoppedEvent(self))
 
     @override
@@ -185,4 +187,7 @@ async def _next_unless_stopped(
         _ = halt.cancel()
         if not fetch.done():
             _ = fetch.cancel()
-    return fetch.result() if fetch.done() else None
+            # Waited for, so the receiver is at rest before it is closed, and a
+            # message it delivered just as it was cancelled is still settled.
+            _ = await asyncio.gather(fetch, return_exceptions=True)
+    return None if fetch.cancelled() else fetch.result()

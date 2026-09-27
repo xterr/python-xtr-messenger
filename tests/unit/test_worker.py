@@ -457,3 +457,45 @@ async def test_events_name_the_transport_given_or_the_one_stamped() -> None:
     ).run()
 
     assert names == ["from-stamp", "given"]
+
+
+@final
+class ClosingReceiver(ReceiverInterface):
+    """Records, in ``events``, when its stream lets go of what it holds."""
+
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        try:
+            yield Envelope("a")
+            yield Envelope("b")
+        finally:
+            self._events.append("receiver closed")
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        del envelope
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        del envelope
+
+
+async def test_the_receiver_is_closed_before_the_worker_says_it_stopped() -> None:
+    events: list[str] = []
+    dispatcher = EventDispatcher()
+
+    def stopped(event: WorkerStoppedEvent) -> None:
+        del event
+        events.append("stopped")
+
+    dispatcher.add_listener(WorkerStoppedEvent, stopped)
+    bus = StoppingBus()
+    worker = Worker(bus, ClosingReceiver(events), event_dispatcher=dispatcher)
+    bus.worker = worker
+
+    await asyncio.wait_for(worker.run(), timeout=_TIMEOUT)
+
+    assert events == ["receiver closed", "stopped"]
