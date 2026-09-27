@@ -13,6 +13,7 @@ from .middleware_interface import MiddlewareInterface
 
 if TYPE_CHECKING:
     from xtr_messenger.envelope import Envelope
+    from xtr_messenger.stamp import StampInterface
     from xtr_messenger.transport.sender import SendersLocatorInterface
 
     from .stack_interface import StackInterface
@@ -35,9 +36,13 @@ class SendMessageMiddleware(MiddlewareInterface):
       back received, as ``sync://`` does, meaning "handle it here": then it
       continues down the chain to be handled like anything a worker receives.
 
-    When nothing is routed, the chain continues, which is what lets a
-    downstream handling middleware pick the message up in-process. Set
-    ``handle_unrouted=False`` to stop there instead.
+    When nothing is routed the chain stops there, as it does on a bus the
+    factory builds. Set ``handle_unrouted=True`` to continue instead, which
+    lets a downstream handling middleware pick the message up in-process.
+
+    Each sender of a fan-out is handed the envelope as it was before any of
+    them, plus its own :class:`~xtr_messenger.stamp.SentStamp`: none sees
+    what another added. What each added is on the envelope returned.
     """
 
     __slots__ = ("_handle_unrouted", "_locator", "_require_sender")
@@ -47,7 +52,7 @@ class SendMessageMiddleware(MiddlewareInterface):
         locator: SendersLocatorInterface,
         *,
         require_sender: bool = False,
-        handle_unrouted: bool = True,
+        handle_unrouted: bool = False,
     ) -> None:
         """Wire the locator, optionally failing dispatches that route nowhere."""
         self._locator = locator
@@ -61,12 +66,14 @@ class SendMessageMiddleware(MiddlewareInterface):
             return await stack.next().handle(envelope, stack)
 
         sent = False
+        added: list[StampInterface] = []
         for alias, sender in self._locator.senders_for(envelope):
             stamped = envelope.with_stamps(SentStamp(type(sender).__name__, alias))
-            envelope = await sender.send(stamped)
+            added.extend(_added_by(await sender.send(stamped), envelope))
             sent = True
 
         if sent:
+            envelope = envelope.with_stamps(*added)
             if envelope.last(ReceivedStamp) is None:
                 return envelope
             return await stack.next().handle(envelope, stack)
@@ -78,3 +85,15 @@ class SendMessageMiddleware(MiddlewareInterface):
         if not self._handle_unrouted:
             return envelope
         return await stack.next().handle(envelope, stack)
+
+
+def _added_by(returned: Envelope, before: Envelope) -> tuple[StampInterface, ...]:
+    """Return the stamps ``returned`` carries that ``before`` did not.
+
+    A sender appends to what it was handed; one that rebuilt the envelope
+    instead has every stamp of its own counted.
+    """
+    count = len(before.stamps)
+    if returned.stamps[:count] == before.stamps:
+        return returned.stamps[count:]
+    return tuple(stamp for stamp in returned.stamps if stamp not in before.stamps)

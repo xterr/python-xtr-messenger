@@ -125,28 +125,41 @@ async def test_a_received_envelope_is_never_sent_and_continues() -> None:
     assert result is envelope
 
 
-async def test_an_unrouted_message_continues_by_default() -> None:
+async def test_handle_unrouted_continues_with_an_unrouted_message() -> None:
     locator = FakeLocator([])
     terminal = TerminalMiddleware()
 
-    result = await SendMessageMiddleware(locator).handle(Envelope("payload"), OneStep(terminal))
+    result = await SendMessageMiddleware(locator, handle_unrouted=True).handle(
+        Envelope("payload"), OneStep(terminal)
+    )
 
     assert terminal.seen == [Envelope("payload")]
     assert result.last(SentStamp) is None
 
 
-async def test_handle_unrouted_false_stops_at_an_unrouted_message() -> None:
+async def test_an_unrouted_message_stops_by_default_as_on_a_factory_bus() -> None:
     locator = FakeLocator([])
     terminal = TerminalMiddleware()
     envelope = Envelope("payload")
 
-    result = await SendMessageMiddleware(locator, handle_unrouted=False).handle(
-        envelope,
-        OneStep(terminal),
-    )
+    result = await SendMessageMiddleware(locator).handle(envelope, OneStep(terminal))
 
     assert terminal.seen == []
     assert result is envelope
+
+
+async def test_no_sender_of_a_fan_out_sees_what_another_added() -> None:
+    first, second = HandingBackSender(), RecordingSender()
+    locator = FakeLocator([("primary", first), ("mirror", second)])
+
+    result = await SendMessageMiddleware(locator).handle(
+        Envelope("payload"), OneStep(TerminalMiddleware())
+    )
+
+    assert second.sent[0].all(SentStamp) == (SentStamp("RecordingSender", "mirror"),)
+    assert second.sent[0].last(ReceivedStamp) is None
+    assert result.last(ReceivedStamp) == ReceivedStamp("here")
+    assert len(result.all(SentStamp)) == 2
 
 
 async def test_require_sender_raises_naming_the_routed_types() -> None:
