@@ -105,7 +105,7 @@ def _wants_envelope(handler: Handler | type, name: str) -> bool:
     declared = tuple(parameters)
     own = tuple(p for p in declared if not _supplied_by_container(hints.get(p)))
     # The bus passes its arguments by position, so they have to come first.
-    if declared[: len(own)] != own or len(own) > _WITH_ENVELOPE:
+    if not own or declared[: len(own)] != own or len(own) > _WITH_ENVELOPE:
         raise HandlerSignatureError(name, declared)
     if len(own) < _WITH_ENVELOPE:
         return False

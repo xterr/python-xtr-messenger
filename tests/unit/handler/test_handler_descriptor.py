@@ -125,6 +125,13 @@ def test_a_third_parameter_is_refused() -> None:
     assert excinfo.value.parameters == ("message", "envelope", "extra")
 
 
+def test_a_handler_taking_no_parameter_is_refused_where_declared() -> None:
+    async def handle() -> None: ...
+
+    with pytest.raises(HandlerSignatureError):
+        _ = HandlerDescriptor.of(handle)
+
+
 def test_a_class_that_defines_no_call_is_refused() -> None:
     class NotAHandler:
         pass
