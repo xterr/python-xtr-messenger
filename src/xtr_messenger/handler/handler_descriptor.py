@@ -156,7 +156,33 @@ def _hints_of(target: object) -> dict[str, object]:
     try:
         return dict(get_type_hints(target, include_extras=True))
     except (NameError, TypeError):
-        return {}
+        return _each_hint_of(target)
+
+
+def _each_hint_of(target: object) -> dict[str, object]:
+    """Resolve each annotation on its own, leaving out the ones that cannot be.
+
+    One name imported only for type checking — the message class, usually —
+    then hides only its own parameter rather than every hint. ``Envelope`` is
+    always known, being what the shape check looks for, so a handler may
+    import it for type checking alone.
+    """
+    raw = cast("dict[str, object]", getattr(target, "__annotations__", {}))
+    namespace = {
+        "Envelope": Envelope,
+        **cast("dict[str, object]", getattr(target, "__globals__", {})),
+    }
+    hints: dict[str, object] = {}
+    for parameter, annotation in raw.items():
+        if not isinstance(annotation, str):
+            hints[parameter] = annotation
+            continue
+        try:
+            # What get_type_hints does with a string annotation, one at a time.
+            hints[parameter] = eval(annotation, namespace)  # noqa: S307
+        except (NameError, AttributeError, TypeError, SyntaxError):
+            continue
+    return hints
 
 
 def _supplied_by_container(hint: object) -> bool:

@@ -7,6 +7,7 @@ import pytest
 from xtr_dependency_injection import Injected, Target
 
 from tests.support.messages import IngestDocument, ingest_document
+from tests.support.type_checking_handlers import wants_the_envelope, wants_the_message
 from xtr_messenger import Envelope, HandlerDescriptor, HandlerSignatureError
 
 pytestmark = pytest.mark.anyio
@@ -189,6 +190,14 @@ def test_unresolvable_annotations_do_not_crash_registration() -> None:
         del message
 
     assert HandlerDescriptor.of(handle).wants_envelope is False
+
+
+def test_an_envelope_imported_for_type_checking_alone_is_recognised() -> None:
+    assert HandlerDescriptor.of(wants_the_envelope).wants_envelope is True
+
+
+def test_a_message_class_imported_for_type_checking_alone_is_accepted() -> None:
+    assert HandlerDescriptor.of(wants_the_message).wants_envelope is False
 
 
 async def test_invoke_passes_only_the_message_when_the_envelope_is_not_wanted() -> None:
