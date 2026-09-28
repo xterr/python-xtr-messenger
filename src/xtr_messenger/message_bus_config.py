@@ -68,6 +68,9 @@ class MessageBusConfig:
             than letting the dispatch pass quietly.
         handle_unrouted: Handle a message routed nowhere in this process,
             rather than letting the dispatch pass quietly.
+        require_handler: Refuse a message handled here that no handler
+            takes. ``False`` for a bus shared by processes that each handle
+            some of its messages.
     """
 
     transports: Mapping[str, TransportConfig] = field(default_factory=_no_transports)
@@ -76,6 +79,7 @@ class MessageBusConfig:
     default_middleware: bool = True
     require_sender: bool = False
     handle_unrouted: bool = False
+    require_handler: bool = True
 
     def by_connection(self) -> dict[str, dict[str, TransportConfig]]:
         """Group the transports by the server each one addresses.

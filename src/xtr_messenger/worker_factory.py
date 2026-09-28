@@ -177,7 +177,13 @@ class WorkerFactory:
         handlers = self._handlers if self._handlers is not None else default_registry()
         handling = RedispatchingHandlers(handlers, self._publishing_bus)
         return MessageBus(
-            chain(self._config, self._named, lambda: [HandleMessageMiddleware(handling)])
+            chain(
+                self._config,
+                self._named,
+                lambda: [
+                    HandleMessageMiddleware(handling, require_handler=self._config.require_handler)
+                ],
+            )
         )
 
     def _publishing_bus(self) -> MessageBusInterface:

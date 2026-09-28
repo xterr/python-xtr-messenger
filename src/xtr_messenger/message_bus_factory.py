@@ -98,7 +98,11 @@ class MessageBusFactory:
             handle_unrouted=self._config.handle_unrouted,
         )
         handlers = self._handlers if self._handlers is not None else default_registry()
-        return [send, HandleMessageMiddleware(RedispatchingHandlers(handlers, lambda: built[0]))]
+        handling = RedispatchingHandlers(handlers, lambda: built[0])
+        return [
+            send,
+            HandleMessageMiddleware(handling, require_handler=self._config.require_handler),
+        ]
 
     def _locator(self) -> SendersLocatorInterface:
         return SendersLocator(self._config.routing, self._senders())

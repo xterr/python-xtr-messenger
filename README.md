@@ -386,6 +386,7 @@ bus = MessageBusFactory(CONFIG, logger=logger).bus()
 | `default_middleware` | `True` | `False` leaves routing and handling out, on the bus and in workers |
 | `require_sender` | `False` | Refuse a message routed nowhere, with `NoSenderForMessageError` |
 | `handle_unrouted` | `False` | Handle a message routed nowhere in this process instead |
+| `require_handler` | `True` | Refuse a message handled here that no handler takes; `False` where processes each handle some of a shared bus's messages |
 
 `"logging"` is the one name the library ships. Add your own with `@as_middleware("audit")` on the
 class — built with no argument where a chain names it — or with `named=`, mapping a name to what

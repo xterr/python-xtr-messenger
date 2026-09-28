@@ -14,6 +14,7 @@ from xtr_messenger import (
     HandlersLocator,
     MessageBusConfig,
     MessageBusFactory,
+    NoHandlerForMessageError,
     NoSenderForMessageError,
     ReceivedStamp,
     SenderInterface,
@@ -276,3 +277,29 @@ async def test_default_middleware_off_leaves_routing_and_handling_out() -> None:
     _ = await bus.dispatch(ingest_document())
 
     assert order == ["middleware"]
+
+
+def _nobody_handles(*, require_handler: bool) -> MessageBusFactory:
+    config = MessageBusConfig(
+        transports={"fake": TransportConfig("fake://")},
+        handle_unrouted=True,
+        require_handler=require_handler,
+    )
+    return MessageBusFactory(
+        config, [FakeTransportFactory("fake", RecordingSender())], handlers=HandlersLocator()
+    )
+
+
+async def test_a_message_nobody_handles_is_refused_by_default() -> None:
+    bus = _nobody_handles(require_handler=True).bus()
+
+    with pytest.raises(NoHandlerForMessageError):
+        _ = await bus.dispatch(Unrouted())
+
+
+async def test_a_message_nobody_handles_passes_when_handlers_are_not_required() -> None:
+    bus = _nobody_handles(require_handler=False).bus()
+
+    envelope = await bus.dispatch(Unrouted())
+
+    assert isinstance(envelope.message, Unrouted)
