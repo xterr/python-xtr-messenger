@@ -192,9 +192,9 @@ CONFIG = MessageBusConfig(
 )
 ```
 
-A DSN selects the adapter and carries its settings. It is read when the `TransportConfig` is
-made, so one without a scheme fails there with `InvalidDsnError` rather than when the bus is
-built. Transports differing only in their query string address the same server, so they share
+A DSN selects the adapter and carries its settings. It is read when the bus or a worker is built,
+not when the `TransportConfig` is made — a configuration may be written before the environment it
+reads is set — so one without a scheme fails with `InvalidDsnError` there. Transports differing only in their query string address the same server, so they share
 one connection.
 
 | DSN | Transport |
