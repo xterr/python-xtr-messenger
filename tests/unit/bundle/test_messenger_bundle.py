@@ -25,7 +25,7 @@ from xtr_messenger import (
 )
 from xtr_messenger.bundle import MessengerBundle
 from xtr_messenger.middleware.middleware_registry import (
-    default_middleware_registry,
+    MiddlewareRegistry,
     middleware_declared_on,
 )
 
@@ -105,7 +105,12 @@ async def test_a_class_handler_runs_with_container_built_dependencies() -> None:
         await booted.shutdown()
 
 
-@as_middleware("tracking")
+# A registry of its own: the bundle reads the name off the class, and the
+# process-wide registry stays as other tests expect it.
+_TRACKING = MiddlewareRegistry()
+
+
+@as_middleware("tracking", registry=_TRACKING)
 @final
 class DeclaredTrackingMiddleware(MiddlewareInterface):
     """As_middleware-decorated so the bundle picks it up by autoconfiguration."""
@@ -134,8 +139,8 @@ async def test_middleware_declared_by_name_is_resolved_from_the_container() -> N
 
 
 def test_as_middleware_records_the_name_on_the_class() -> None:
-    """The default registry sees the class and the reader returns its names."""
-    assert "tracking" in default_middleware_registry()
+    """The registry sees the class and the reader returns its names."""
+    assert _TRACKING["tracking"] is DeclaredTrackingMiddleware
     assert "tracking" in tuple(middleware_declared_on(DeclaredTrackingMiddleware))
 
 

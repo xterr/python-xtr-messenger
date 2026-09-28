@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, cast, final
 
+from typing_extensions import override
+
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator, Mapping
+    from collections.abc import Iterable, Iterator
 
     from .middleware_interface import MiddlewareInterface
 
@@ -38,13 +41,16 @@ def middleware_declared_on(obj: object) -> Iterable[str]:
 
 
 @final
-class MiddlewareRegistry:
+class MiddlewareRegistry(Mapping[str, "type[MiddlewareInterface]"]):
     """Holds middleware classes by the names a configuration refers to them by.
 
     :func:`~xtr_messenger.decorator.as_middleware` writes to the process-wide
     one by default, which is what lets a module declare a middleware without
     importing a factory or a bundle. Pass a registry of your own to keep two
     applications — or two tests — apart.
+
+    A factory reads it as a live mapping: a name declared after the factory
+    was made still resolves.
     """
 
     __slots__ = ("_declared",)
@@ -57,22 +63,17 @@ class MiddlewareRegistry:
         """Bind ``name`` to ``cls`` — the last registration for a name wins."""
         self._declared[name] = cls
 
-    def get(self, name: str, /) -> type[MiddlewareInterface] | None:
-        """Return the class bound to ``name``, or ``None`` when nothing is."""
-        return self._declared.get(name)
+    @override
+    def __getitem__(self, name: str, /) -> type[MiddlewareInterface]:
+        """Return the class bound to ``name``."""
+        return self._declared[name]
 
-    def items(self) -> Iterable[tuple[str, type[MiddlewareInterface]]]:
-        """Yield every ``(name, class)`` pair in declaration order."""
-        return tuple(self._declared.items())
-
-    def __contains__(self, name: object) -> bool:
-        """Return whether ``name`` is bound to a class here."""
-        return name in self._declared
-
+    @override
     def __iter__(self) -> Iterator[str]:
-        """Yield each declared name."""
+        """Yield each declared name, in declaration order."""
         return iter(self._declared)
 
+    @override
     def __len__(self) -> int:
         """Return how many names are bound."""
         return len(self._declared)
