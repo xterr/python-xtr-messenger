@@ -20,6 +20,7 @@ from xtr_messenger import (
     MessageBusConfig,
     NotConsumableError,
     ReceivedStamp,
+    RedispatchMessage,
     SenderInterface,
     SyncTransportFactory,
     TransportConfig,
@@ -472,3 +473,36 @@ def test_a_transport_bringing_its_own_worker_cannot_share_it_with_a_receiver() -
 
     with pytest.raises(IncompatibleReceiversError):
         _ = workers.worker(["jobs", "generated"])
+
+
+@final
+class CountingFactory(TransportFactoryInterface):
+    """Builds ``whole://`` transports, counting the groups it is asked to build."""
+
+    def __init__(self, transports: Mapping[str, FakeTransport]) -> None:
+        self._transports = transports
+        self.built = 0
+
+    @override
+    def supports(self, dsn: Dsn) -> bool:
+        return dsn.scheme == "whole"
+
+    @override
+    def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
+        self.built += 1
+        return {name: self._transports[name] for name in group}
+
+
+async def test_every_redispatch_goes_out_through_one_publishing_bus() -> None:
+    redispatches = [
+        Envelope(RedispatchMessage(Envelope(ingest_document()), ("out",))) for _ in range(2)
+    ]
+    factory = CountingFactory({"in": FakeTransport(redispatches), "out": FakeTransport([])})
+    config = MessageBusConfig(
+        transports={"in": TransportConfig("whole://"), "out": TransportConfig("whole://")},
+    )
+
+    worker = WorkerFactory(config, [factory], handlers=HandlersLocator()).worker(["in"])
+    await worker.run()
+
+    assert factory.built == 2

@@ -270,3 +270,12 @@ def test_an_explicit_stamp_list_ignores_declared_stamps() -> None:
     decoded = wire.decode(wire.encode(envelope))
 
     assert decoded.last(DeclaredTenantStamp) is None
+
+
+def test_several_stamps_of_one_type_keep_their_order_through_a_round_trip() -> None:
+    stamps = [TransportMessageIdStamp(identifier) for identifier in ("first", "second", "third")]
+    envelope = Envelope(ingest_document()).with_stamps(*stamps)
+
+    decoded = serializer().decode(serializer().encode(envelope))
+
+    assert list(decoded.all(TransportMessageIdStamp)) == stamps
