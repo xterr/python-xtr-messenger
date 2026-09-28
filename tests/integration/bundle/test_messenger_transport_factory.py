@@ -19,6 +19,7 @@ _APP = "tests.fixtures.app_transport_factory"
 
 
 async def test_an_app_registered_factory_serves_the_bus_and_the_worker() -> None:
+    # Importing the fixture app declares its handlers; only this test should.
     from tests.fixtures.app_transport_factory.handlers import CountLedger  # noqa: PLC0415
     from tests.fixtures.app_transport_factory.messages import CountJob  # noqa: PLC0415
     from tests.fixtures.app_transport_factory.transport import (  # noqa: PLC0415

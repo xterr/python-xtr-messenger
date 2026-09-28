@@ -24,7 +24,7 @@ def default_codecs() -> tuple[MessageCodecInterface, ...]:
     no pydantic messages to carry.
     """
     try:
-        from .pydantic_codec import PydanticCodec  # noqa: PLC0415
+        from .pydantic_codec import PydanticCodec  # noqa: PLC0415 — pydantic is an optional extra
     except ImportError:
         return (DataclassCodec(),)
     return (PydanticCodec(), DataclassCodec())

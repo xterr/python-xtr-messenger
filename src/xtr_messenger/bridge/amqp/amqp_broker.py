@@ -76,4 +76,5 @@ def declared_queues(broker: AioPikaBroker) -> tuple[str, ...]:
     Useful at worker startup to log the workload a process has taken on, and
     to confirm a deployment scoped its workers the way it intended.
     """
+    # Taskiq exposes the declared queues nowhere else.
     return tuple(queue.name for queue in broker._task_queues)  # noqa: SLF001

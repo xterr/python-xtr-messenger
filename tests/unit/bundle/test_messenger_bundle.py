@@ -87,6 +87,7 @@ async def test_the_bundle_wires_a_bus_with_no_transports_when_unconfigured() -> 
 
 
 async def test_a_class_handler_runs_with_container_built_dependencies() -> None:
+    # Importing the fixture app declares its handlers; only this test should.
     from tests.fixtures.app_messenger.handlers import Ledger  # noqa: PLC0415
     from tests.fixtures.app_messenger.messages import DoWork  # noqa: PLC0415
 
@@ -170,8 +171,10 @@ async def test_the_console_command_is_registered_only_when_console_is_active() -
         resources=(),
     )
     compiled = kernel.build()
+    # The console is an optional peer.
     from xtr_console.command import commands_declared_on  # noqa: PLC0415
 
+    # Importing it declares the console's commands; only this test should.
     from xtr_messenger.command.consume import ConsumeMessagesCommand  # noqa: PLC0415
 
     del compiled
