@@ -178,3 +178,30 @@ def test_encoding_a_field_with_no_json_form_fails_loudly() -> None:
         _ = codec.encode(HasObject(thing=object()))
 
     assert excinfo.value.message_name == "HasObject"
+
+
+@dataclass(frozen=True, slots=True)
+class Node:
+    child: Node
+
+
+@dataclass(frozen=True, slots=True)
+class Left:
+    right: Right
+
+
+@dataclass(frozen=True, slots=True)
+class Right:
+    left: Left
+
+
+@pytest.mark.parametrize(
+    ("message_type", "loop"), [(Node, "Node -> Node"), (Left, "Left -> Right -> Left")]
+)
+def test_forbidding_unknown_fields_refuses_a_message_that_refers_to_itself(
+    message_type: type, loop: str
+) -> None:
+    strict = DataclassCodec(forbid_unknown_fields=True)
+
+    with pytest.raises(MessageDecodingFailedError, match=loop):
+        _ = strict.decode(message_type, {})

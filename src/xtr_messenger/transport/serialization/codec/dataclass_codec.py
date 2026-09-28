@@ -72,7 +72,9 @@ class DataclassCodec(MessageCodecInterface):
 
         Raises:
             MessageDecodingFailedError: If a field is missing or malformed,
-                or unexpected when unknown fields are forbidden.
+                or unexpected when unknown fields are forbidden — or, then,
+                when the message's shape refers back to itself, which the
+                check cannot follow.
         """
         name = message_type.__name__
         try:
@@ -94,20 +96,34 @@ class DataclassCodec(MessageCodecInterface):
         """
         known = self._strict_mirrors.get(message_type)
         if known is None:
-            known = _mirror(message_type, self._strict_mirrors)
+            known = _mirror(message_type, self._strict_mirrors, ())
         return known
 
 
-def _mirror(message_type: type, seen: dict[type, type[msgspec.Struct]]) -> type[msgspec.Struct]:
-    placeholder = seen.get(message_type)
-    if placeholder is not None:
-        return placeholder
+def _mirror(
+    message_type: type, seen: dict[type, type[msgspec.Struct]], path: tuple[type, ...]
+) -> type[msgspec.Struct]:
+    """Mirror ``message_type`` onto a strict struct, ``path`` the messages being mirrored.
+
+    Raises:
+        TypeError: If the shape refers back to a message still being mirrored:
+            a struct cannot be made before its own fields' types.
+    """
+    known = seen.get(message_type)
+    if known is not None:
+        return known
+    if message_type in path:
+        loop = " -> ".join(
+            step.__name__ for step in (*path[path.index(message_type) :], message_type)
+        )
+        message = f"forbidding unknown fields cannot check a message that refers to itself: {loop}"
+        raise TypeError(message)
     hints = get_type_hints(message_type)
     fields: list[object] = []
     for field in dataclasses.fields(cast("type[DataclassInstance]", message_type)):
         annotation = cast("type", hints[field.name])
         if dataclasses.is_dataclass(annotation):
-            annotation = _mirror(annotation, seen)
+            annotation = _mirror(annotation, seen, (*path, message_type))
         if field.default is dataclasses.MISSING:
             fields.append((field.name, annotation))
         else:
