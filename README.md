@@ -389,8 +389,8 @@ bus = MessageBusFactory(CONFIG, logger=logger).bus()
 
 `"logging"` is the one name the library ships. Add your own with `@as_middleware("audit")` on the
 class — built with no argument where a chain names it — or with `named=`, mapping a name to what
-builds it: `MessageBusFactory(CONFIG, named={"audit": Audit})`, which wins over a declared name.
-A name nothing is registered for is refused with
+builds it: `MessageBusFactory(CONFIG, named={"audit": Audit})`, which wins over a declared name
+— or, with a container, with `injectables(middleware=...)`. A name nothing is registered for is refused with
 `UnknownMiddlewareError` when the bus or a worker is built.
 
 Middleware keeps no per-message state. One instance serves every dispatch, concurrently, and an
