@@ -15,6 +15,8 @@ Without a kernel, tell the command which factory to build workers with::
     raise SystemExit(Application("acme").run())
 """
 
+from __future__ import annotations
+
 from .consume import ConsumeMessagesCommand
 
 __all__ = ["ConsumeMessagesCommand"]

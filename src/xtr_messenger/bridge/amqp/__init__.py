@@ -18,6 +18,8 @@ republishes it instead, in its original wire format, so it can be inspected
 and replayed.
 """
 
+from __future__ import annotations
+
 from .amqp_broker import create_amqp_broker, declared_queues
 from .amqp_transport_factory import AMQP_SCHEMES, AmqpTransportFactory, MixedDsnError
 from .dead_letter_middleware import DeadLetterMiddleware

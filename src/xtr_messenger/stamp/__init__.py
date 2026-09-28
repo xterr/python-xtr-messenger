@@ -10,6 +10,8 @@ Stamps that describe purely in-process facts subclass
 envelope on the wire.
 """
 
+from __future__ import annotations
+
 from .ack_receipt_stamp import AckReceiptStamp
 from .delay_stamp import DelayStamp
 from .error_details_stamp import ErrorDetailsStamp

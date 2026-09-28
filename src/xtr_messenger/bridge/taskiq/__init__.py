@@ -19,6 +19,8 @@ dead-lettering — lives in :mod:`xtr_messenger.bridge.amqp` and needs the
 ``amqp`` extra.
 """
 
+from __future__ import annotations
+
 from .binding import bind_bus
 from .broker import ensure_started
 from .taskiq_sender import TaskiqSender

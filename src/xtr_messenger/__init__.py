@@ -8,6 +8,8 @@ The core has no third-party dependencies. Transports that need one live
 behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 """
 
+from __future__ import annotations
+
 from importlib.metadata import version
 
 from .decorator import as_message, as_message_handler, as_middleware, as_stamp

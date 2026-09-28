@@ -1,5 +1,7 @@
 """The ``in-memory://`` transport, which records instead of sending."""
 
+from __future__ import annotations
+
 from .in_memory_transport import InMemoryTransport
 from .in_memory_transport_factory import IN_MEMORY_SCHEME, InMemoryTransportFactory
 

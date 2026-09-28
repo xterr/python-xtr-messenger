@@ -1,5 +1,7 @@
 """Looking up which handler consumes a message."""
 
+from __future__ import annotations
+
 from .default_registry import default_registry
 from .handler_descriptor import Handler, HandlerDescriptor
 from .handlers_locator import HandlersLocator

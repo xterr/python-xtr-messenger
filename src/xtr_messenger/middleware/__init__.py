@@ -1,5 +1,7 @@
 """Middleware contracts and the middleware shipped with the library."""
 
+from __future__ import annotations
+
 from .handle_message_middleware import HandleMessageMiddleware
 from .logging_middleware import LoggingMiddleware
 from .middleware_interface import MiddlewareInterface

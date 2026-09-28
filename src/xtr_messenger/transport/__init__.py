@@ -4,6 +4,8 @@ These two need no third-party dependency. The taskiq adapter lives in
 :mod:`xtr_messenger.bridge.amqp` and is installed with the ``taskiq`` extra.
 """
 
+from __future__ import annotations
+
 from .in_memory.in_memory_transport import InMemoryTransport
 from .sync.sync_transport import SyncTransport
 

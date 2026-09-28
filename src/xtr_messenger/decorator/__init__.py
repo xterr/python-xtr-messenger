@@ -4,6 +4,8 @@ Named for what they are rather than what they do: *attribute* already means
 something else in Python, and these are decorators.
 """
 
+from __future__ import annotations
+
 from .as_message import as_message
 from .as_message_handler import as_message_handler
 from .as_middleware import as_middleware

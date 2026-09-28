@@ -6,6 +6,8 @@ of message types becomes JSON. That separation is what lets dataclass and
 pydantic messages share a single bus.
 """
 
+from __future__ import annotations
+
 from .codec import DataclassCodec, JsonValue, MessageCodecInterface, default_codecs
 from .encoded_envelope import EncodedEnvelope
 from .serializer import TYPE_HEADER, JsonSerializer

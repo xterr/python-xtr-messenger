@@ -6,6 +6,8 @@ cause. Each carries the data a caller needs as typed attributes rather than
 forcing a message to be parsed.
 """
 
+from __future__ import annotations
+
 from .handler_signature_error import HandlerSignatureError
 from .handlers_failed_error import HandlersFailedError
 from .incompatible_receivers_error import IncompatibleReceiversError
