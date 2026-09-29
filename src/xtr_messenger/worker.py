@@ -9,6 +9,7 @@ from typing_extensions import override
 
 from ._handling import Failed, Handled, Skipped, announce_failure, handle, receiver_name_of
 from .event import WorkerRunningEvent, WorkerStartedEvent, WorkerStoppedEvent
+from .stamp import ReceivedStamp
 from .transport.receiver._close_stream import close_stream
 from .worker_interface import WorkerInterface
 
@@ -82,9 +83,10 @@ class Worker(WorkerInterface):
 
         ``event_dispatcher``, when given, hears about the worker and about
         every message — see :mod:`xtr_messenger.event`. ``receiver_name`` is
-        the transport name those events report; left out, each envelope's
-        :class:`~xtr_messenger.stamp.ReceivedStamp` names it, which is how a
-        worker draining several transports reports each one.
+        the transport name those events report, and the one each message's
+        :class:`~xtr_messenger.stamp.ReceivedStamp` carries to its handlers;
+        left out, each envelope's own stamp names it, which is how a worker
+        draining several transports reports each one.
         """
         self._bus = bus
         self._receiver = receiver
@@ -149,6 +151,13 @@ class Worker(WorkerInterface):
 
     async def _settle(self, envelope: Envelope) -> None:
         name = receiver_name_of(envelope, self._receiver_name)
+        received = envelope.last(ReceivedStamp)
+        if self._receiver_name is not None and (
+            received is None or received.transport_name != self._receiver_name
+        ):
+            # A receiver names what it is, not the transport it was configured as: the
+            # handlers see the name the worker was built for, as they do draining several.
+            envelope = envelope.with_stamps(ReceivedStamp(self._receiver_name))
         try:
             match await handle(self._bus, envelope, name, self._dispatcher):
                 case Handled(settled) | Skipped(settled):

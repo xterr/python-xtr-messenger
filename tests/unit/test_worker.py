@@ -175,6 +175,17 @@ async def test_it_handles_and_acks_each_collected_message() -> None:
     assert receiver.rejected == []
 
 
+async def test_a_worker_built_for_one_transport_tells_the_handlers_its_name() -> None:
+    """A receiver stamps what it is — ``in-memory`` — not what it was configured as."""
+    receiver = StubReceiver([Envelope("a").with_stamps(ReceivedStamp("in-memory"))])
+    bus = RecordingBus()
+
+    await Worker(bus, receiver, receiver_name="jobs").run()
+
+    assert bus.dispatched[0].last(ReceivedStamp) == ReceivedStamp("jobs")
+    assert receiver.acked[0].last(ReceivedStamp) == ReceivedStamp("jobs")
+
+
 async def test_a_failing_dispatch_rejects_with_the_reason_attached() -> None:
     receiver = StubReceiver([Envelope("a")])
     bus = RecordingBus(failure=ValueError("boom"))
