@@ -10,6 +10,7 @@ from typing_extensions import override
 
 from xtr_messenger.exception import InvalidMiddlewareArgumentsError, UnknownMiddlewareError
 
+from .dispatch_after_current_bus_middleware import DispatchAfterCurrentBusMiddleware
 from .logging_middleware import LoggingMiddleware
 from .middleware_arguments import entry_arguments, entry_key
 from .middleware_registry import default_middleware_registry
@@ -85,16 +86,21 @@ def chain(
 ) -> list[MiddlewareInterface]:
     """Return the chain ``config`` describes: what it names, then ``defaults``.
 
-    ``defaults`` is only called when ``default_middleware`` is on, so what it
-    would open — a transport's connection — is never opened for a chain
-    that leaves it out.
+    With ``default_middleware`` on, a
+    :class:`~xtr_messenger.middleware.DispatchAfterCurrentBusMiddleware` comes
+    first, so a message held back until the current one was handled waits for
+    everything the configured middleware do around it. ``defaults`` is only
+    called when ``default_middleware`` is on, so what it would open — a
+    transport's connection — is never opened for a chain that leaves it out.
 
     Raises:
         UnknownMiddlewareError: If ``config`` names middleware ``named``
             has nothing registered for.
     """
     configured = list(resolve(config.middleware, named))
-    return [*configured, *defaults()] if config.default_middleware else configured
+    if not config.default_middleware:
+        return configured
+    return [DispatchAfterCurrentBusMiddleware(), *configured, *defaults()]
 
 
 def resolve(

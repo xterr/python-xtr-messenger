@@ -8,6 +8,7 @@ forcing a message to be parsed.
 
 from __future__ import annotations
 
+from .delayed_message_handling_error import DelayedMessageHandlingError
 from .handler_signature_error import HandlerSignatureError
 from .handlers_failed_error import HandlersFailedError
 from .incompatible_receivers_error import IncompatibleReceiversError
@@ -28,6 +29,7 @@ from .unknown_transport_option_error import UnknownTransportOptionError
 from .unsupported_dsn_error import UnsupportedDsnError
 
 __all__ = [
+    "DelayedMessageHandlingError",
     "HandlerSignatureError",
     "HandlersFailedError",
     "IncompatibleReceiversError",

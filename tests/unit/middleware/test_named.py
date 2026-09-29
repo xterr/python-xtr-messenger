@@ -12,6 +12,7 @@ from xtr_logging_contracts import Level
 from tests.support.fakes import OneStep, RecordingMiddleware
 from tests.support.messages import ingest_document
 from xtr_messenger import (
+    DispatchAfterCurrentBusMiddleware,
     Envelope,
     InvalidMiddlewareArgumentsError,
     LoggingMiddleware,
@@ -101,10 +102,13 @@ def test_a_name_of_your_own_replaces_the_librarys() -> None:
     assert resolve(["logging"], named_middleware(named={"logging": lambda: mine})) == (mine,)
 
 
-def test_the_chain_is_what_is_named_then_the_defaults() -> None:
+def test_the_chain_holds_messages_back_first_then_is_what_is_named_then_the_defaults() -> None:
     mine, tail = RecordingMiddleware(), RecordingMiddleware()
 
-    assert chain(a_config(mine), named_middleware(), lambda: [tail]) == [mine, tail]
+    built = chain(a_config(mine), named_middleware(), lambda: [tail])
+
+    assert isinstance(built[0], DispatchAfterCurrentBusMiddleware)
+    assert built[1:] == [mine, tail]
 
 
 def test_default_middleware_off_never_builds_the_defaults() -> None:

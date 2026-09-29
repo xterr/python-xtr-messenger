@@ -4,6 +4,7 @@ import pytest
 
 import xtr_messenger
 from xtr_messenger import (
+    DelayedMessageHandlingError,
     HandlersFailedError,
     HandlerSignatureError,
     IncompatibleReceiversError,
@@ -26,6 +27,7 @@ from xtr_messenger import (
 )
 
 EXPORTED_EXCEPTIONS: tuple[type, ...] = (
+    DelayedMessageHandlingError,
     HandlerSignatureError,
     HandlersFailedError,
     IncompatibleReceiversError,

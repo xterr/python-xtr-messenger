@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .ack_receipt_stamp import AckReceiptStamp
 from .delay_stamp import DelayStamp
+from .dispatch_after_current_bus_stamp import DispatchAfterCurrentBusStamp
 from .error_details_stamp import ErrorDetailsStamp
 from .handled_stamp import HandledStamp
 from .non_sendable_stamp_interface import NonSendableStampInterface
@@ -28,6 +29,7 @@ __all__ = [
     "DEFAULT_STAMP_TYPES",
     "AckReceiptStamp",
     "DelayStamp",
+    "DispatchAfterCurrentBusStamp",
     "ErrorDetailsStamp",
     "HandledStamp",
     "NonSendableStampInterface",

@@ -16,6 +16,7 @@ from .decorator import as_message, as_message_handler, as_middleware, as_stamp
 from .dsn import Dsn, InvalidDsnError
 from .envelope import Envelope
 from .exception import (
+    DelayedMessageHandlingError,
     HandlersFailedError,
     HandlerSignatureError,
     IncompatibleReceiversError,
@@ -47,6 +48,7 @@ from .message_bus_factory import MessageBusFactory
 from .message_bus_interface import MessageBusInterface
 from .message_registry import name_of, transports_of, type_for_name
 from .middleware import (
+    DispatchAfterCurrentBusMiddleware,
     HandleMessageMiddleware,
     LoggingMiddleware,
     MiddlewareInterface,
@@ -57,6 +59,7 @@ from .middleware import (
 from .stamp import (
     AckReceiptStamp,
     DelayStamp,
+    DispatchAfterCurrentBusStamp,
     ErrorDetailsStamp,
     HandledStamp,
     NonSendableStampInterface,
@@ -97,6 +100,9 @@ __all__ = [
     "AckReceiptStamp",
     "DataclassCodec",
     "DelayStamp",
+    "DelayedMessageHandlingError",
+    "DispatchAfterCurrentBusMiddleware",
+    "DispatchAfterCurrentBusStamp",
     "Dsn",
     "EncodedEnvelope",
     "Envelope",
