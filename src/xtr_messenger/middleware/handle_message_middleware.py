@@ -13,6 +13,8 @@ from xtr_messenger.stamp import HandledStamp
 from .middleware_interface import MiddlewareInterface
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from xtr_messenger.envelope import Envelope
     from xtr_messenger.handler import HandlersLocatorInterface
 
@@ -77,7 +79,7 @@ class HandleMessageMiddleware(MiddlewareInterface):
             try:
                 result = await descriptor.invoke(envelope)
             except Exception as error:  # noqa: BLE001 — collected, and raised once every handler ran
-                errors[descriptor.name] = error
+                errors[_unused(errors, descriptor.name)] = error
             else:
                 envelope = envelope.with_stamps(HandledStamp(descriptor.name, result))
         if errors:
@@ -86,3 +88,12 @@ class HandleMessageMiddleware(MiddlewareInterface):
 
     def _handled_type_names(self) -> tuple[str, ...]:
         return tuple(sorted(t.__qualname__ for t in self._registry.message_types()))
+
+
+def _unused(errors: Mapping[str, Exception], name: str) -> str:
+    """Return ``name``, or ``name#2``, ``name#3``… when a handler of that name failed already."""
+    key, count = name, 1
+    while key in errors:
+        count += 1
+        key = f"{name}#{count}"
+    return key

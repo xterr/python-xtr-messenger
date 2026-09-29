@@ -142,6 +142,31 @@ async def test_every_handler_runs_when_one_fails_and_each_failure_is_kept() -> N
     assert [stamp.result for stamp in handled] == ["done"]
 
 
+async def test_the_failures_of_handlers_sharing_a_name_are_each_kept() -> None:
+    registry = HandlersLocator()
+
+    async def first(message: object) -> None:
+        del message
+        raise RuntimeError("first failed")
+
+    async def second(message: object) -> None:
+        del message
+        raise ValueError("second failed")
+
+    for handler in (first, second):
+        _ = registry.register(IngestDocument, handler, name="ingest")
+
+    with pytest.raises(HandlersFailedError) as caught:
+        _ = await HandleMessageMiddleware(registry).handle(
+            Envelope(ingest_document()),
+            OneStep(TerminalMiddleware()),
+        )
+
+    errors = caught.value.errors
+    assert list(errors) == ["ingest", "ingest#2"]
+    assert [type(error) for error in errors.values()] == [RuntimeError, ValueError]
+
+
 async def test_it_defaults_to_the_process_wide_registry() -> None:
     """With no registry given, handling resolves from the default one that
     ``@as_message_handler`` fills."""

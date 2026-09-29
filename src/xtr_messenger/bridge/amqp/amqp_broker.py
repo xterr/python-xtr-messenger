@@ -77,4 +77,4 @@ def declared_queues(broker: AioPikaBroker) -> tuple[str, ...]:
     to confirm a deployment scoped its workers the way it intended.
     """
     # Taskiq exposes the declared queues nowhere else.
-    return tuple(queue.name for queue in broker._task_queues)  # noqa: SLF001
+    return tuple(queue.name for queue in broker._task_queues)  # noqa: SLF001 — no public accessor

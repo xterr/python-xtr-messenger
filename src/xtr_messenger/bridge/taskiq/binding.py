@@ -35,7 +35,7 @@ from xtr_messenger.message_registry import declared_names
 from xtr_messenger.stamp import ReceivedStamp, RedeliveryStamp
 from xtr_messenger.transport.serialization import EncodedEnvelope, JsonSerializer
 
-from .labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
+from .labels import HEADERS_LABEL, QUEUE_LABEL, retries_from
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine, Mapping
@@ -189,7 +189,7 @@ def _rebuild(
     envelope = serializer.decode(EncodedEnvelope(body=body, headers=headers))
     return envelope.with_stamps(
         ReceivedStamp(receiver_name),
-        RedeliveryStamp(_attempt_from(labels.get(RETRIES_LABEL))),
+        RedeliveryStamp(_attempt_from(labels)),
     )
 
 
@@ -204,10 +204,6 @@ def _headers_from(raw: object, task_name: str) -> dict[str, str]:
         ) from exc
 
 
-def _attempt_from(raw: object) -> int:
-    if isinstance(raw, bool) or not isinstance(raw, (int, str)):
-        return _LOST_LABEL_ATTEMPT
-    try:
-        return int(raw)
-    except ValueError:
-        return _LOST_LABEL_ATTEMPT
+def _attempt_from(labels: Mapping[str, object]) -> int:
+    retries = retries_from(labels)
+    return _LOST_LABEL_ATTEMPT if retries is None else retries

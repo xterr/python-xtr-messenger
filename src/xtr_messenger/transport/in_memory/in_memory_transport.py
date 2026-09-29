@@ -109,7 +109,7 @@ class InMemoryTransport(TransportInterface):
     @override
     async def ack(self, envelope: Envelope) -> None:
         """Drop the outstanding record for ``envelope``."""
-        _ = self._unsettled.pop(_receipt_of(envelope), None)
+        self._settle(envelope)
 
     @override
     async def reject(self, envelope: Envelope) -> None:
@@ -120,10 +120,11 @@ class InMemoryTransport(TransportInterface):
         :class:`~xtr_messenger.stamp.ErrorDetailsStamp` saying why — is kept
         rather than discarded.
         """
-        _ = self._unsettled.pop(_receipt_of(envelope), None)
+        self._settle(envelope)
         self._rejected.append(envelope)
 
-
-def _receipt_of(envelope: Envelope) -> int:
-    stamp = envelope.last(AckReceiptStamp)
-    return stamp.receipt if stamp is not None else -1
+    def _settle(self, envelope: Envelope) -> None:
+        """Stop tracking ``envelope``; one never collected here carries no receipt."""
+        stamp = envelope.last(AckReceiptStamp)
+        if stamp is not None:
+            _ = self._unsettled.pop(stamp.receipt, None)

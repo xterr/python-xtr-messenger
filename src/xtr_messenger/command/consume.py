@@ -4,20 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from typing import Annotated, ClassVar, Final, final
+from typing import Annotated, ClassVar, Final, cast, final
 
 from xtr_console import ConsoleStyle, ExitCode, Option, Range, as_command, escape
 
 from xtr_messenger.exception import MessageBusError
-from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.worker_factory import WorkerFactory
 from xtr_messenger.worker_interface import WorkerInterface
 
 __all__ = ["ConsumeMessagesCommand"]
 
-# Typed as what a container fills the parameter with, so the engine still
-# matches it; ``WorkerFactory | None`` is a different type and never would be.
-_UNSET: Final = WorkerFactory(MessageBusConfig(transports={}))
+# A bare marker, typed as what a container fills the parameter with so the
+# engine still matches it; ``WorkerFactory | None`` is a different type and
+# never would be. Nothing ever calls it: it is only compared by identity.
+_UNSET: Final = cast("WorkerFactory", object())
 
 _NO_WORKERS: Final = (
     "No worker factory: wire a container, or call ConsumeMessagesCommand.use_workers()."

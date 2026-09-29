@@ -179,7 +179,7 @@ def _each_hint_of(target: object) -> dict[str, object]:
             continue
         try:
             # What get_type_hints does with a string annotation, one at a time.
-            hints[parameter] = eval(annotation, namespace)  # noqa: S307
+            hints[parameter] = eval(annotation, namespace)  # noqa: S307 — a declared annotation
         except (NameError, AttributeError, TypeError, SyntaxError):
             continue
     return hints
@@ -202,7 +202,7 @@ def _supplied_by_container(hint: object) -> bool:
 def _container_check() -> Callable[[object], bool] | None:
     try:
         # The container is an optional peer.
-        from xtr_dependency_injection import is_container_supplied  # noqa: PLC0415
+        from xtr_dependency_injection import is_container_supplied  # noqa: PLC0415 — optional peer
     except ImportError:
         return None
     return is_container_supplied

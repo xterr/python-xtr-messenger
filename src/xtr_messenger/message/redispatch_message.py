@@ -28,12 +28,13 @@ class RedispatchMessage:
     routing it to a transport.
     """
 
-    envelope: Envelope | object
+    envelope: object
+    """An :class:`~xtr_messenger.Envelope`, or a bare message to wrap in one."""
     transport_names: tuple[str, ...]
 
     def __init__(
         self,
-        envelope: Envelope | object,
+        envelope: object,
         transport_names: str | tuple[str, ...] | list[str] = (),
     ) -> None:
         """Carry ``envelope`` — or a bare message — and where to send it, if not by routing.

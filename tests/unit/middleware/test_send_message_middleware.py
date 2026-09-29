@@ -10,6 +10,7 @@ from typing_extensions import override
 from tests.support.fakes import OneStep, RecordingSender, TerminalMiddleware
 from tests.support.messages import UndeclaredMessage
 from xtr_messenger import (
+    DelayStamp,
     Envelope,
     NoSenderForMessageError,
     ReceivedStamp,
@@ -160,6 +161,27 @@ async def test_no_sender_of_a_fan_out_sees_what_another_added() -> None:
     assert second.sent[0].last(ReceivedStamp) is None
     assert result.last(ReceivedStamp) == ReceivedStamp("here")
     assert len(result.all(SentStamp)) == 2
+
+
+@final
+class RebuildingSender(SenderInterface):
+    """Returns a new envelope, its own stamp first, equal to one the original carried."""
+
+    @override
+    async def send(self, envelope: Envelope) -> Envelope:
+        return Envelope.wrap(envelope.message, (DelayStamp(5), *envelope.stamps))
+
+
+async def test_a_rebuilt_envelope_keeps_a_stamp_equal_to_one_it_had() -> None:
+    locator = FakeLocator([("primary", RebuildingSender())])
+
+    result = await SendMessageMiddleware(locator).handle(
+        Envelope("payload").with_stamps(DelayStamp(5), DelayStamp(9)),
+        OneStep(TerminalMiddleware()),
+    )
+
+    assert sorted(stamp.delay_ms for stamp in result.all(DelayStamp)) == [5, 5, 9]
+    assert len(result.all(SentStamp)) == 1
 
 
 async def test_require_sender_raises_naming_the_routed_types() -> None:

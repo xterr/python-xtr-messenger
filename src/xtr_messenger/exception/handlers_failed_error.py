@@ -27,7 +27,8 @@ class HandlersFailedError(MessageBusError):
             :class:`~xtr_messenger.stamp.HandledStamp` for every handler that
             succeeded.
         errors: What each failed handler raised, by handler name, in the
-            order the handlers ran.
+            order the handlers ran; a name another failed handler already
+            took is told apart as ``name#2``, ``name#3``….
     """
 
     envelope: Envelope

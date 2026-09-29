@@ -91,9 +91,17 @@ def _added_by(returned: Envelope, before: Envelope) -> tuple[StampInterface, ...
     """Return the stamps ``returned`` carries that ``before`` did not.
 
     A sender appends to what it was handed; one that rebuilt the envelope
-    instead has every stamp of its own counted.
+    instead has every stamp of its own counted — each stamp ``before`` had
+    accounts for one equal stamp only, so a repeat the sender added is kept.
     """
     count = len(before.stamps)
     if returned.stamps[:count] == before.stamps:
         return returned.stamps[count:]
-    return tuple(stamp for stamp in returned.stamps if stamp not in before.stamps)
+    unmatched = list(before.stamps)
+    added: list[StampInterface] = []
+    for stamp in returned.stamps:
+        if stamp in unmatched:
+            unmatched.remove(stamp)
+        else:
+            added.append(stamp)
+    return tuple(added)

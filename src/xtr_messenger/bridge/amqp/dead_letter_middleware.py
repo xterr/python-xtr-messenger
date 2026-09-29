@@ -16,7 +16,7 @@ from taskiq import TaskiqMiddleware
 from taskiq_aio_pika import AioPikaBroker
 from typing_extensions import override
 
-from xtr_messenger.bridge.taskiq.labels import RETRIES_LABEL
+from xtr_messenger.bridge.taskiq.labels import retries_from
 
 if TYPE_CHECKING:
     from taskiq import TaskiqMessage, TaskiqResult
@@ -73,13 +73,8 @@ class DeadLetterMiddleware(TaskiqMiddleware):
         so a handler treats the delivery as its last chance and does not skip
         cleanup. Both choices pick the outcome that loses nothing.
         """
-        raw = message.labels.get(RETRIES_LABEL)
-        if isinstance(raw, bool) or not isinstance(raw, (int, str)):
-            return False
-        try:
-            return int(raw) >= self.max_attempts - 1
-        except ValueError:
-            return False
+        retries = retries_from(message.labels)
+        return retries is not None and retries >= self.max_attempts - 1
 
     def _dead_letter(self, message: TaskiqMessage, exception: BaseException) -> Message:
         broker_message = self.broker.formatter.dumps(message)
