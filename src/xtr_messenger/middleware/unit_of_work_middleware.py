@@ -12,6 +12,7 @@ from typing_extensions import override
 from xtr_dependency_injection import unit_of_work
 
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
+from xtr_messenger.stamp import ReceivedStamp
 
 if TYPE_CHECKING:
     from xtr_service_contracts import ContainerInterface
@@ -30,9 +31,11 @@ class UnitOfWorkMiddleware(MiddlewareInterface):
     every worker, so the middleware after it and every handler of the
     message share the unit's scoped services — one database session, say —
     released once the message is done with. A message dispatched while
-    another is handled joins the unit already open. The middleware holding
-    messages back until the current one was handled comes before it, so
-    each message held back is a unit of its own.
+    another is handled joins the unit already open; a message a worker
+    received is new work, a unit of its own even inside one — a worker run
+    by a command. The middleware holding messages back until the current one
+    was handled comes before it, so each message held back is a unit of its
+    own.
     """
 
     __slots__ = ("_container",)
@@ -44,5 +47,6 @@ class UnitOfWorkMiddleware(MiddlewareInterface):
     @override
     async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
         """Run the rest of the chain inside a unit of work."""
-        async with unit_of_work(self._container):
+        received = envelope.last(ReceivedStamp) is not None
+        async with unit_of_work(self._container, join=not received):
             return await stack.next().handle(envelope, stack)

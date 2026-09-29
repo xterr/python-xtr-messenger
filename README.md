@@ -842,7 +842,8 @@ unit of its own — and the middleware after it and every handler of a message s
 [unit of work](../xtr-dependency-injection#units-of-work): a `lifetime="scoped"` service — a
 database session — is built once per message, handed to each handler asking for it, and
 released when the message is done with, even when a handler raised. A message dispatched while
-another is handled joins that unit. A middleware needing the message's instance resolves it
+another is handled — or while a request or a command runs — joins that unit; a message a worker
+received is always a unit of its own, even when a command runs the worker. A middleware needing the message's instance resolves it
 from `current_unit_of_work()`.
 
 A class in the application — or another bundle — that implements `TransportFactoryInterface`
