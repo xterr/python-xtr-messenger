@@ -266,7 +266,9 @@ asyncio.run(main())
 uv run python -m app.worker_high
 ```
 
-What comes back is a `WorkerInterface`, never the broker underneath. Point one process at
+What comes back is a `WorkerInterface`, never the broker underneath. Every message it hands the
+handlers carries a `ReceivedStamp` naming the transport it was consumed from, as configured —
+`high`, not the DSN's scheme. Point one process at
 `["high"]` and another at `["low"]` and each consumes its own workload. `stop()` lets it finish
 the message in hand and return — at once, if it is waiting for one.
 
@@ -382,8 +384,8 @@ bus = MessageBusFactory(CONFIG, logger=logger).bus()
 
 | Setting | Default | Means |
 | --- | --- | --- |
-| `middleware` | `()` | What runs, in order: a name, or middleware already built |
-| `default_middleware` | `True` | `False` leaves routing and handling out, on the bus and in workers |
+| `middleware` | `()` | What runs, in order: a name, middleware already built, or `{name: {argument: value}}` |
+| `default_middleware` | `True` | `False` leaves out [holding messages back](#dispatching-after-the-current-message), routing and handling, on the bus and in workers |
 | `require_sender` | `False` | Refuse a message routed nowhere, with `NoSenderForMessageError` |
 | `handle_unrouted` | `False` | Handle a message routed nowhere in this process instead |
 | `require_handler` | `True` | Refuse a message handled here that no handler takes; `False` where processes each handle some of a shared bus's messages |
@@ -393,6 +395,23 @@ class — built with no argument where a chain names it — or with `named=`, ma
 builds it: `MessageBusFactory(CONFIG, named={"audit": Audit})`, which wins over a declared name
 — or, with a container, with `injectables(middleware=...)`. A name nothing is registered for is refused with
 `UnknownMiddlewareError` when the bus or a worker is built.
+
+A name can carry arguments for its middleware's constructor, by parameter name:
+
+```python
+middleware = ["audit", {"audit": {"channel": "billing", "sampled": True}}]
+```
+
+```python
+@as_middleware("audit")
+class Audit(MiddlewareInterface):
+    def __init__(self, logger: LoggerInterface, channel: str = "app", sampled: bool = False): ...
+```
+
+Each entry with arguments is a middleware of its own, beside the bare name. An argument the
+constructor does not take — or an entry in another shape — is refused with
+`InvalidMiddlewareArgumentsError`; under a kernel, the container's own check of definition
+arguments fails the build.
 
 Middleware keeps no per-message state. One instance serves every dispatch, concurrently, and an
 instance in the configuration — or a container's one instance of a class — serves the bus and
@@ -434,8 +453,9 @@ container supplies each named entry; the logging middleware writes through the
 console handlers follow every command, so `messenger:consume -vv` reads out every handler
 that ran.
 
-What `middleware` names runs first, in that order. Routing and handling always come last, in
-that order, and two rules carry the producer/consumer split:
+What `middleware` names runs in that order, after the middleware that
+[holds messages back](#dispatching-after-the-current-message). Routing and handling always come
+last, in that order, and two rules carry the producer/consumer split:
 
 - An envelope that arrived **from** a transport carries a `ReceivedStamp` and is never routed
   again, so a consumer cannot re-publish what it consumes.
@@ -503,6 +523,34 @@ connection. With a [kernel](#kernel--bundle) the container's bus does it. A `Red
 holds an envelope, which no codec carries, so handle it in the process that creates it rather
 than routing it to a remote transport.
 
+### Dispatching after the current message
+
+A handler asking for a follow-up usually means "once what I did is final". Stamp it with
+`DispatchAfterCurrentBusStamp` and it waits until the message being handled was handled —
+every handler, and every middleware around them, a transaction's commit included — then goes
+out through the rest of its chain. If that message fails, the follow-up is never dispatched:
+
+```python
+from xtr_messenger import DispatchAfterCurrentBusStamp
+
+
+@as_message_handler(PlaceOrder)
+async def place(message: PlaceOrder, bus: Injected[MessageBusInterface]) -> None:
+    ...  # record the order
+    await bus.dispatch(SendReceipt(message.order_id), DispatchAfterCurrentBusStamp())
+```
+
+- Held-back messages go out in the order dispatched; one they dispatch with the stamp joins the
+  end of the line. Each is tried even when one before it failed, and then
+  `DelayedMessageHandlingError` carries every failure, and the envelope of the message that
+  succeeded.
+- The message being handled is the first dispatched in the task — on the bus or by a worker,
+  whichever bus the handler dispatches through. A stamped message dispatched with nothing
+  being handled goes out at once.
+- `DispatchAfterCurrentBusMiddleware` does it, first in every chain with `default_middleware`,
+  so every configured middleware has finished with the current message first. A worker whose
+  message succeeded but whose held-back message failed rejects its message, as any failure.
+
 ## Validating messages
 
 Dataclass messages are checked for **shape** by msgspec: a missing or wrongly typed field
@@ -556,12 +604,14 @@ typed attributes rather than only a message.
 | `UnsupportedDsnError` | No installed transport serves a scheme |
 | `UnknownTransportError` | A route or a worker names a transport neither configured nor registered |
 | `UnknownMiddlewareError` | The configuration names middleware nothing is registered for |
+| `InvalidMiddlewareArgumentsError` | The configuration gives middleware arguments it does not take |
 | `MixedDsnError` | One AMQP worker is asked to serve two servers |
 | `NotConsumableError` | A worker is asked to consume a transport that can only send |
 | `IncompatibleReceiversError` | A worker is asked to drain a registered receiver beside a transport with its own worker |
 | `NoSenderForMessageError` | A message is routed nowhere and the bus requires a sender |
 | `NoHandlerForMessageError` | A message is to be handled and nothing handles it |
 | `HandlersFailedError` | One or more handlers raised, once every handler has run |
+| `DelayedMessageHandlingError` | A message held back with `DispatchAfterCurrentBusStamp` failed once the current one succeeded |
 | `MessageEncodingFailedError` | A message cannot be put on the wire |
 | `MessageDecodingFailedError`, `UnknownMessageNameError` | A payload cannot be turned back into its message |
 
@@ -780,7 +830,20 @@ application hears them with no wiring.
 Middleware referred to by name in the config is resolved from the container: give the class
 a name with `@as_middleware("audit")`, or register it under `(MiddlewareInterface, name)`
 manually. The bundle uses a `ServiceLocator` for that lookup, so a class is built only when
-the configuration names it.
+the configuration names it. Another package can ship middleware this way — its bundle loads
+the module declaring it — and an application names it in its chain, without this package
+knowing it exists. An entry giving a middleware arguments is registered as a middleware of its
+own, built by the container with those arguments set; one built by a factory takes none.
+
+**Every message is a unit of work.** The bundle puts `UnitOfWorkMiddleware` ahead of the
+configured middleware on the bus and in every worker — right after the one
+[holding messages back](#dispatching-after-the-current-message), so a message held back is a
+unit of its own — and the middleware after it and every handler of a message share one
+[unit of work](../xtr-dependency-injection#units-of-work): a `lifetime="scoped"` service — a
+database session — is built once per message, handed to each handler asking for it, and
+released when the message is done with, even when a handler raised. A message dispatched while
+another is handled joins that unit. A middleware needing the message's instance resolves it
+from `current_unit_of_work()`.
 
 A class in the application — or another bundle — that implements `TransportFactoryInterface`
 is registered automatically and consulted **ahead of** the factories discovery finds by entry
@@ -853,7 +916,7 @@ xtr_messenger/
 ├── event/                   what a worker announces about itself and each message
 ├── message/                 messages the library handles itself: RedispatchMessage
 ├── handler/                 which function handles which message, and how to call it
-├── middleware/              routing, handling, logging, the chain cursor
+├── middleware/              holding back, routing, handling, logging, units of work, the cursor
 ├── stamp/                   one class per module
 ├── exception/               one error per module, all a MessageBusError
 ├── transport/
