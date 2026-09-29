@@ -35,7 +35,11 @@ from xtr_event_dispatcher_contracts import EventDispatcherInterface
 from xtr_logging_contracts import LoggerInterface
 from xtr_service_contracts import ContainerInterface
 
-from xtr_messenger.exception import MessageBusError
+from xtr_messenger.exception import (
+    InvalidMiddlewareArgumentsError,
+    MessageBusError,
+    UnknownMiddlewareError,
+)
 from xtr_messenger.handler.handler_descriptor import Handler, HandlerDescriptor
 from xtr_messenger.handler.handlers_locator import HandlersLocator
 from xtr_messenger.handler.handlers_registry import handlers_declared_on
@@ -45,6 +49,10 @@ from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.message_bus_factory import MessageBusFactory
 from xtr_messenger.message_bus_interface import MessageBusInterface
 from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
+from xtr_messenger.middleware.middleware_arguments import (
+    entry_arguments,
+    entry_key,
+)
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
 from xtr_messenger.middleware.named import MiddlewareBuilder
@@ -137,7 +145,7 @@ async def _named_middleware(
 async def _named_from_config(
     config: MessageBusConfig, container: ContainerInterface
 ) -> dict[str, Callable[[], MiddlewareInterface]]:
-    names = [entry for entry in config.middleware if isinstance(entry, str)]
+    names = list(_middleware_keys(config))
     locator = ServiceLocator[MiddlewareInterface](
         container, {name: (MiddlewareInterface, name) for name in names}
     )
@@ -268,6 +276,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         discovery-only factory loaded in :meth:`load_extension` stays, since the
         engine cannot resolve an empty collection.
         """
+        _register_middleware_with_arguments(builder)
         _ = builder.get_definition(WorkerFactory).set_argument("receiver_keys", _receivers(builder))
         if not builder.find_tagged_service_ids(_TRANSPORT_FACTORY_TAG):
             return
@@ -282,6 +291,49 @@ class MessengerBundle(Bundle[MessageBusConfig]):
             raise RuntimeError(message)
         binding = _ContainerBinding(container)
         self._handlers.decorate(binding)
+
+
+def _register_middleware_with_arguments(builder: ContainerBuilder) -> None:
+    """Register a middleware of its own for every chain entry that gives one arguments.
+
+    It is built like the middleware the name stands for — the arguments its
+    definition already has kept, the entry's set over them on the parameters
+    they name — and registered under
+    :func:`~xtr_messenger.middleware.middleware_arguments.entry_key` — so the
+    entry and the bare name, or two entries with different arguments, are
+    separate instances. An argument naming no parameter fails the build, as
+    any definition argument does.
+
+    Raises:
+        UnknownMiddlewareError: If an entry names middleware nothing is
+            registered for.
+        InvalidMiddlewareArgumentsError: If the middleware is built by a
+            factory.
+    """
+    config = builder.get_extension_config(MessageBusConfig)
+    entries = [entry for entry in config.middleware if isinstance(entry, Mapping)]
+    for ordinal, entry in enumerate(entries):
+        name, arguments = entry_arguments(entry)
+        if not builder.has(MiddlewareInterface, name):
+            known = tuple(
+                str(alias[1])
+                for alias in builder.get_aliases()
+                if alias[0] is MiddlewareInterface and isinstance(alias[1], str)
+            )
+            raise UnknownMiddlewareError(name, known)
+        named = builder.find_definition(MiddlewareInterface, name)
+        if named.kind != "class" or not isinstance(named.provider, type):
+            raise InvalidMiddlewareArgumentsError(
+                name, "it is built by a factory, which a configuration cannot give arguments"
+            )
+        middleware_cls = cast("type[MiddlewareInterface]", named.provider)
+        key = entry_key(name, ordinal)
+        _ = builder.register(middleware_cls, qualifier=key).set_arguments(
+            {**named.get_arguments(), **arguments}
+        )
+        builder.set_alias(
+            MiddlewareInterface, middleware_cls, alias_qualifier=key, target_qualifier=key
+        )
 
 
 def _receivers(builder: ContainerBuilder) -> dict[str, ServiceKey]:
@@ -315,6 +367,23 @@ def _transport_factories_in(obj: object) -> Iterable[type]:
     except TypeError:
         return ()
     return (obj,) if matches else ()
+
+
+def _middleware_keys(config: MessageBusConfig) -> Iterable[str]:
+    """Yield what each named entry of the chain is registered under.
+
+    A bare name is its own key; a name given arguments is a middleware of its
+    own, registered by :meth:`MessengerBundle.process` under
+    :func:`~xtr_messenger.middleware.middleware_arguments.entry_key`.
+    """
+    ordinal = 0
+    for entry in config.middleware:
+        if isinstance(entry, str):
+            yield entry
+        elif isinstance(entry, Mapping):
+            name, _ = entry_arguments(entry)
+            yield entry_key(name, ordinal)
+            ordinal += 1
 
 
 def _message_bus(

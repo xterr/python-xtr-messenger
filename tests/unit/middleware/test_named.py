@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast, final
+
 import pytest
 from typing_extensions import override
 from xtr_logging import Logger, TestHandler
@@ -11,6 +13,7 @@ from tests.support.fakes import OneStep, RecordingMiddleware
 from tests.support.messages import ingest_document
 from xtr_messenger import (
     Envelope,
+    InvalidMiddlewareArgumentsError,
     LoggingMiddleware,
     MessageBusConfig,
     MiddlewareInterface,
@@ -18,8 +21,17 @@ from xtr_messenger import (
     UnknownMiddlewareError,
 )
 from xtr_messenger.decorator import as_middleware
+from xtr_messenger.middleware.middleware_arguments import (
+    MiddlewareArguments,
+    MiddlewareEntry,
+    entry_arguments,
+    entry_key,
+)
 from xtr_messenger.middleware.middleware_registry import MiddlewareRegistry
 from xtr_messenger.middleware.named import chain, named_middleware, resolve
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 pytestmark = pytest.mark.anyio
 
@@ -149,3 +161,78 @@ def test_a_name_given_wins_over_one_declared() -> None:
     named = named_middleware(named={"audit": lambda: mine}, registry=registry)
 
     assert resolve(["audit"], named) == (mine,)
+
+
+@final
+class _Labelled(MiddlewareInterface):
+    """Middleware a configuration may give a label and a count."""
+
+    def __init__(self, label: str = "plain", times: int = 1) -> None:
+        self.label = label
+        self.times = times
+
+    @override
+    async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
+        return await stack.next().handle(envelope, stack)
+
+
+def _labelled(entry: MiddlewareEntry) -> _Labelled:
+    [built] = resolve([entry], named_middleware(named={"labelled": _Labelled}))
+    assert isinstance(built, _Labelled)
+    return built
+
+
+def test_arguments_fill_the_parameters_they_name() -> None:
+    built = _labelled({"labelled": {"times": 2}})
+
+    assert (built.label, built.times) == ("plain", 2)
+
+
+def test_an_argument_the_middleware_does_not_take_is_refused() -> None:
+    with pytest.raises(InvalidMiddlewareArgumentsError) as raised:
+        _ = _labelled({"labelled": {"colour": "red"}})
+
+    assert raised.value.name == "labelled"
+    assert "colour" in raised.value.reason
+
+
+def test_a_name_with_arguments_must_be_registered() -> None:
+    with pytest.raises(UnknownMiddlewareError):
+        _ = resolve([{"nowhere": {}}], named_middleware())
+
+
+def test_an_entry_a_container_prepared_is_built_by_it() -> None:
+    prepared = _Labelled(label="prepared")
+    named = named_middleware(
+        named={"labelled": _Labelled, entry_key("labelled", 1): lambda: prepared}
+    )
+
+    built = resolve(
+        ["logging", {"labelled": {"label": "own"}}, {"labelled": {"label": "ignored"}}], named
+    )
+
+    assert isinstance(built[1], _Labelled)
+    assert built[1].label == "own"
+    assert built[2] is prepared
+
+
+def test_the_key_of_an_entry_is_its_name_and_its_place_among_those_with_arguments() -> None:
+    assert entry_key("labelled", 2) == "labelled#2"
+
+
+@pytest.mark.parametrize(
+    ("entry", "reason"),
+    [
+        ({"a": {}, "b": {}}, "an entry with arguments is a single {name: {argument: value}}"),
+        ({}, "an entry with arguments is a single {name: {argument: value}}"),
+        ({"a": ["x"]}, "arguments are a mapping of parameter names, not ['x']"),
+        ({"a": {1: "x"}}, "arguments are a mapping of parameter names, not {1: 'x'}"),
+    ],
+)
+def test_an_entry_in_a_shape_that_cannot_be_read_is_refused(
+    entry: dict[object, object], reason: str
+) -> None:
+    with pytest.raises(InvalidMiddlewareArgumentsError) as raised:
+        _ = entry_arguments(cast("Mapping[str, MiddlewareArguments]", entry))
+
+    assert raised.value.reason == reason

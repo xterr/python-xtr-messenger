@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, TypeAlias, cast, final
 
 from typing_extensions import override
 
-from xtr_messenger.exception import UnknownMiddlewareError
+from xtr_messenger.exception import InvalidMiddlewareArgumentsError, UnknownMiddlewareError
 
 from .logging_middleware import LoggingMiddleware
+from .middleware_arguments import entry_arguments, entry_key
 from .middleware_registry import default_middleware_registry
 
 if TYPE_CHECKING:
@@ -19,13 +21,18 @@ if TYPE_CHECKING:
 
     from xtr_messenger.message_bus_config import MessageBusConfig
 
+    from .middleware_arguments import MiddlewareEntry
     from .middleware_interface import MiddlewareInterface
     from .middleware_registry import MiddlewareRegistry
 
 __all__ = ["MiddlewareBuilder", "chain", "named_middleware", "resolve"]
 
-MiddlewareBuilder: TypeAlias = "Callable[[], MiddlewareInterface]"
-"""Builds one middleware, taking whatever it needs from where it was declared."""
+MiddlewareBuilder: TypeAlias = "Callable[..., MiddlewareInterface]"
+"""Builds one middleware, taking whatever it needs from where it was declared.
+
+Called with no argument for a bare name; for an entry carrying arguments,
+with them as keywords.
+"""
 
 
 def named_middleware(
@@ -91,23 +98,47 @@ def chain(
 
 
 def resolve(
-    configured: Sequence[str | MiddlewareInterface],
+    configured: Sequence[MiddlewareEntry],
     named: Mapping[str, MiddlewareBuilder],
 ) -> tuple[MiddlewareInterface, ...]:
     """Return what ``configured`` asks for, built in the order it names it.
 
-    An entry is a name to look up in ``named``, or middleware already built.
+    An entry is a name to look up in ``named``, middleware already built, or
+    ``{name: arguments}``: the middleware ``name`` stands for, given
+    ``arguments`` — built by ``named`` under :func:`entry_key` when a
+    container prepared it, otherwise by the builder of ``name`` with them as
+    keywords.
 
     Raises:
         UnknownMiddlewareError: If a name is not registered.
+        InvalidMiddlewareArgumentsError: If an entry's arguments are not ones
+            its middleware takes.
     """
     built: list[MiddlewareInterface] = []
+    ordinal = 0
     for entry in configured:
         if isinstance(entry, str):
-            builder = named.get(entry)
-            if builder is None:
-                raise UnknownMiddlewareError(entry, tuple(named))
-            built.append(builder())
+            built.append(_builder(named, entry)())
+        elif isinstance(entry, Mapping):
+            name, arguments = entry_arguments(entry)
+            prepared = named.get(entry_key(name, ordinal))
+            ordinal += 1
+            if prepared is not None:
+                built.append(prepared())
+                continue
+            builder = _builder(named, name)
+            try:
+                _ = inspect.signature(builder).bind(**arguments)
+            except TypeError as error:
+                raise InvalidMiddlewareArgumentsError(name, str(error)) from error
+            built.append(builder(**arguments))
         else:
             built.append(entry)
     return tuple(built)
+
+
+def _builder(named: Mapping[str, MiddlewareBuilder], name: str) -> MiddlewareBuilder:
+    builder = named.get(name)
+    if builder is None:
+        raise UnknownMiddlewareError(name, tuple(named))
+    return builder

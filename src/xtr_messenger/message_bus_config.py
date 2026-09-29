@@ -54,10 +54,13 @@ class MessageBusConfig:
             names to fan out. A message may also name its own transport with
             :func:`~xtr_messenger.decorator.as_message`; this map wins.
         middleware: The middleware to run, in order, ahead of routing and
-            handling: a name, or middleware already built. ``"logging"`` is
-            the name this library ships; a factory's ``named`` adds more. An
-            unknown one is refused with
-            :class:`~xtr_messenger.exception.UnknownMiddlewareError`.
+            handling: a name, middleware already built, or a name with
+            arguments for its constructor — ``{"audit": {"channel":
+            "billing"}}``. ``"logging"`` is the name this library ships; a
+            factory's ``named`` adds more. An unknown one is refused with
+            :class:`~xtr_messenger.exception.UnknownMiddlewareError`, and
+            arguments it does not take with
+            :class:`~xtr_messenger.exception.InvalidMiddlewareArgumentsError`.
             Middleware keeps no per-message state: one instance serves every
             dispatch, concurrently, and may serve the bus and the workers
             alike.
@@ -75,7 +78,7 @@ class MessageBusConfig:
 
     transports: Mapping[str, TransportConfig] = field(default_factory=_no_transports)
     routing: Mapping[type | str, str | Sequence[str]] = field(default_factory=_no_routes)
-    middleware: Sequence[str | MiddlewareInterface] = ()
+    middleware: Sequence[str | MiddlewareInterface | Mapping[str, Mapping[str, object]]] = ()
     default_middleware: bool = True
     require_sender: bool = False
     handle_unrouted: bool = False

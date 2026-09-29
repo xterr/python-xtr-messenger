@@ -8,22 +8,40 @@ from uuid import UUID, uuid4
 
 import pytest
 from typing_extensions import override
-from xtr_dependency_injection import Kernel, ServicesResetter, as_service
+from xtr_dependency_injection import (
+    Bundle,
+    CompilerPassInterface,
+    ContainerBuilder,
+    Kernel,
+    NoConfig,
+    PassStage,
+    ServicesResetter,
+    as_bundle,
+    as_service,
+)
+from xtr_dependency_injection.exception import InvalidDefinitionError
+from xtr_dependency_injection.integration.wireup import create_container
 from xtr_dependency_injection.testing import assert_zero_config
+from xtr_logging.bundle import LoggingBundle
 from xtr_service_contracts import ResetInterface
 
+from tests.fixtures.app_units.services import Journal
 from xtr_messenger import (
     Envelope,
     HandlersLocator,
+    InvalidMiddlewareArgumentsError,
+    MessageBusConfig,
     MessageBusInterface,
     MiddlewareInterface,
     StackInterface,
+    UnknownMiddlewareError,
     WorkerFactory,
     as_message,
     as_message_handler,
     as_middleware,
 )
 from xtr_messenger.bundle import MessengerBundle
+from xtr_messenger.middleware import StackMiddleware
 from xtr_messenger.middleware.middleware_registry import (
     MiddlewareRegistry,
     middleware_declared_on,
@@ -31,6 +49,8 @@ from xtr_messenger.middleware.middleware_registry import (
 
 if TYPE_CHECKING:
     from xtr_service_contracts import ContainerInterface
+
+    from xtr_messenger.middleware.middleware_arguments import MiddlewareEntry
 
 pytestmark = pytest.mark.anyio
 
@@ -181,3 +201,64 @@ async def test_the_console_command_is_registered_only_when_console_is_active() -
     declarations = tuple(commands_declared_on(ConsumeMessagesCommand))
     assert declarations, "the consume command should still declare itself for the console"
     # console bundle is not required with a plain MessengerBundle-only kernel
+
+
+def _built_with(*middleware: MiddlewareEntry, logging: bool = False) -> None:
+    _ = create_container(
+        (MessengerBundle, LoggingBundle) if logging else (MessengerBundle,),
+        configs=[MessageBusConfig(middleware=middleware)],
+        env="test",
+        scan=["tests.fixtures.app_units.services"],
+    )
+
+
+def test_a_name_given_arguments_must_be_registered() -> None:
+    with pytest.raises(UnknownMiddlewareError) as raised:
+        _built_with({"nowhere": {"x": 1}})
+
+    assert raised.value.name == "nowhere"
+    assert "labelled" in raised.value.known
+
+
+def test_arguments_a_middleware_does_not_take_fail_the_build() -> None:
+    with pytest.raises(InvalidDefinitionError, match="colour"):
+        _built_with({"labelled": {"colour": "red"}})
+
+
+async def test_an_entry_keeps_the_arguments_its_middleware_was_defined_with() -> None:
+    container = create_container(
+        (MessengerBundle, _TimesThreeBundle),
+        configs=[MessageBusConfig(middleware=[{"labelled": {"label": "entry"}}])],
+        env="test",
+        scan=["tests.fixtures.app_units.services"],
+    )
+    try:
+        built = await container.get(MiddlewareInterface, "labelled#0")
+        journal = await container.get(Journal)
+        _ = await built.handle(Envelope("a"), StackMiddleware(()))
+    finally:
+        await container.close()
+
+    assert journal.middleware == [("entry", 3)]
+
+
+@final
+class _SetTimes(CompilerPassInterface):
+    """What a bundle may do to a middleware it defines: set one of its arguments."""
+
+    @override
+    def process(self, builder: ContainerBuilder) -> None:
+        _ = builder.find_definition(MiddlewareInterface, "labelled").set_argument("times", 3)
+
+
+@final
+@as_bundle("tests_times_three")
+class _TimesThreeBundle(Bundle[NoConfig]):
+    @override
+    def build(self, builder: ContainerBuilder) -> None:
+        builder.add_compiler_pass(_SetTimes(), stage=PassStage.BEFORE_OPTIMIZATION)
+
+
+def test_middleware_a_factory_builds_cannot_be_given_arguments() -> None:
+    with pytest.raises(InvalidMiddlewareArgumentsError, match="built by a factory"):
+        _built_with({"logging": {}}, logging=True)
