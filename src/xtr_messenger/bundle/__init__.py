@@ -9,6 +9,7 @@ either.
 from __future__ import annotations
 
 from xtr_messenger.message_bus_config import MessageBusConfig
+from xtr_messenger.middleware.unit_of_work_middleware import UnitOfWorkMiddleware
 from xtr_messenger.transport.transport_config import TransportConfig
 
 from .messenger_bundle import RECEIVER_TAG, TRANSPORT_FACTORY_TAG, MessengerBundle
@@ -19,4 +20,5 @@ __all__ = [
     "MessageBusConfig",
     "MessengerBundle",
     "TransportConfig",
+    "UnitOfWorkMiddleware",
 ]

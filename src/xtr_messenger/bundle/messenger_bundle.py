@@ -56,6 +56,7 @@ from xtr_messenger.middleware.middleware_arguments import (
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
 from xtr_messenger.middleware.named import MiddlewareBuilder
+from xtr_messenger.middleware.unit_of_work_middleware import UnitOfWorkMiddleware
 from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_discovery import default_factories
@@ -386,14 +387,25 @@ def _middleware_keys(config: MessageBusConfig) -> Iterable[str]:
             ordinal += 1
 
 
+def _in_units_of_work(config: MessageBusConfig, container: ContainerInterface) -> MessageBusConfig:
+    """Return ``config`` with a unit of work opened around each message, before its middleware."""
+    return replace(config, middleware=(UnitOfWorkMiddleware(container), *config.middleware))
+
+
 def _message_bus(
     config: MessageBusConfig,
     handlers: HandlersLocator,
     transports: TransportFactory,
     named: _NamedMiddleware,
+    container: ContainerInterface,
 ) -> MessageBusInterface:
-    """Build the bus — its named middleware resolved once, shared with the worker factory."""
-    return MessageBusFactory(config, [transports], handlers, named=named.builders).bus()
+    """Build the bus — its named middleware resolved once, shared with the worker factory.
+
+    Every message dispatched through it is a unit of work.
+    """
+    return MessageBusFactory(
+        _in_units_of_work(config, container), [transports], handlers, named=named.builders
+    ).bus()
 
 
 async def _worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per injected service
@@ -407,15 +419,16 @@ async def _worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per injec
 ) -> WorkerFactory:
     """Build the worker factory — every worker resets services after each message.
 
-    Workers announce themselves and their messages through the event
-    dispatcher when the container has one, and stay silent otherwise. Every
-    tagged receiver is built here, consumable under its alias.
+    Every message a worker handles is a unit of work. Workers announce
+    themselves and their messages through the event dispatcher when the
+    container has one, and stay silent otherwise. Every tagged receiver is
+    built here, consumable under its alias.
     """
     receivers: dict[str, ReceiverInterface] = {}
     for alias, (service, qualifier) in receiver_keys.items():
         receivers[alias] = cast("ReceiverInterface", await container.get(service, qualifier))
     return WorkerFactory(
-        config,
+        _in_units_of_work(config, container),
         [transports],
         handlers,
         named=named.builders,
