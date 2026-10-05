@@ -1,6 +1,6 @@
 [project]
 name = "xtr-messenger"
-version = "2.0.0"
+version = "3.0.0"
 description = "A message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,8 +19,8 @@ classifiers = [
 dependencies = [
     "msgspec>=0.18",
     "typing-extensions>=4.4",
-    "xtr-event-dispatcher-contracts>=2.0,<3",
-    "xtr-logging-contracts>=2.0,<3",
+    "xtr-event-dispatcher-contracts>=3.0,<4",
+    "xtr-logging-contracts>=3.0,<4",
 ]
 
 [project.optional-dependencies]
@@ -28,11 +28,11 @@ pydantic = [
     "pydantic>=2.0",
 ]
 di = [
-    "xtr-dependency-injection>=2.0,<3",
-    "xtr-service-contracts>=2.0,<3",
+    "xtr-dependency-injection>=3.0,<4",
+    "xtr-service-contracts>=3.0,<4",
 ]
 console = [
-    "xtr-console>=2.0,<3",
+    "xtr-console>=3.0,<4",
 ]
 taskiq = [
     "taskiq>=0.12.4",
@@ -76,10 +76,10 @@ dev = [
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
-    "xtr-console>=2.0,<3",
-    "xtr-dependency-injection>=2.0,<3",
-    "xtr-event-dispatcher>=2.0,<3",
-    "xtr-logging>=2.0,<3",
+    "xtr-console>=3.0,<4",
+    "xtr-dependency-injection>=3.0,<4",
+    "xtr-event-dispatcher>=3.0,<4",
+    "xtr-logging>=3.0,<4",
     "yarl>=1.9",
 ]
 
