@@ -715,6 +715,10 @@ Everything adding this package to an application on
 
 - **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
   what you use.
+- **Recipe** — `uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and
+  *Environment* steps below: it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py`
+  and `MESSENGER_DSN` (commented out) in `.env`. It prints the step to name and route your
+  transports, which a recipe cannot make for you.
 - **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported
   from `xtr_messenger.bundle`.
 - **Brings along** — the logging, console and event dispatcher bundles, when those packages

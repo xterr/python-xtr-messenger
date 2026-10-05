@@ -217,6 +217,10 @@ what is undrained, and `clear()` resets between tests.
 
 ## Use in an application
 
+`uv run xtr-recipes recipes:sync` applies the recipe shipped with this package: it lists
+`MessengerBundle`, writes a starting `config/messenger.py`, and `MESSENGER_DSN` (commented out) in
+`.env`. That is the steps below a recipe can do; the transports it prints for you to name and route.
+
 1. **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
    what you use.
 2. **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported

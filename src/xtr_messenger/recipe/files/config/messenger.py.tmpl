@@ -1,0 +1,23 @@
+"""The message bus: the transports that exist, and which messages go to them.
+
+With no transports a message is neither sent nor handled, so one is named
+below. Route each message class to it, and add the transports a deployment
+needs; the DSN is read when the bus is built, not when the application boots.
+"""
+
+from __future__ import annotations
+
+from xtr_dependency_injection import configure, env
+from xtr_messenger.bundle import MessageBusConfig, TransportConfig
+
+__all__ = ["messenger"]
+
+
+@configure
+def messenger() -> MessageBusConfig:
+    """One transport, its broker read from ``MESSENGER_DSN``."""
+    return MessageBusConfig(
+        transports={"jobs": TransportConfig(env("MESSENGER_DSN"))},
+        # Each message class mapped to a transport name: ``{PlaceOrder: "jobs"}``.
+        routing={},
+    )

@@ -1,0 +1,29 @@
+# The recipe for xtr-messenger: what *Use in an application* in the README
+# takes, as data. Keep the two in step — the README is the source.
+
+[bundles]
+# "<module>:<class>" = the environments it is listed with, exactly as in BUNDLES.
+"xtr_messenger.bundle:MessengerBundle" = { all = true }
+
+[files]
+# Destination under the application package = template under this recipe.
+# Needed to move a message: with no configuration there are no transports.
+"config/messenger.py" = "files/config/messenger.py.tmpl"
+
+[env]
+# The broker DSN the written configuration reads. No default to offer, so it
+# is written commented out and stays unset until a broker is chosen.
+MESSENGER_DSN = ""
+
+[gitignore]
+lines = []
+
+[notes]
+steps = [
+  "Name the transports in config/messenger.py and route your messages to them: a message routed nowhere is neither sent nor handled.",
+]
+check = [
+  "<script> debug:bundles — messenger is listed and active",
+  "<script> debug:config messenger — the resolved transports and routing",
+]
+run = ["<script> messenger:consume <transport>"]

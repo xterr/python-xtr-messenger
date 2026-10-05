@@ -61,6 +61,10 @@ amqps = "xtr_messenger.bridge.amqp:AmqpTransportFactory"
 [project.entry-points."xtr_dependency_injection.bundles"]
 messenger = "xtr_messenger.bundle:MessengerBundle"
 
+# Advertises the recipe — what *Use in an application* takes — for recipes:sync.
+[project.entry-points."xtr_recipes"]
+messenger = "xtr_messenger.recipe"
+
 [dependency-groups]
 dev = [
     "basedpyright>=1.21",
