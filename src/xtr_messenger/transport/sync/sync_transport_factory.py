@@ -45,6 +45,6 @@ class SyncTransportFactory(TransportFactoryInterface):
             UnknownTransportOptionError: If a DSN carries any setting, since
                 a sync transport has nothing to configure.
         """
-        for spec in group.values():
-            reject_unknown_options(SYNC_SCHEME, spec.settings, SYNC_OPTIONS)
+        for transport in group.values():
+            reject_unknown_options(SYNC_SCHEME, transport.settings, SYNC_OPTIONS)
         return {name: SyncTransport() for name in group}

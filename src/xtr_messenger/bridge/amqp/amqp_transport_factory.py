@@ -4,7 +4,7 @@ A producer needs one broker that knows every queue it publishes to. A worker
 needs a broker that consumes *only* its own queue, so one deployment can run
 a process per workload instead of one process draining everything.
 
-Both come from the same spec:
+Both come from the same configuration:
 
 * :meth:`AmqpTransportFactory.create` builds the producer side — one broker
   per connection, declaring every queue named on it.
@@ -79,9 +79,9 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
             name: TaskiqSender(
                 broker,
                 serializer=self._wire(),
-                queue=spec.queue_name if queues else None,
+                queue=transport.queue_name if queues else None,
             )
-            for name, spec in group.items()
+            for name, transport in group.items()
         }
 
     @override
@@ -117,7 +117,7 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
             bus,
             self._wire(),
             event_dispatcher=event_dispatcher,
-            receiver_names={spec.queue_name: name for name, spec in group.items()},
+            receiver_names={transport.queue_name: name for name, transport in group.items()},
             max_attempts=options.reliability.max_attempts,
         )
         return TaskiqWorker(
@@ -151,9 +151,9 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
                 transport accepts.
         """
         merged: dict[str, str] = {}
-        for spec in group.values():
-            reject_unknown_options(spec.parsed.scheme, spec.settings, AMQP_OPTIONS)
-            merged.update(spec.settings)
+        for transport in group.values():
+            reject_unknown_options(transport.parsed.scheme, transport.settings, AMQP_OPTIONS)
+            merged.update(transport.settings)
         return AmqpOptions.from_settings(merged, self._options)
 
     def _broker_for(
@@ -168,12 +168,14 @@ class AmqpTransportFactory(TransportFactoryInterface, WorkerProvidingInterface):
         Raises:
             MixedDsnError: If the transports do not share one connection.
         """
-        connections = tuple(dict.fromkeys(spec.parsed.connection for spec in group.values()))
+        connections = tuple(
+            dict.fromkeys(transport.parsed.connection for transport in group.values())
+        )
         if len(connections) != 1:
             raise MixedDsnError(connections)
         return create_amqp_broker(connections[0], options, _queues_of(group))
 
 
 def _queues_of(group: Mapping[str, TransportConfig]) -> tuple[str, ...]:
-    named = (spec.queue_name for spec in group.values())
+    named = (transport.queue_name for transport in group.values())
     return tuple(dict.fromkeys(q for q in named if q is not None))

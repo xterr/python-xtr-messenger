@@ -48,7 +48,7 @@ class TransportFactoryInterface(Protocol):
     def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
         """Build a sender for every named transport in ``group``.
 
-        Every spec in ``group`` addresses the same server, so a factory that
+        Every transport in ``group`` addresses the same server, so a factory that
         owns a connection can create one and share it across them.
         """
         ...

@@ -58,23 +58,23 @@ class InMemoryTransportFactory(TransportFactoryInterface):
         the serializer, which turns an unserializable field into a test
         failure rather than a production one.
         """
-        return {name: self._transport(name, spec) for name, spec in group.items()}
+        return {name: self._transport(name, config) for name, config in group.items()}
 
-    def _transport(self, name: str, spec: TransportConfig) -> InMemoryTransport:
+    def _transport(self, name: str, config: TransportConfig) -> InMemoryTransport:
         made = self._made.get(name)
         if made is None:
-            made = InMemoryTransport(self._serializer_for(spec))
+            made = InMemoryTransport(self._serializer_for(config))
             self._made[name] = made
         return made
 
-    def _serializer_for(self, spec: TransportConfig) -> SerializerInterface | None:
+    def _serializer_for(self, config: TransportConfig) -> SerializerInterface | None:
         """Return the serializer this transport round-trips through, if any.
 
         Raises:
             UnknownTransportOptionError: If the DSN carries a setting this
                 transport does not accept.
         """
-        reject_unknown_options(IN_MEMORY_SCHEME, spec.settings, IN_MEMORY_OPTIONS)
-        if not as_bool(spec.settings, "serialize"):
+        reject_unknown_options(IN_MEMORY_SCHEME, config.settings, IN_MEMORY_OPTIONS)
+        if not as_bool(config.settings, "serialize"):
             return None
         return self._serializer if self._serializer is not None else JsonSerializer()
