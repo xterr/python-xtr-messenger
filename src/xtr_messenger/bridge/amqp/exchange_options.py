@@ -67,12 +67,17 @@ class ExchangeOptions:
             auto_delete=as_bool(settings, "exchange_auto_delete", base.auto_delete),
         )
 
-    def declared(self, declare: bool) -> Exchange | None:
-        """Return the exchange to build, or ``None`` to accept taskiq's."""
-        if self.name is None:
-            return None
+    def declared(self, declare: bool) -> Exchange:
+        """Return the exchange to build, carrying ``declare``.
+
+        Always an exchange, never ``None``: the broker library's own default
+        declares unconditionally, so leaving the name unset would have
+        declared an exchange a deployment that owns its topology has no
+        permission for. Without a configured name the library's default name
+        is used, so only the declare flag changes.
+        """
         return Exchange(
-            name=self.name,
+            name=self.name if self.name is not None else Exchange().name,
             type=ExchangeType(self.type),
             durable=self.durable,
             auto_delete=self.auto_delete,

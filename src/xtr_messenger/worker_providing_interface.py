@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
     from .message_bus_interface import MessageBusInterface
     from .transport.transport_config import TransportConfig
+    from .worker import AsyncResetter
     from .worker_interface import WorkerInterface
 
 __all__ = ["WorkerProvidingInterface"]
@@ -38,11 +39,18 @@ class WorkerProvidingInterface(Protocol):
         bus: MessageBusInterface,
         *,
         event_dispatcher: EventDispatcherInterface | None = None,
+        resetter: AsyncResetter | None = None,
     ) -> WorkerInterface:
         """Build what a worker process runs to consume exactly ``group``.
 
         ``event_dispatcher``, when given, hears the worker events of
         :mod:`xtr_messenger.event` — for every message, and for the worker
         starting and stopping — the same as from the library's own worker.
+
+        ``resetter``, when given, has ``reset()`` awaited after each message,
+        settled either way — the contract
+        :class:`~xtr_messenger.worker.Worker` honours, kept by a broker that
+        runs its own loop too, so long-lived services are cleared between
+        units of work whichever worker consumes.
         """
         ...

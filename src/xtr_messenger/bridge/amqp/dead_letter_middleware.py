@@ -9,7 +9,7 @@ inspected and replayed instead of disappearing.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Final, final
 
 from aio_pika import DeliveryMode, Message
 from taskiq import TaskiqMiddleware
@@ -22,6 +22,11 @@ if TYPE_CHECKING:
     from taskiq import TaskiqMessage, TaskiqResult
 
 __all__ = ["DeadLetterMiddleware"]
+
+#: How many characters of an exception's message travel with the dead letter.
+#: Enough to identify the failure without letting an unbounded message bloat
+#: the header.
+_DETAIL_LIMIT: Final = 512
 
 
 @final
@@ -89,6 +94,3 @@ class DeadLetterMiddleware(TaskiqMiddleware):
             },
             delivery_mode=DeliveryMode.PERSISTENT,
         )
-
-
-_DETAIL_LIMIT = 512

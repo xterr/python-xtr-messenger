@@ -7,12 +7,14 @@ from typing_extensions import override
 
 from xtr_messenger import (
     Dsn,
+    PublisherClosingInterface,
     TransportConfig,
     TransportFactory,
     TransportFactoryInterface,
     UnsupportedDsnError,
     WorkerProvidingInterface,
 )
+from xtr_messenger.transport import transport_factory
 from xtr_messenger.transport.in_memory import InMemoryTransport
 
 if TYPE_CHECKING:
@@ -22,6 +24,9 @@ if TYPE_CHECKING:
 
     from xtr_messenger import MessageBusInterface, WorkerInterface
     from xtr_messenger.transport.sender import SenderInterface
+    from xtr_messenger.worker import AsyncResetter
+
+pytestmark = pytest.mark.anyio
 
 
 @final
@@ -39,6 +44,26 @@ class PigeonFactory(TransportFactoryInterface):
     def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
         self.built += 1
         return dict.fromkeys(group, InMemoryTransport())
+
+
+@final
+class BrokerFactory(TransportFactoryInterface, PublisherClosingInterface):
+    """An adapter whose senders open a connection a shutdown has to release."""
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    @override
+    def supports(self, dsn: Dsn) -> bool:
+        return dsn.scheme == "broker"
+
+    @override
+    def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
+        return dict.fromkeys(group, InMemoryTransport())
+
+    @override
+    async def close_publishers(self) -> None:
+        self.closed += 1
 
 
 @final
@@ -60,6 +85,7 @@ class WorkerBringingFactory(TransportFactoryInterface, WorkerProvidingInterface)
         bus: MessageBusInterface,
         *,
         event_dispatcher: EventDispatcherInterface | None = None,
+        resetter: AsyncResetter | None = None,
     ) -> WorkerInterface:
         raise NotImplementedError
 
@@ -160,3 +186,41 @@ def test_serving_raises_when_no_discovered_factory_matches() -> None:
 
     with pytest.raises(UnsupportedDsnError, match="carrier-pigeon"):
         _ = composite.serving(a_group("carrier-pigeon://"))
+
+
+async def test_closing_publishers_reaches_the_factories_it_was_given() -> None:
+    broker = BrokerFactory()
+    composite = TransportFactory([PigeonFactory(), broker])
+
+    await composite.close_publishers()
+
+    assert broker.closed == 1
+
+
+async def test_closing_publishers_reaches_a_factory_behind_a_nested_composite() -> None:
+    broker = BrokerFactory()
+    nested = TransportFactory([TransportFactory([broker])])
+
+    await nested.close_publishers()
+
+    assert broker.closed == 1
+
+
+async def test_closing_publishers_reaches_what_discovery_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Discovery loads one factory per scheme on demand, so closing asks the
+    ones it loaded — never a scheme nothing spoke to, whose broker library
+    would have to be imported to be asked."""
+    broker = BrokerFactory()
+
+    def only_the_fake(dsn: Dsn) -> TransportFactoryInterface | None:
+        return broker if broker.supports(dsn) else None
+
+    monkeypatch.setattr(transport_factory, "factory_for", only_the_fake)
+    composite = TransportFactory()
+    _ = composite.serving(a_group("broker://"))
+
+    await composite.close_publishers()
+
+    assert broker.closed == 1

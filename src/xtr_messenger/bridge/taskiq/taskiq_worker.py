@@ -6,17 +6,19 @@ import asyncio
 from os import cpu_count
 from typing import TYPE_CHECKING, Final, final
 
-from taskiq.receiver import Receiver
 from typing_extensions import override
 
 from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
 from xtr_messenger.worker_interface import WorkerInterface
 
-from .broker import forget_started
+from .poison_message_receiver import PoisonMessageReceiver
 
 if TYPE_CHECKING:
     from taskiq import AsyncBroker
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
+
+    from .poison_message_receiver import DeadLetterer
+    from .started_brokers import StartedBrokers
 
 __all__ = ["TaskiqWorker", "default_max_async_tasks"]
 
@@ -59,20 +61,24 @@ class TaskiqWorker(WorkerInterface):
 
     __slots__ = (
         "_broker",
+        "_dead_letter",
         "_dispatcher",
         "_finished",
         "_max_async_tasks",
         "_max_prefetch",
+        "_publishers",
         "_stop_requested",
     )
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — everything past `max_prefetch` is keyword-only
         self,
         broker: AsyncBroker,
         max_async_tasks: int | None = None,
         max_prefetch: int = 0,
         *,
         event_dispatcher: EventDispatcherInterface | None = None,
+        publishers: StartedBrokers | None = None,
+        dead_letter: DeadLetterer | None = None,
     ) -> None:
         """Consume from ``broker``, handling at most ``max_async_tasks`` at once.
 
@@ -84,9 +90,21 @@ class TaskiqWorker(WorkerInterface):
         :func:`~xtr_messenger.bridge.taskiq.binding.bind_bus` registers; a
         running event after each message is not dispatched, since taskiq
         runs messages concurrently and reports none of them back here.
+
+        ``publishers`` is the registry a producer in this process records
+        ``broker`` in, when one shares it. This worker shuts the broker down as
+        it stops, so it forgets it there too and the next publish opens it
+        again. Leave it out when nothing publishes through this broker here.
+
+        ``dead_letter`` is where a poison delivery — unparsable, or naming a
+        task nobody registered — is quarantined; it is then acknowledged
+        rather than redelivered forever. Without it such a delivery is
+        acknowledged and dropped.
         """
         self._dispatcher = event_dispatcher
         self._broker = broker
+        self._publishers = publishers
+        self._dead_letter = dead_letter
         self._max_async_tasks = (
             max_async_tasks if max_async_tasks is not None else default_max_async_tasks()
         )
@@ -127,8 +145,9 @@ class TaskiqWorker(WorkerInterface):
         The broker is shut down on the way out too — taskiq's receiver starts
         it and leaves closing it to taskiq's CLI, which this replaces. Shut
         down while still flagged as a worker, so the worker shutdown events
-        fire to match the worker startup events; and forgotten as started, so
-        a producing side sharing it opens it again on its next publish.
+        fire to match the worker startup events; and forgotten in the
+        ``publishers`` registry, if one was given, so a producing side sharing
+        it opens it again on its next publish.
         """
         claimed = self._broker.is_worker_process
         self._broker.is_worker_process = True
@@ -136,8 +155,9 @@ class TaskiqWorker(WorkerInterface):
         if self._stop_requested:
             self._stop_requested = False
             self._finished.set()
-        receiver = Receiver(
+        receiver = PoisonMessageReceiver(
             self._broker,
+            dead_letter=self._dead_letter,
             max_async_tasks=self._max_async_tasks,
             max_prefetch=self._max_prefetch,
             run_startup=True,
@@ -150,7 +170,8 @@ class TaskiqWorker(WorkerInterface):
             try:
                 await self._broker.shutdown()
             finally:
-                forget_started(self._broker)
+                if self._publishers is not None:
+                    self._publishers.forget(self._broker)
                 self._broker.is_worker_process = claimed
                 self._finished = None
                 if self._dispatcher is not None:

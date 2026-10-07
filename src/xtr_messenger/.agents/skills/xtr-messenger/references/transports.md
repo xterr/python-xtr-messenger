@@ -35,11 +35,18 @@ in `options`.
 | Queue | `queue`, `queue_type`, `queue_durable`, `queue_auto_delete`, `queue_exclusive`, `queue_max_priority`, `routing_key` |
 | Connection | `heartbeat`, `connect_timeout`, `connection_name`, `frame_max`, `channel_max` |
 | TLS | `cacert`, `cert`, `key`, `verify` |
-| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup` |
+| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup`, `delayed_message_exchange_plugin` |
 
 `max_async_tasks` is how many messages a worker handles at once (ten per CPU, capped at 100).
 A message is acked once handled, so `prefetch_count` (10 by default) caps it too: a worker
 handles the smaller of the two. Raise both together.
+
+Delays (`DelayStamp`, retry backoff) ride RabbitMQ's delayed-message exchange, which needs the
+`rabbitmq_delayed_message_exchange` plugin enabled on the broker. On a broker without it, set
+`delayed_message_exchange_plugin=false`: a delayed send then raises `UnsupportedStampError`
+instead of going out undelayed — pair it with `max_attempts=1`, since backoff has nowhere to
+ride. TLS settings are refused on plain `amqp://` (only `amqps://` does TLS), and a password
+carrying `@`, `?` or `#` must percent-encode them or the DSN is refused.
 
 On AMQP a worker registers one task per message declared with `@as_message`, so import the
 modules declaring your messages before building it.

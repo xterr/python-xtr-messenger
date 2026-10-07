@@ -1,4 +1,4 @@
-"""Integration test: an app-provided transport factory serves the bus and worker."""
+"""Integration tests: an app-provided transport factory serves the bus and worker."""
 
 from __future__ import annotations
 
@@ -47,3 +47,28 @@ async def test_an_app_registered_factory_serves_the_bus_and_the_worker() -> None
         assert factory.created >= 2
     finally:
         await booted.shutdown()
+
+
+async def test_a_shutdown_leaves_another_kernels_publishers_open() -> None:
+    """Two applications in one process each open their own broker connections.
+    Closing the publishers of every factory in the process would drop a
+    connection the other application is still publishing through."""
+    from tests.fixtures.app_transport_factory.transport import (  # noqa: PLC0415
+        CountingTransportFactory,
+    )
+
+    qualifier = f"{CountingTransportFactory.__module__}:{CountingTransportFactory.__qualname__}"
+    first = await Kernel(_APP, env="test").boot()
+    second = await Kernel(_APP, env="test").boot()
+    try:
+        mine = await first.container.get(CountingTransportFactory, qualifier)
+        theirs = await second.container.get(CountingTransportFactory, qualifier)
+        # Resolving each bus is what has either kernel build its transport factory.
+        _ = await first.container.get(MessageBusInterface)
+        _ = await second.container.get(MessageBusInterface)
+
+        await first.shutdown()
+
+        assert (mine.closed, theirs.closed) == (1, 0)
+    finally:
+        await second.shutdown()

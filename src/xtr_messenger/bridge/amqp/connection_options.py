@@ -1,10 +1,12 @@
 """How the connection to the broker is opened.
 
-These are the AMQP URI parameters the driver reads for itself — heartbeat,
-frame limits, TLS material. They are written back onto the connection URL
-rather than passed as keyword arguments, because that is where ``aiormq``
-looks for them, and it keeps one code path for a setting whether it arrived
-in the DSN or in ``options``.
+Most of these are AMQP URI parameters the driver reads for itself —
+heartbeat, frame limits, TLS material. They are written back onto the
+connection URL rather than passed as keyword arguments, because that is
+where ``aiormq`` looks for them, and it keeps one code path for a setting
+whether it arrived in the DSN or in ``options``. The one exception is
+``connect_timeout``, which the driver only honours as a call argument —
+the broker factory passes it to the connect call itself.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+from xtr_messenger.exception import InvalidTransportOptionError
 from xtr_messenger.transport.transport_options import (
     as_bool,
     as_optional_float,
@@ -71,6 +74,22 @@ class ConnectionOptions:
     key: str | None = None
     verify: bool = True
 
+    def __post_init__(self) -> None:
+        """Refuse a heartbeat shorter than a second.
+
+        The driver reads whole seconds off the URL, so ``0.5`` would be
+        written as ``0`` — which does not mean "twice a second" but "no
+        heartbeat at all", silently discarding the dead-peer check that was
+        asked for.
+
+        Raises:
+            InvalidTransportOptionError: If ``heartbeat`` is below one second.
+        """
+        if self.heartbeat is not None and self.heartbeat < 1:
+            raise InvalidTransportOptionError(
+                "heartbeat", str(self.heartbeat), "at least one second"
+            )
+
     @classmethod
     def from_settings(
         cls,
@@ -100,10 +119,19 @@ class ConnectionOptions:
 
         Anything already in the URL's own query string is kept, so a DSN that
         was written with driver parameters still works.
+
+        ``connect_timeout`` is deliberately absent: the driver ignores it as
+        a URL parameter and only honours it as a call argument, which the
+        broker factory passes to the connect call itself.
+
+        Raises:
+            InvalidTransportOptionError: If a TLS setting is given for a URL
+                that is not ``amqps://`` — the driver would silently ignore
+                it there, leaving a connection less protected than configured.
         """
+        self._refuse_tls_without_tls(url)
         parameters = {
             "heartbeat": _seconds(self.heartbeat),
-            "connection_timeout": _seconds(self.connect_timeout),
             "name": self.connection_name,
             "frame_max": _whole(self.frame_max),
             "channel_max": _whole(self.channel_max),
@@ -118,6 +146,26 @@ class ConnectionOptions:
         split = urlsplit(url)
         query = f"{split.query}&{urlencode(given)}" if split.query else urlencode(given)
         return urlunsplit(split._replace(query=query))
+
+    def _refuse_tls_without_tls(self, url: str) -> None:
+        """Refuse TLS material on a URL whose scheme never performs TLS.
+
+        Raises:
+            InvalidTransportOptionError: Naming the first TLS setting given.
+        """
+        if urlsplit(url).scheme.lower() == "amqps":
+            return
+        tls_given = {
+            "cacert": self.cacert,
+            "cert": self.cert,
+            "key": self.key,
+            "verify": None if self.verify else "false",
+        }
+        for option, value in tls_given.items():
+            if value is not None:
+                raise InvalidTransportOptionError(
+                    option, value, "used with an 'amqps://' DSN; plain 'amqp://' never does TLS"
+                )
 
 
 def _seconds(value: float | None) -> str | None:

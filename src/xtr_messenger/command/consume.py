@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
-from typing import Annotated, ClassVar, Final, cast, final
+from typing import TYPE_CHECKING, Annotated, final
 
 from xtr_console import ConsoleStyle, ExitCode, Option, Range, as_command, escape
 
@@ -12,16 +12,16 @@ from xtr_messenger.exception import MessageBusError
 from xtr_messenger.worker_factory import WorkerFactory
 from xtr_messenger.worker_interface import WorkerInterface
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from types import FrameType
+    from typing import TypeAlias
+
+    #: What :func:`signal.getsignal` returns, and what :func:`signal.signal`
+    #: accepts — the handler object a restore puts back.
+    _SignalHandler: TypeAlias = Callable[[int, FrameType | None], object] | int | None
+
 __all__ = ["ConsumeMessagesCommand"]
-
-# A bare marker, typed as what a container fills the parameter with so the
-# engine still matches it; ``WorkerFactory | None`` is a different type and
-# never would be. Nothing ever calls it: it is only compared by identity.
-_UNSET: Final = cast("WorkerFactory", object())
-
-_NO_WORKERS: Final = (
-    "No worker factory: wire a container, or call ConsumeMessagesCommand.use_workers()."
-)
 
 
 @as_command("messenger:consume")
@@ -30,22 +30,15 @@ class ConsumeMessagesCommand:
     """Consumes the transports named on the command line, until stopped.
 
     An xtr-dependency-injection container builds it with the ``WorkerFactory``
-    the messenger bundle provides. Without one, the console builds it bare,
-    and it uses the factory given to :meth:`use_workers`.
+    the messenger bundle provides. Run without a container, the console cannot
+    fill ``workers`` and reports the missing parameter rather than build it bare.
     """
 
     __slots__ = ("_workers",)
 
-    _process_workers: ClassVar[WorkerFactory | None] = None
-
-    def __init__(self, workers: WorkerFactory = _UNSET) -> None:
-        """Build workers with ``workers``, or with :meth:`use_workers`' when omitted."""
+    def __init__(self, workers: WorkerFactory) -> None:
+        """Build workers with ``workers``, which a container supplies."""
         self._workers = workers
-
-    @classmethod
-    def use_workers(cls, workers: WorkerFactory | None) -> None:
-        """Build workers with ``workers`` wherever no container supplies one."""
-        cls._process_workers = workers
 
     async def __call__(
         self,
@@ -63,15 +56,11 @@ class ConsumeMessagesCommand:
             transports: The transports to consume, as named in the configuration.
             time_limit: Stop, the same way, after this many seconds.
         """
-        workers = self._workers if self._workers is not _UNSET else self._process_workers
-        if workers is None:
-            io.error(_NO_WORKERS)
-            return ExitCode.FAILURE
         if not transports:
             io.error("Name at least one transport to consume.")
             return ExitCode.INVALID
         try:
-            worker = workers.worker(transports)
+            worker = self._workers.worker(transports)
         except MessageBusError as error:
             io.error(escape(str(error)))
             return ExitCode.FAILURE
@@ -85,24 +74,48 @@ async def _run(worker: WorkerInterface, time_limit: float | None) -> None:
     """Run ``worker`` until it returns, is stopped by SIGTERM, or runs out of time."""
     loop = asyncio.get_running_loop()
     timer = loop.call_later(time_limit, worker.stop) if time_limit is not None else None
-    on_sigterm = _stop_on_sigterm(loop, worker)
+    arranged, previous = _stop_on_sigterm(loop, worker)
     try:
         await worker.run()
     finally:
         if timer is not None:
             timer.cancel()
-        if on_sigterm:
-            _ = loop.remove_signal_handler(signal.SIGTERM)
+        if arranged:
+            _restore_sigterm(loop, previous)
 
 
-def _stop_on_sigterm(loop: asyncio.AbstractEventLoop, worker: WorkerInterface) -> bool:
-    """Have SIGTERM stop ``worker``; report whether the loop could arrange it.
+def _stop_on_sigterm(
+    loop: asyncio.AbstractEventLoop, worker: WorkerInterface
+) -> tuple[bool, _SignalHandler]:
+    """Have SIGTERM stop ``worker``; report it, and the handler it displaced.
 
-    It cannot on Windows, nor outside the main thread; the worker then stops
-    only when cancelled.
+    The first element is ``False`` when the loop cannot handle signals —
+    Windows, or outside the main thread — and the worker then stops only when
+    cancelled. When ``True``, the second element is the SIGTERM handler that was
+    installed before, so :func:`_restore_sigterm` can put it back rather than
+    leave the default, which would silently drop an application's own handler.
     """
+    try:
+        previous = signal.getsignal(signal.SIGTERM)
+    except ValueError:
+        return (False, None)
     try:
         loop.add_signal_handler(signal.SIGTERM, worker.stop)
     except (NotImplementedError, RuntimeError):
-        return False
-    return True
+        return (False, None)
+    return (True, previous)
+
+
+def _restore_sigterm(
+    loop: asyncio.AbstractEventLoop,
+    previous: _SignalHandler,
+) -> None:
+    """Undo :func:`_stop_on_sigterm`, putting the displaced handler back.
+
+    A handler installed from C has no Python object to restore — ``getsignal``
+    reports it as ``None`` — so the loop's own removal, which leaves the
+    default, is as close as can be got.
+    """
+    _ = loop.remove_signal_handler(signal.SIGTERM)
+    if previous is not None:
+        _ = signal.signal(signal.SIGTERM, previous)

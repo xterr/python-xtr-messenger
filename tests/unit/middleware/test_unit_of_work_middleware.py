@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import contextlib
+from typing import TYPE_CHECKING, cast
 
 import pytest
-from xtr_dependency_injection import Kernel, current_unit_of_work, unit_of_work
+from xtr_dependency_injection import (
+    Kernel,
+    ScopeFactoryInterface,
+    current_unit_of_work,
+    unit_of_work,
+)
 
 from tests.fixtures.app_units.services import Session
 from tests.support.fakes import OneStep
@@ -15,6 +21,8 @@ from xtr_messenger.bundle import MessengerBundle
 from xtr_messenger.middleware.unit_of_work_middleware import UnitOfWorkMiddleware
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from xtr_service_contracts import ContainerInterface
 
     from xtr_messenger import StackInterface
@@ -43,7 +51,8 @@ async def test_the_rest_of_the_chain_runs_inside_a_unit_of_work() -> None:
     )
     seeing = _Seeing()
     async with await kernel.boot() as booted:
-        middleware = UnitOfWorkMiddleware(booted.container)
+        scopes = await booted.container.get(ScopeFactoryInterface)
+        middleware = UnitOfWorkMiddleware(scopes)
 
         _ = await middleware.handle(Envelope(ingest_document()), OneStep(seeing))
 
@@ -68,7 +77,8 @@ class _Sessions:
 async def test_a_message_dispatched_inside_a_unit_joins_it() -> None:
     seeing = _Sessions()
     async with await Kernel("tests.fixtures.app_units", env="test").boot() as booted:
-        middleware = UnitOfWorkMiddleware(booted.container)
+        scopes = await booted.container.get(ScopeFactoryInterface)
+        middleware = UnitOfWorkMiddleware(scopes)
         async with unit_of_work(booted.container) as outer:
             enclosing = await outer.get(Session)
             _ = await middleware.handle(Envelope(ingest_document()), OneStep(seeing))
@@ -80,10 +90,42 @@ async def test_a_message_a_worker_received_is_a_unit_of_its_own_inside_another()
     seeing = _Sessions()
     received = Envelope(ingest_document(), (ReceivedStamp("jobs"),))
     async with await Kernel("tests.fixtures.app_units", env="test").boot() as booted:
-        middleware = UnitOfWorkMiddleware(booted.container)
+        scopes = await booted.container.get(ScopeFactoryInterface)
+        middleware = UnitOfWorkMiddleware(scopes)
         async with unit_of_work(booted.container) as outer:
             enclosing = await outer.get(Session)
             _ = await middleware.handle(received, OneStep(seeing))
 
     assert seeing.sessions[0] is not enclosing
     assert seeing.sessions[0].closed
+
+
+class _RecordingScopes:
+    """A :class:`ScopeFactoryInterface` noting the ``join`` each unit was opened with."""
+
+    def __init__(self) -> None:
+        self.joins: list[bool] = []
+
+    @contextlib.asynccontextmanager
+    async def unit_of_work(self, *, join: bool = True) -> AsyncGenerator[ContainerInterface]:
+        self.joins.append(join)
+        yield cast("ContainerInterface", object())
+
+
+async def test_a_fresh_message_opens_a_joining_unit_through_the_injected_factory() -> None:
+    scopes = _RecordingScopes()
+    middleware = UnitOfWorkMiddleware(scopes)
+
+    _ = await middleware.handle(Envelope(ingest_document()), OneStep(_Seeing()))
+
+    assert scopes.joins == [True]
+
+
+async def test_a_received_message_opens_a_new_unit_through_the_injected_factory() -> None:
+    scopes = _RecordingScopes()
+    middleware = UnitOfWorkMiddleware(scopes)
+    received = Envelope(ingest_document(), (ReceivedStamp("jobs"),))
+
+    _ = await middleware.handle(received, OneStep(_Seeing()))
+
+    assert scopes.joins == [False]

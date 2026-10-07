@@ -122,11 +122,20 @@ class ChainedReceiver(ReceiverInterface):
 
     @override
     async def ack(self, envelope: Envelope) -> None:
-        """Acknowledge ``envelope`` on the receiver it came from."""
+        """Acknowledge ``envelope`` on the receiver it came from.
+
+        Forwards the envelope as handed over rather than as collected, with the
+        origin's own receipt restored as the one that counts — the mirror of
+        :meth:`reject`, so anything a consumer added on the way survives either
+        settlement. An envelope this receiver never handed out carries no
+        ticket and settles nothing.
+        """
         origin = self._take(envelope)
-        if origin is not None:
-            receiver, collected = origin
-            await receiver.ack(collected)
+        if origin is None:
+            return
+        receiver, collected = origin
+        receipt = collected.last(AckReceiptStamp)
+        await receiver.ack(envelope if receipt is None else envelope.with_stamps(receipt))
 
     @override
     async def reject(self, envelope: Envelope) -> None:
@@ -135,6 +144,9 @@ class ChainedReceiver(ReceiverInterface):
         Forwards the envelope as handed over rather than as collected, so
         anything the consumer added on the way survives, with the origin's
         own receipt restored as the one that counts.
+
+        A message is settled exactly once: :meth:`_take` removes its ticket, so
+        a second settle — ack or reject — finds nothing and is a no-op.
         """
         origin = self._take(envelope)
         if origin is None:

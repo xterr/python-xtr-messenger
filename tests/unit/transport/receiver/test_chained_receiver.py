@@ -77,16 +77,20 @@ async def test_each_collected_envelope_carries_its_own_ticket() -> None:
     assert collected[1].last(AckReceiptStamp) == AckReceiptStamp(2)
 
 
-async def test_ack_settles_on_the_origin_with_the_envelope_it_yielded() -> None:
-    """The origin gets the envelope as it handed it over, not the ticketed one."""
-    yielded = Envelope("a")
+async def test_ack_forwards_the_handed_over_envelope_with_the_origin_receipt() -> None:
+    """The mirror of reject: the consumer's own stamps survive on ack too, with
+    the origin's receipt restored as the one that counts."""
+    yielded = Envelope("a").with_stamps(AckReceiptStamp(99))
     origin = StubReceiver([yielded])
     chained = ChainedReceiver([origin])
     collected = await drain(chained)
+    marked = collected[0].with_stamps(ErrorDetailsStamp("RuntimeError", "boom"))
 
-    await chained.ack(collected[0])
+    await chained.ack(marked)
 
-    assert origin.acked == [yielded]
+    acked = origin.acked[0]
+    assert acked.last(ErrorDetailsStamp) == ErrorDetailsStamp("RuntimeError", "boom")
+    assert acked.last(AckReceiptStamp) == AckReceiptStamp(99)
 
 
 async def test_ack_routes_to_the_receiver_the_message_came_from() -> None:

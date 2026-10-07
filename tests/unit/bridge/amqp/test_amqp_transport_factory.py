@@ -7,16 +7,22 @@ real ``AioPikaBroker`` objects — construction opens no connection.
 
 from __future__ import annotations
 
+import json
+import logging
+from typing import final
+
 import pytest
-from taskiq import SmartRetryMiddleware
+from taskiq import Context, SmartRetryMiddleware, TaskiqMessage
 from taskiq_aio_pika import AioPikaBroker
 
 from tests.support.fakes import RecordingBus
-from tests.support.messages import IngestDocument
+from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     Dsn,
+    Envelope,
     JsonSerializer,
     MixedDsnError,
+    PublisherClosingInterface,
     TransportConfig,
     UnknownTransportOptionError,
     WorkerInterface,
@@ -24,12 +30,24 @@ from xtr_messenger import (
     name_of,
 )
 from xtr_messenger.bridge.amqp import AmqpTransportFactory, declared_queues
+from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, RETRIES_LABEL
 from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
 from xtr_messenger.message_registry import declared_names
 
 _HOST = "amqp://guest:guest@localhost:5672/"
 _OTHER = "amqp://guest:guest@other:5672/"
+
+
+@final
+class CountingResetter:
+    """Counts the resets the worker owes after each message."""
+
+    def __init__(self) -> None:
+        self.resets: int = 0
+
+    async def reset(self) -> None:
+        self.resets += 1
 
 
 def _group() -> dict[str, TransportConfig]:
@@ -164,6 +182,24 @@ def test_it_is_a_worker_providing_interface() -> None:
     assert isinstance(AmqpTransportFactory(), WorkerProvidingInterface)
 
 
+def test_it_is_a_publisher_closing_interface() -> None:
+    """How a composite factory — and so the bundle's shutdown — finds the
+    connections this adapter's senders opened."""
+    assert isinstance(AmqpTransportFactory(), PublisherClosingInterface)
+
+
+@pytest.mark.anyio
+async def test_closing_publishers_after_no_publish_opens_nothing() -> None:
+    """Nothing is recorded until a sender publishes, so a shutdown after no
+    publish has nothing to release — and must not connect to find that out."""
+    factory = AmqpTransportFactory()
+    senders = factory.create(_group())
+
+    await factory.close_publishers()
+
+    assert _broker_of(senders["high"]).write_channel is None
+
+
 def test_it_supports_the_amqp_schemes() -> None:
     factory = AmqpTransportFactory()
 
@@ -198,3 +234,75 @@ def test_an_option_meant_for_another_scheme_is_refused() -> None:
 
     with pytest.raises(UnknownTransportOptionError, match="serialize"):
         _ = AmqpTransportFactory().create(group)
+
+
+def test_disabling_verification_warns_once_per_factory(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A security downgrade must not be silent — but one warning per factory
+    is a notice, while one per broker built is noise that buries it."""
+    tls_host = "amqps://guest:guest@localhost:5671/"
+    group = {"q": TransportConfig(f"{tls_host}?queue=jobs&verify=false")}
+    factory = AmqpTransportFactory()
+
+    with caplog.at_level(logging.WARNING, logger="messenger"):
+        _ = factory.create(group)
+        _ = factory.worker(group, RecordingBus())
+
+    warned = [r for r in caplog.records if "verification is disabled" in r.message]
+    assert len(warned) == 1
+
+
+def test_a_verified_connection_never_warns(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="messenger"):
+        _ = AmqpTransportFactory().create(_group())
+
+    assert caplog.records == []
+
+
+def test_the_workers_broker_is_not_recorded_as_a_publisher() -> None:
+    """A worker's run loop closes its own broker; registering it with the
+    publish-side bookkeeping was a no-op kept alive by habit."""
+    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+
+    assert isinstance(worker, TaskiqWorker)
+    assert worker._publishers is None  # pyright: ignore[reportPrivateUsage] -- no public accessor; the absence of the record is the behaviour
+
+
+@pytest.mark.anyio
+async def test_the_worker_resets_services_after_each_message() -> None:
+    """The resetter must reach the taskiq binding: the library's own worker
+    resets after each message, and the AMQP worker owes the same contract."""
+    resetter = CountingResetter()
+    bus = RecordingBus()
+    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, bus, resetter=resetter)
+    broker = _worker_broker(worker)
+    task = broker.find_task(name_of(IngestDocument))
+    assert task is not None
+    encoded = JsonSerializer().encode(Envelope.wrap(ingest_document()))
+    message = TaskiqMessage(
+        task_id="t1",
+        task_name=name_of(IngestDocument),
+        labels={RETRIES_LABEL: 0, HEADERS_LABEL: json.dumps(encoded.headers)},
+        args=[],
+        kwargs={},
+    )
+
+    await task.original_func(encoded.body, Context(message, broker))
+
+    assert resetter.resets == 1
+    assert len(bus.dispatched) == 1
+
+
+def test_with_the_delay_plugin_off_senders_refuse_a_delay() -> None:
+    group = {"q": TransportConfig(f"{_HOST}?queue=jobs&delayed_message_exchange_plugin=false")}
+
+    sender = _sender(AmqpTransportFactory().create(group)["q"])
+
+    assert sender._supports_delay is False  # pyright: ignore[reportPrivateUsage] -- no public accessor
+
+
+def test_with_the_delay_plugin_on_senders_accept_a_delay() -> None:
+    sender = _sender(AmqpTransportFactory().create(_group())["high"])
+
+    assert sender._supports_delay is True  # pyright: ignore[reportPrivateUsage] -- no public accessor

@@ -9,13 +9,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
-from xtr_dependency_injection import unit_of_work
 
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.stamp import ReceivedStamp
 
 if TYPE_CHECKING:
-    from xtr_service_contracts import ContainerInterface
+    from xtr_dependency_injection import ScopeFactoryInterface
 
     from xtr_messenger.envelope import Envelope
     from xtr_messenger.middleware.stack_interface import StackInterface
@@ -38,15 +37,15 @@ class UnitOfWorkMiddleware(MiddlewareInterface):
     own.
     """
 
-    __slots__ = ("_container",)
+    __slots__ = ("_scopes",)
 
-    def __init__(self, container: ContainerInterface) -> None:
-        """Open units of work on ``container``'s services."""
-        self._container = container
+    def __init__(self, scopes: ScopeFactoryInterface) -> None:
+        """Open units of work through ``scopes`` — the one power, not the whole container."""
+        self._scopes = scopes
 
     @override
     async def handle(self, envelope: Envelope, stack: StackInterface, /) -> Envelope:
         """Run the rest of the chain inside a unit of work."""
         received = envelope.last(ReceivedStamp) is not None
-        async with unit_of_work(self._container, join=not received):
+        async with self._scopes.unit_of_work(join=not received):
             return await stack.next().handle(envelope, stack)

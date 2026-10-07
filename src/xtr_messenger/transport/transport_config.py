@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+from typing_extensions import override
+
+from xtr_messenger._redaction import redacted
 from xtr_messenger.dsn import Dsn
 
 __all__ = ["TransportConfig"]
@@ -41,6 +44,14 @@ class TransportConfig:
     dsn: str
     queue: str | None = None
     options: Mapping[str, str] = field(default_factory=_no_options)
+
+    @override
+    def __repr__(self) -> str:
+        """Render without the DSN's credentials, which a traceback would otherwise leak."""
+        return (
+            f"{type(self).__name__}(dsn={redacted(self.dsn)!r}, queue={self.queue!r}, "
+            f"options={self.options!r})"
+        )
 
     @property
     def parsed(self) -> Dsn:

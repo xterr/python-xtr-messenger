@@ -1,8 +1,9 @@
 """taskiq label keys this adapter reads and writes.
 
-``_retries``, ``delay``, ``priority`` and ``queue_name`` are taskiq's own
-label names; the rest belong to this library and are prefixed so they cannot
-collide with a label an application sets.
+``_retries`` (:data:`RETRIES_LABEL`), ``delay`` (:data:`DELAY_LABEL`) and
+``queue_name`` (:data:`QUEUE_LABEL`) are taskiq's own label names, read by
+taskiq itself. ``mb_headers`` (:data:`HEADERS_LABEL`) belongs to this library
+and is prefixed so it cannot collide with a label an application sets.
 """
 
 from __future__ import annotations
@@ -12,11 +13,12 @@ from typing import TYPE_CHECKING, Final
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ["HEADERS_LABEL", "QUEUE_LABEL", "RETRIES_LABEL", "retries_from"]
+__all__ = ["DELAY_LABEL", "HEADERS_LABEL", "QUEUE_LABEL", "RETRIES_LABEL", "retries_from"]
 
 RETRIES_LABEL: Final = "_retries"
 QUEUE_LABEL: Final = "queue_name"
 HEADERS_LABEL: Final = "mb_headers"
+DELAY_LABEL: Final = "delay"
 
 
 def retries_from(labels: Mapping[str, object]) -> int | None:

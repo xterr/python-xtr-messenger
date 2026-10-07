@@ -10,7 +10,7 @@ from xtr_messenger.transport.transport_options import as_float, as_int
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ["DEFAULT_DEAD_LETTER_QUEUE", "Reliability"]
+__all__ = ["DEFAULT_DEAD_LETTER_QUEUE", "RELIABILITY_OPTIONS", "Reliability"]
 
 DEFAULT_DEAD_LETTER_QUEUE: Final = "taskiq.dlq"
 

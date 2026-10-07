@@ -25,6 +25,7 @@ AMQP_OPTIONS: Final = (
     "prefetch_count",
     "max_async_tasks",
     "auto_setup",
+    "delayed_message_exchange_plugin",
     *RELIABILITY_OPTIONS,
     *EXCHANGE_OPTIONS,
     *QUEUE_OPTIONS,
@@ -55,6 +56,14 @@ class AmqpOptions:
         auto_setup: Whether to declare the exchange and queues on startup.
             Turn it off where a deployment creates its own topology and the
             application has no permission to.
+        delayed_message_exchange_plugin: Whether delays ride RabbitMQ's
+            delayed-message exchange, which the broker must have the
+            ``rabbitmq_delayed_message_exchange`` plugin enabled for. On by
+            default because that is what honours a
+            :class:`~xtr_messenger.stamp.DelayStamp` — and retry backoff
+            delays with it. Turned off, a delayed send on this transport is
+            refused with
+            :class:`~xtr_messenger.exception.UnsupportedStampError`.
     """
 
     reliability: Reliability = field(default_factory=Reliability)
@@ -64,6 +73,23 @@ class AmqpOptions:
     prefetch_count: int = _DEFAULT_PREFETCH
     max_async_tasks: int = field(default_factory=default_max_async_tasks)
     auto_setup: bool = True
+    delayed_message_exchange_plugin: bool = True
+
+    def __post_init__(self) -> None:
+        """Refuse a ``max_async_tasks`` that would mean no limit at all.
+
+        Validated on the object rather than only when reading settings, so a
+        value built in code is checked too, and the error is this package's
+        own rather than a ``KeyError`` from a value that never came from the
+        settings.
+
+        Raises:
+            InvalidTransportOptionError: If ``max_async_tasks`` is below one.
+        """
+        if self.max_async_tasks < 1:
+            raise InvalidTransportOptionError(
+                "max_async_tasks", str(self.max_async_tasks), "a whole number above zero"
+            )
 
     @classmethod
     def from_settings(
@@ -87,20 +113,9 @@ class AmqpOptions:
             queue=QueueOptions.from_settings(settings, base.queue),
             connection=ConnectionOptions.from_settings(settings, base.connection),
             prefetch_count=as_int(settings, "prefetch_count", base.prefetch_count),
-            max_async_tasks=_max_async_tasks(settings, base.max_async_tasks),
+            max_async_tasks=as_int(settings, "max_async_tasks", base.max_async_tasks),
             auto_setup=as_bool(settings, "auto_setup", base.auto_setup),
+            delayed_message_exchange_plugin=as_bool(
+                settings, "delayed_message_exchange_plugin", base.delayed_message_exchange_plugin
+            ),
         )
-
-
-def _max_async_tasks(settings: Mapping[str, str], fallback: int) -> int:
-    """Read ``max_async_tasks``, refusing a limit that would mean no limit at all.
-
-    Raises:
-        InvalidTransportOptionError: If it is not a whole number above zero.
-    """
-    value = as_int(settings, "max_async_tasks", fallback)
-    if value < 1:
-        raise InvalidTransportOptionError(
-            "max_async_tasks", settings["max_async_tasks"], "a whole number above zero"
-        )
-    return value

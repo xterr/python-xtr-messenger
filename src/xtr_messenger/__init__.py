@@ -10,7 +10,7 @@ behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 
 from __future__ import annotations
 
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 from .decorator import as_message, as_message_handler, as_middleware, as_stamp
 from .dsn import Dsn, InvalidDsnError
@@ -33,6 +33,7 @@ from .exception import (
     UnknownMiddlewareError,
     UnknownTransportError,
     UnknownTransportOptionError,
+    UnsupportedStampError,
 )
 from .handler import (
     Handler,
@@ -46,7 +47,13 @@ from .message_bus import MessageBus
 from .message_bus_config import MessageBusConfig
 from .message_bus_factory import MessageBusFactory
 from .message_bus_interface import MessageBusInterface
-from .message_registry import name_of, transports_of, type_for_name
+from .message_registry import (
+    declared_names,
+    name_of,
+    register_message,
+    transports_of,
+    type_for_name,
+)
 from .middleware import (
     DispatchAfterCurrentBusMiddleware,
     HandleMessageMiddleware,
@@ -56,6 +63,7 @@ from .middleware import (
     StackInterface,
     StackMiddleware,
 )
+from .publisher_closing_interface import PublisherClosingInterface
 from .stamp import (
     AckReceiptStamp,
     DelayStamp,
@@ -70,6 +78,7 @@ from .stamp import (
     TransportMessageIdStamp,
     TransportNamesStamp,
 )
+from .stamp_registry import declared_stamps, register_stamp, stamp_type_for
 from .transport.in_memory import InMemoryTransport, InMemoryTransportFactory
 from .transport.receiver.receiver_interface import ReceiverInterface
 from .transport.sender import SenderInterface, SendersLocator, SendersLocatorInterface
@@ -94,7 +103,12 @@ from .worker_factory import WorkerFactory
 from .worker_interface import WorkerInterface
 from .worker_providing_interface import WorkerProvidingInterface
 
-__version__ = version("xtr-messenger")
+try:
+    __version__ = version("xtr-messenger")
+except PackageNotFoundError:  # pragma: no cover
+    # Running from a source tree with no installed metadata to read; having no
+    # version is better than refusing to import.
+    __version__ = "0+unknown"
 
 __all__ = [
     "AckReceiptStamp",
@@ -137,6 +151,7 @@ __all__ = [
     "NoSenderForMessageError",
     "NonSendableStampInterface",
     "NotConsumableError",
+    "PublisherClosingInterface",
     "ReceivedStamp",
     "ReceiverInterface",
     "RedeliveryStamp",
@@ -163,6 +178,7 @@ __all__ = [
     "UnknownTransportError",
     "UnknownTransportOptionError",
     "UnsupportedDsnError",
+    "UnsupportedStampError",
     "Worker",
     "WorkerFactory",
     "WorkerInterface",
@@ -172,10 +188,15 @@ __all__ = [
     "as_message_handler",
     "as_middleware",
     "as_stamp",
+    "declared_names",
+    "declared_stamps",
     "default_codecs",
     "default_factories",
     "default_registry",
     "name_of",
+    "register_message",
+    "register_stamp",
+    "stamp_type_for",
     "transports_of",
     "type_for_name",
 ]

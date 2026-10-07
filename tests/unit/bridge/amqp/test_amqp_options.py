@@ -16,6 +16,7 @@ def test_the_defaults() -> None:
     assert options.prefetch_count == 10
     assert options.max_async_tasks == default_max_async_tasks()
     assert options.auto_setup is True
+    assert options.delayed_message_exchange_plugin is True
     assert options.reliability == Reliability()
 
 
@@ -24,6 +25,7 @@ def test_the_option_list_names_every_group() -> None:
         "prefetch_count",
         "max_async_tasks",
         "auto_setup",
+        "delayed_message_exchange_plugin",
         "max_attempts",
         "exchange",
         "queue",
@@ -84,6 +86,25 @@ def test_a_max_async_tasks_that_is_not_a_positive_number_is_refused(value: str) 
         _ = AmqpOptions.from_settings({"max_async_tasks": value})
 
 
+@pytest.mark.parametrize("value", [0, -5])
+def test_a_max_async_tasks_built_in_code_below_one_is_refused(value: int) -> None:
+    """Constructed directly, not only through settings: the package error is
+    raised rather than a KeyError from a value that never came from settings."""
+    with pytest.raises(InvalidTransportOptionError, match="max_async_tasks"):
+        _ = AmqpOptions(max_async_tasks=value)
+
+
 def test_auto_setup_must_be_a_boolean() -> None:
     with pytest.raises(InvalidTransportOptionError, match="auto_setup"):
         _ = AmqpOptions.from_settings({"auto_setup": "yes"})
+
+
+def test_the_delay_plugin_is_read_from_the_settings() -> None:
+    options = AmqpOptions.from_settings({"delayed_message_exchange_plugin": "false"})
+
+    assert options.delayed_message_exchange_plugin is False
+
+
+def test_the_delay_plugin_must_be_a_boolean() -> None:
+    with pytest.raises(InvalidTransportOptionError, match="delayed_message_exchange_plugin"):
+        _ = AmqpOptions.from_settings({"delayed_message_exchange_plugin": "maybe"})

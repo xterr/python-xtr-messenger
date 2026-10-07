@@ -8,6 +8,7 @@ from typing_extensions import override
 from tests.support.messages import ingest_document
 from xtr_messenger import (
     AckReceiptStamp,
+    DelayStamp,
     EncodedEnvelope,
     Envelope,
     ErrorDetailsStamp,
@@ -16,6 +17,7 @@ from xtr_messenger import (
     ReceivedStamp,
     SerializerInterface,
     TransportMessageIdStamp,
+    UnsupportedStampError,
 )
 from xtr_messenger.transport.in_memory import InMemoryTransport
 
@@ -181,3 +183,15 @@ async def test_a_serializer_surfaces_a_message_that_cannot_be_encoded() -> None:
 
     with pytest.raises(MessageEncodingFailedError):
         _ = await transport.send(Envelope("not a dataclass"))
+
+
+async def test_a_delayed_envelope_is_refused_rather_than_sent_immediately() -> None:
+    """The in-memory transport keeps no timer, so it cannot honour a delay:
+    refusing surfaces the mismatch instead of dropping the request silently."""
+    envelope = Envelope(ingest_document()).with_stamps(DelayStamp(1000))
+
+    with pytest.raises(UnsupportedStampError) as excinfo:
+        _ = await InMemoryTransport().send(envelope)
+
+    assert excinfo.value.stamp_name == "DelayStamp"
+    assert excinfo.value.transport == "in-memory"

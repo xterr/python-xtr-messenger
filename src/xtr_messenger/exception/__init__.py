@@ -27,6 +27,7 @@ from .unknown_middleware_error import UnknownMiddlewareError
 from .unknown_transport_error import UnknownTransportError
 from .unknown_transport_option_error import UnknownTransportOptionError
 from .unsupported_dsn_error import UnsupportedDsnError
+from .unsupported_stamp_error import UnsupportedStampError
 
 __all__ = [
     "DelayedMessageHandlingError",
@@ -48,4 +49,5 @@ __all__ = [
     "UnknownTransportError",
     "UnknownTransportOptionError",
     "UnsupportedDsnError",
+    "UnsupportedStampError",
 ]

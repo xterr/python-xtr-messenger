@@ -14,7 +14,7 @@ from xtr_event_dispatcher import EventDispatcher
 
 from xtr_messenger import WorkerInterface
 from xtr_messenger.bridge.taskiq import taskiq_worker
-from xtr_messenger.bridge.taskiq.broker import ensure_started, forget_started
+from xtr_messenger.bridge.taskiq.started_brokers import StartedBrokers
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
 from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
 
@@ -161,17 +161,17 @@ async def test_a_publish_inside_the_worker_does_not_restart_the_broker() -> None
     """Restarting re-fires startup events, duplicating whatever they set up —
     invisible until something registered twice fires twice."""
     broker = CountingBroker()
-    await ensure_started(broker)
+    publishers = StartedBrokers()
+    await publishers.ensure_started(broker)
     assert broker.startups == 1
 
     _ = TaskiqWorker(broker)
     broker.is_worker_process = True
-    forget_started(broker)
+    publishers.forget(broker)
 
-    await ensure_started(broker)
+    await publishers.ensure_started(broker)
 
     assert broker.startups == 1
-    forget_started(broker)
 
 
 async def test_run_consumes_until_stop() -> None:
@@ -215,18 +215,18 @@ async def test_a_stopped_worker_shuts_its_broker_down_as_a_worker() -> None:
 
 async def test_a_producer_sharing_the_broker_opens_it_again_after_the_worker_stops() -> None:
     broker = ScriptedBroker()
-    await ensure_started(broker)
+    publishers = StartedBrokers()
+    await publishers.ensure_started(broker)
     broker.started.clear()
-    worker = TaskiqWorker(broker)
+    worker = TaskiqWorker(broker, publishers=publishers)
     run = asyncio.create_task(worker.run())
     _ = await asyncio.wait_for(broker.started.wait(), timeout=_TIMEOUT)
     worker.stop()
     await asyncio.wait_for(run, timeout=_TIMEOUT)
 
-    await ensure_started(broker)
+    await publishers.ensure_started(broker)
 
     assert broker.startups == 3
-    forget_started(broker)
 
 
 async def test_it_announces_starting_and_stopping() -> None:
@@ -243,4 +243,3 @@ async def test_it_announces_starting_and_stopping() -> None:
     await asyncio.wait_for(run, timeout=_TIMEOUT)
 
     assert [type(event) for event in seen] == [WorkerStartedEvent, WorkerStoppedEvent]
-    forget_started(broker)

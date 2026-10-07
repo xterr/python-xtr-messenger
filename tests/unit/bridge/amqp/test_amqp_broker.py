@@ -6,6 +6,10 @@ accessor, so those two settings are pinned where they are read
 broker exposes: its middlewares, its declared queues, and its connection URL.
 """
 
+# The broker keeps what it was built with in private attributes with no
+# public accessor, so pinning the wiring means reading them directly.
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 from taskiq import SmartRetryMiddleware
@@ -15,6 +19,7 @@ from xtr_messenger.bridge.amqp.amqp_broker import create_amqp_broker, declared_q
 from xtr_messenger.bridge.amqp.amqp_options import AmqpOptions
 from xtr_messenger.bridge.amqp.connection_options import ConnectionOptions
 from xtr_messenger.bridge.amqp.dead_letter_middleware import DeadLetterMiddleware
+from xtr_messenger.bridge.amqp.exchange_options import ExchangeOptions
 from xtr_messenger.bridge.amqp.reliability import Reliability
 
 _HOST = "amqp://guest:guest@localhost:5672/"
@@ -108,13 +113,81 @@ def test_connection_settings_reach_the_url() -> None:
 
 def test_tls_material_reaches_the_url() -> None:
     broker = create_amqp_broker(
-        _HOST,
+        "amqps://guest:guest@localhost:5671/",
         AmqpOptions(connection=ConnectionOptions(cacert="/ca.pem", verify=False)),
     )
 
     assert broker.url is not None
     assert "cafile=%2Fca.pem" in broker.url
     assert "no_verify_ssl=1" in broker.url
+
+
+def test_the_connect_timeout_is_passed_to_the_connect_call() -> None:
+    """The driver ignores a timeout written into the URL; only the connect
+    call's argument bounds how long opening the connection may take."""
+    broker = create_amqp_broker(
+        _HOST,
+        AmqpOptions(connection=ConnectionOptions(connect_timeout=5.0)),
+    )
+
+    assert broker.url is not None
+    assert "timeout" not in broker.url
+    assert broker._conn_kwargs["timeout"] == 5.0
+
+
+def test_without_a_connect_timeout_the_connect_call_gets_none() -> None:
+    broker = create_amqp_broker(_HOST)
+
+    assert broker._conn_kwargs["timeout"] is None
+
+
+def test_the_delayed_message_exchange_plugin_is_on_by_default() -> None:
+    """A DelayStamp rides the delayed-message exchange, so the broker is
+    built expecting the plugin unless told otherwise."""
+    broker = create_amqp_broker(_HOST)
+
+    assert broker._delayed_message_exchange_plugin is True
+    assert broker._delayed_message_exchange.declare is True
+
+
+def test_the_delayed_message_exchange_plugin_can_be_turned_off() -> None:
+    broker = create_amqp_broker(_HOST, AmqpOptions(delayed_message_exchange_plugin=False))
+
+    assert broker._delayed_message_exchange_plugin is False
+
+
+def test_without_auto_setup_nothing_is_declared() -> None:
+    """``auto_setup=false`` promised a declaration-free startup, yet the
+    dead-letter queue and the delayed exchange were still declared — on a
+    broker the application has no permission to configure, that is a hard
+    failure at startup."""
+    broker = create_amqp_broker(
+        _HOST,
+        AmqpOptions(auto_setup=False),
+        queues=["jobs"],
+    )
+
+    assert broker._dead_letter_queue.declare is False
+    assert broker._delayed_message_exchange.declare is False
+    assert broker._exchange.declare is False
+    assert all(queue.declare is False for queue in broker._task_queues)
+
+
+def test_without_auto_setup_a_named_exchange_is_not_declared_either() -> None:
+    broker = create_amqp_broker(
+        _HOST,
+        AmqpOptions(auto_setup=False, exchange=ExchangeOptions(name="jobs.ex")),
+    )
+
+    assert broker._exchange.name == "jobs.ex"
+    assert broker._exchange.declare is False
+
+
+def test_with_auto_setup_the_dead_letter_queue_is_declared() -> None:
+    broker = create_amqp_broker(_HOST)
+
+    assert broker._dead_letter_queue.declare is True
+    assert broker._dead_letter_queue.name == "taskiq.dlq"
 
 
 def test_the_exchange_and_prefetch_are_still_wired() -> None:

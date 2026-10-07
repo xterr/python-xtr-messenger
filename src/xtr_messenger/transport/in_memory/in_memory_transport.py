@@ -8,7 +8,13 @@ from uuid import uuid4
 
 from typing_extensions import override
 
-from xtr_messenger.stamp import AckReceiptStamp, ReceivedStamp, TransportMessageIdStamp
+from xtr_messenger.exception import UnsupportedStampError
+from xtr_messenger.stamp import (
+    AckReceiptStamp,
+    DelayStamp,
+    ReceivedStamp,
+    TransportMessageIdStamp,
+)
 from xtr_messenger.transport.transport_interface import TransportInterface
 
 if TYPE_CHECKING:
@@ -40,13 +46,12 @@ class InMemoryTransport(TransportInterface):
     what was published, without the two interfering.
     """
 
-    __slots__ = ("_queue", "_rejected", "_sent", "_serializer", "_unsettled")
+    __slots__ = ("_queue", "_rejected", "_sent", "_serializer")
 
     def __init__(self, serializer: SerializerInterface | None = None) -> None:
         """Record into a fresh log, optionally round-tripping through ``serializer``."""
         self._sent: list[Envelope] = []
         self._queue: deque[Envelope] = deque()
-        self._unsettled: dict[int, Envelope] = {}
         self._rejected: list[Envelope] = []
         self._serializer = serializer
 
@@ -75,15 +80,23 @@ class InMemoryTransport(TransportInterface):
         return len(self._queue)
 
     def clear(self) -> None:
-        """Forget everything recorded, queued, outstanding, and rejected."""
+        """Forget everything recorded, queued, and rejected."""
         self._sent.clear()
         self._queue.clear()
-        self._unsettled.clear()
         self._rejected.clear()
 
     @override
     async def send(self, envelope: Envelope) -> Envelope:
-        """Record ``envelope``, queue it for collection, and stamp a message id."""
+        """Record ``envelope``, queue it for collection, and stamp a message id.
+
+        Raises:
+            UnsupportedStampError: If the envelope carries a
+                :class:`~xtr_messenger.stamp.DelayStamp`: this transport keeps
+                no timer, so a delay cannot be honoured and is refused rather
+                than dropped.
+        """
+        if envelope.last(DelayStamp) is not None:
+            raise UnsupportedStampError("DelayStamp", "in-memory")
         recorded = envelope
         if self._serializer is not None:
             recorded = self._serializer.decode(self._serializer.encode(envelope))
@@ -103,28 +116,20 @@ class InMemoryTransport(TransportInterface):
         while self._queue:
             envelope = self._queue.popleft()
             receipt += 1
-            self._unsettled[receipt] = envelope
             yield envelope.with_stamps(ReceivedStamp("in-memory"), AckReceiptStamp(receipt))
 
     @override
     async def ack(self, envelope: Envelope) -> None:
-        """Drop the outstanding record for ``envelope``."""
-        self._settle(envelope)
+        """Acknowledge ``envelope``; the queue was already drained when it was collected."""
+        del envelope
 
     @override
     async def reject(self, envelope: Envelope) -> None:
-        """Record ``envelope`` as rejected and stop tracking it.
+        """Record ``envelope`` as rejected.
 
         Records the envelope as handed over, not as it was collected, so
         anything the consumer learned on the way — an
         :class:`~xtr_messenger.stamp.ErrorDetailsStamp` saying why — is kept
         rather than discarded.
         """
-        self._settle(envelope)
         self._rejected.append(envelope)
-
-    def _settle(self, envelope: Envelope) -> None:
-        """Stop tracking ``envelope``; one never collected here carries no receipt."""
-        stamp = envelope.last(AckReceiptStamp)
-        if stamp is not None:
-            _ = self._unsettled.pop(stamp.receipt, None)

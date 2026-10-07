@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from xtr_messenger import Dsn, MessageBusInterface
+    from xtr_messenger.worker import AsyncResetter
 
 pytestmark = pytest.mark.anyio
 
@@ -106,6 +107,7 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
     def __init__(self) -> None:
         self.captured_bus: MessageBusInterface | None = None
         self.captured_dispatcher: EventDispatcherInterface | None = None
+        self.captured_resetter: AsyncResetter | None = None
         self.built = FakeWorker()
 
     @override
@@ -124,10 +126,12 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
         bus: MessageBusInterface,
         *,
         event_dispatcher: EventDispatcherInterface | None = None,
+        resetter: AsyncResetter | None = None,
     ) -> WorkerInterface:
         del group
         self.captured_bus = bus
         self.captured_dispatcher = event_dispatcher
+        self.captured_resetter = resetter
         return self.built
 
 
@@ -402,6 +406,23 @@ def test_a_worker_providing_factory_is_handed_the_event_dispatcher() -> None:
     assert adapter.captured_dispatcher is dispatcher
 
 
+def test_a_worker_providing_factory_is_handed_the_resetter() -> None:
+    """An adapter that owns the consume loop must still reset services after
+    each message; without the resetter reaching it, only the library's own
+    worker ever did."""
+
+    class Resetter:
+        async def reset(self) -> None: ...
+
+    resetter = Resetter()
+    adapter = OwnWorkerFactory()
+    config = MessageBusConfig(transports={"jobs": TransportConfig("own://")})
+
+    _ = WorkerFactory(config, [adapter], resetter=resetter).worker(["jobs"])
+
+    assert adapter.captured_resetter is resetter
+
+
 async def test_a_registered_receiver_is_consumed_by_its_name() -> None:
     seen: list[IngestDocument] = []
     handlers = HandlersLocator()
@@ -473,6 +494,22 @@ def test_a_transport_bringing_its_own_worker_cannot_share_it_with_a_receiver() -
 
     with pytest.raises(IncompatibleReceiversError):
         _ = workers.worker(["jobs", "generated"])
+
+
+def test_a_worker_providing_transport_cannot_share_a_worker_with_a_library_one() -> None:
+    """Mixing a broker that owns its loop with a library-driven transport in one
+    worker is refused, naming both sides, rather than silently dropping one."""
+    config = MessageBusConfig(
+        transports={"jobs": TransportConfig("own://"), "mem": TransportConfig("whole://")},
+    )
+    factory = WholeTransportFactory({"mem": FakeTransport([])})
+    workers = WorkerFactory(config, [OwnWorkerFactory(), factory])
+
+    with pytest.raises(IncompatibleReceiversError) as excinfo:
+        _ = workers.worker(["jobs", "mem"])
+
+    assert excinfo.value.brokered == ("jobs",)
+    assert excinfo.value.registered == ("mem",)
 
 
 @final

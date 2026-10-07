@@ -90,6 +90,15 @@ async def test_zero_config_boots_and_shuts_down() -> None:
     await assert_zero_config(MessengerBundle)
 
 
+async def test_shutdown_closes_nothing_when_no_transport_factory_was_built() -> None:
+    """An application that never resolved one built none, so there is nothing to
+    close and no adapter is imported to be asked. Which kernel's publishers a
+    shutdown does close is proved in
+    ``tests/integration/bundle/test_messenger_transport_factory.py``.
+    """
+    await MessengerBundle().shutdown()
+
+
 async def test_the_bundle_wires_a_bus_with_no_transports_when_unconfigured() -> None:
     kernel = Kernel(
         MessengerBundle.__module__,

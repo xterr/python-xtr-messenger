@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from aio_pika import ExchangeType
 from taskiq import SmartRetryMiddleware
 from taskiq_aio_pika import AioPikaBroker
+from taskiq_aio_pika.exchange import Exchange
 from taskiq_aio_pika.queue import Queue
 
 from .amqp_options import AmqpOptions
@@ -39,6 +41,14 @@ def create_amqp_broker(
     :class:`~xtr_messenger.bridge.taskiq.taskiq_sender.TaskiqSender` then
     selects one by name, which is how a routing table maps message types onto
     queues.
+
+    Delays ride RabbitMQ's delayed-message exchange, which needs the
+    ``rabbitmq_delayed_message_exchange`` plugin enabled on the broker —
+    turn ``delayed_message_exchange_plugin`` off where it is not, and the
+    transport refuses a delayed send instead of publishing one that never
+    delays. With ``auto_setup`` off nothing is declared, the dead-letter
+    queue and the delayed exchange included: the topology must already
+    exist, or startup fails naming what is missing.
     """
     configured = options if options is not None else AmqpOptions()
     settings = configured.reliability
@@ -49,11 +59,17 @@ def create_amqp_broker(
         task_queues=[configured.queue.declared(name, configured.auto_setup) for name in queues]
         or None,
         dead_letter_queue=(
-            Queue(name=settings.dead_letter_queue)
+            Queue(name=settings.dead_letter_queue, declare=configured.auto_setup)
             if settings.dead_letter_queue is not None
             else None
         ),
-        delayed_message_exchange_plugin=True,
+        delayed_message_exchange_plugin=configured.delayed_message_exchange_plugin,
+        delayed_message_exchange=(
+            _delayed_exchange(configured) if configured.delayed_message_exchange_plugin else None
+        ),
+        # The driver only honours the connect timeout as a call argument —
+        # as a URL parameter it is ignored — so it travels beside the URL.
+        timeout=configured.connection.connect_timeout,
     ).with_middlewares(
         SmartRetryMiddleware(
             default_retry_count=settings.max_attempts,
@@ -68,6 +84,22 @@ def create_amqp_broker(
             DeadLetterMiddleware(settings.dead_letter_queue, settings.max_attempts),
         )
     return broker
+
+
+def _delayed_exchange(configured: AmqpOptions) -> Exchange:
+    """Return the delayed-message exchange, declared only under ``auto_setup``.
+
+    The broker library's own default always declares it, which a deployment
+    that owns its topology has no permission for — so the same exchange is
+    built here with the declare flag the configuration chose.
+    """
+    name = configured.exchange.name if configured.exchange.name is not None else Exchange().name
+    return Exchange(
+        name=f"{name}.plugin_delay",
+        type=ExchangeType.X_DELAYED_MESSAGE,
+        arguments={"x-delayed-type": "direct"},
+        declare=configured.auto_setup,
+    )
 
 
 def declared_queues(broker: AioPikaBroker) -> tuple[str, ...]:

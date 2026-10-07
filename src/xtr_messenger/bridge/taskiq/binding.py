@@ -24,21 +24,22 @@ taskiq's retry and dead-letter middleware to act on.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, TypeAlias, final
 
 import msgspec
-from taskiq import Context, TaskiqDepends
+from taskiq import Context, TaskiqDepends, TaskiqMessage
 
 from xtr_messenger._handling import Failed, announce_failure, handle
 from xtr_messenger.exception import MessageDecodingFailedError
-from xtr_messenger.message_registry import declared_names
+from xtr_messenger.message_registry import declared_names, name_of
 from xtr_messenger.stamp import ReceivedStamp, RedeliveryStamp
 from xtr_messenger.transport.serialization import EncodedEnvelope, JsonSerializer
 
 from .labels import HEADERS_LABEL, QUEUE_LABEL, retries_from
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Coroutine, Mapping
+    from collections.abc import Coroutine, Mapping
 
     from taskiq import AsyncBroker, AsyncTaskiqDecoratedTask
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
@@ -46,8 +47,18 @@ if TYPE_CHECKING:
     from xtr_messenger.envelope import Envelope
     from xtr_messenger.message_bus_interface import MessageBusInterface
     from xtr_messenger.transport.serialization import SerializerInterface
+    from xtr_messenger.worker import AsyncResetter
 
-__all__ = ["bind_bus"]
+__all__ = ["UndecodableDeadLetterer", "bind_bus"]
+
+#: What quarantines a delivery whose body cannot be decoded into its message:
+#: called with the delivery and the decode failure, it must put the delivery
+#: somewhere it can be inspected. Decoding is deterministic, so redelivering
+#: such a message can never end differently — with this hook it goes straight
+#: to quarantine instead of through the retry ladder.
+UndecodableDeadLetterer: TypeAlias = Callable[
+    [TaskiqMessage, MessageDecodingFailedError], Awaitable[None]
+]
 
 #: Reported when the ``_retries`` label is absent or unreadable. The sender
 #: always sets it, so its absence is anomalous — treating it as a very late
@@ -67,9 +78,17 @@ _UNNAMED = "taskiq"
 class _Binding:
     """What every task bound by one :func:`bind_bus` call shares."""
 
-    __slots__ = ("bus", "dispatcher", "max_attempts", "receiver_names", "serializer")
+    __slots__ = (
+        "bus",
+        "dead_letter",
+        "dispatcher",
+        "max_attempts",
+        "receiver_names",
+        "resetter",
+        "serializer",
+    )
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — one keyword per shared collaborator
         self,
         *,
         bus: MessageBusInterface,
@@ -77,12 +96,16 @@ class _Binding:
         dispatcher: EventDispatcherInterface | None,
         receiver_names: Mapping[str | None, str],
         max_attempts: int | None,
+        resetter: AsyncResetter | None,
+        dead_letter: UndecodableDeadLetterer | None,
     ) -> None:
         self.bus = bus
         self.serializer = serializer
         self.dispatcher = dispatcher
         self.receiver_names = receiver_names
         self.max_attempts = max_attempts
+        self.resetter = resetter
+        self.dead_letter = dead_letter
 
     def receiver_name(self, labels: Mapping[str, object]) -> str:
         """Name the transport a delivery came from, by the queue it was published to.
@@ -114,6 +137,8 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     event_dispatcher: EventDispatcherInterface | None = None,
     receiver_names: Mapping[str | None, str] | None = None,
     max_attempts: int | None = None,
+    resetter: AsyncResetter | None = None,
+    dead_letter: UndecodableDeadLetterer | None = None,
 ) -> tuple[str, ...]:
     """Register a task per declared message on ``broker``, dispatching into ``bus``.
 
@@ -133,6 +158,13 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
         max_attempts: How many deliveries the broker makes in all, which
             decides whether a failure is announced as one that will be
             retried. Unknown when omitted, and then never reported as such.
+        resetter: Has ``reset()`` awaited after each message, settled either
+            way, so long-lived services are cleared between units of work —
+            the same contract the library's own worker honours.
+        dead_letter: Where a delivery that cannot be decoded is quarantined
+            instead of retried; the task then returns normally, so the
+            delivery is acknowledged. Without it the decode failure is
+            raised, and the broker's retry policy acts on it.
 
     Returns:
         The task names registered.
@@ -143,6 +175,8 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
         dispatcher=event_dispatcher,
         receiver_names=receiver_names if receiver_names is not None else {},
         max_attempts=max_attempts,
+        resetter=resetter,
+        dead_letter=dead_letter,
     )
     names = declared_names()
     for task_name in names:
@@ -154,19 +188,32 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
 
 def _task_for(binding: _Binding, task_name: str) -> Callable[..., Coroutine[None, None, None]]:
     async def run(body: str, context: Context = _CONTEXT) -> None:
-        labels = context.message.labels
-        name = binding.receiver_name(labels)
-        envelope = _rebuild(body, labels, task_name, binding.serializer, name)
-        outcome = await handle(binding.bus, envelope, name, binding.dispatcher)
-        if isinstance(outcome, Failed):
-            await announce_failure(
-                outcome,
-                name,
-                binding.dispatcher,
-                _settled_by_raising,
-                will_retry=binding.will_retry(outcome.envelope),
-            )
-            raise outcome.error
+        try:
+            labels = context.message.labels
+            name = binding.receiver_name(labels)
+            try:
+                envelope = _rebuild(body, labels, task_name, binding.serializer, name)
+            except MessageDecodingFailedError as error:
+                if binding.dead_letter is None:
+                    raise
+                # Decoding is deterministic: retrying can never end
+                # differently, so the delivery goes straight to quarantine
+                # and returning normally has it acknowledged.
+                await binding.dead_letter(context.message, error)
+                return
+            outcome = await handle(binding.bus, envelope, name, binding.dispatcher)
+            if isinstance(outcome, Failed):
+                await announce_failure(
+                    outcome,
+                    name,
+                    binding.dispatcher,
+                    _settled_by_raising,
+                    will_retry=binding.will_retry(outcome.envelope),
+                )
+                raise outcome.error
+        finally:
+            if binding.resetter is not None:
+                await binding.resetter.reset()
 
     run.__name__ = task_name.rpartition(".")[2]
     run.__qualname__ = task_name
@@ -187,6 +234,11 @@ def _rebuild(
 ) -> Envelope:
     headers = _headers_from(labels.get(HEADERS_LABEL), task_name)
     envelope = serializer.decode(EncodedEnvelope(body=body, headers=headers))
+    decoded = name_of(type(envelope.message))
+    if decoded != task_name:
+        raise MessageDecodingFailedError(
+            f"decoded message is {decoded!r}, but the task is {task_name!r}", task_name
+        )
     return envelope.with_stamps(
         ReceivedStamp(receiver_name),
         RedeliveryStamp(_attempt_from(labels)),

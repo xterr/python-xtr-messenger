@@ -170,9 +170,10 @@ asyncio.run(main())
 ```
 
 With the `console` extra, `<script> messenger:consume high low` does the same, and
-`--time-limit 3600` stops it after an hour. Without a container, hand the command a factory
-first: `ConsumeMessagesCommand.use_workers(WorkerFactory(CONFIG))`, imported from
-`xtr_messenger.command`.
+`--time-limit 3600` stops it after an hour. A kernel with the `MessengerBundle` active builds
+the command from the `WorkerFactory` the bundle provides, and the console bundle picks it up
+automatically. Run without a container the command's `WorkerFactory` cannot be filled, so the
+console reports the missing parameter rather than build it bare.
 
 Every message a worker hands a handler carries a `ReceivedStamp` naming the configured
 transport. `stop()` lets the message in hand finish and then returns. Give the worker an
@@ -217,9 +218,10 @@ what is undrained, and `clear()` resets between tests.
 
 ## Use in an application
 
-`uv run xtr-recipes recipes:sync` applies the recipe shipped with this package: it lists
-`MessengerBundle`, writes a starting `config/messenger.py`, and `MESSENGER_DSN` (commented out) in
-`.env`. That is the steps below a recipe can do; the transports it prints for you to name and route.
+`uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and *Environment* steps below:
+it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py` and `MESSENGER_DSN`
+(commented out) in `.env`. It prints the step to name and route your transports, which a recipe
+cannot make for you.
 
 1. **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
    what you use.
@@ -248,7 +250,8 @@ what is undrained, and `clear()` resets between tests.
 
 5. **Environment** — nothing required; a broker DSN is usually `env("MESSENGER_DSN")`, read only
    when the bus is built.
-6. **Use** — inject `MessageBusInterface` to publish. In a handler, container services arrive
+6. **Ignore** — nothing.
+7. **Use** — inject `MessageBusInterface` to publish. In a handler, container services arrive
    only through a marker: `Injected[T]`, `Annotated[T, Target("name")]` or
    `Annotated[T, Autowire(param=... | env=...)]`. A bare `T` is **not** injected.
 
@@ -259,10 +262,10 @@ what is undrained, and `clear()` resets between tests.
 
    A handler class is a singleton: its constructor takes what lives as long as the handler, and
    per-message dependencies go on `__call__` as `Injected[T]`.
-7. **Run** — a worker is `<script> messenger:consume <transport>`.
-8. **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
+8. **Run** — a worker is `<script> messenger:consume <transport>`.
+9. **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
    messenger` shows the resolved transports and routing.
-9. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/messenger.py`, then
+10. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/messenger.py`, then
    `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 
 The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a per-kernel `HandlersLocator`

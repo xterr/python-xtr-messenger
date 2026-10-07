@@ -47,12 +47,13 @@ from xtr_messenger.middleware.middleware_arguments import (
 )
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
+from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
-from xtr_messenger.worker_factory import WorkerFactory
 
 from ._services import (
     MESSENGER_CHANNEL,
+    BuiltTransports,
     combined_transport_factory,
     combined_transport_factory_with,
     logging_middleware_for_messenger,
@@ -78,7 +79,6 @@ RECEIVER_TAG: Final = "messenger.receiver"
 TRANSPORT_FACTORY_TAG: Final = "messenger.transport_factory"
 
 _HANDLES_TAG = "messenger.message_handler"
-_TRANSPORT_FACTORY_TAG = TRANSPORT_FACTORY_TAG
 
 
 def _add_messenger_channel(config: object) -> object:
@@ -102,6 +102,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
     def __init__(self) -> None:
         """Start with an empty per-kernel :class:`HandlersLocator`."""
         self._handlers: HandlersLocator = HandlersLocator()
+        self._transports: BuiltTransports = BuiltTransports()
 
     @override
     def prepend_extension(self, builder: ContainerBuilder) -> None:
@@ -140,7 +141,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         ) -> None:
             del obj
             qualifier = qualified_name(factory_cls)
-            _ = services.set(factory_cls, qualifier=qualifier).add_tag(_TRANSPORT_FACTORY_TAG)
+            _ = services.set(factory_cls, qualifier=qualifier).add_tag(TRANSPORT_FACTORY_TAG)
             services.alias(
                 TransportFactoryInterface,
                 factory_cls,
@@ -175,6 +176,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
             _HANDLES_TAG, handles=qualified_name(RedispatchMessage)
         )
         _ = services.instance(self._handlers)
+        _ = services.instance(self._transports)
         _ = services.set(combined_transport_factory)
         _ = services.set(named_middleware)
         if bundle_active(builder, "logging"):
@@ -189,7 +191,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
                 target_qualifier="logging",
             )
         _ = services.set(message_bus)
-        _ = services.set(worker_factory).set_argument("receiver_keys", {})
+        _ = services.set(worker_factory)
         if bundle_active(builder, "console"):
             services.load("xtr_messenger.command")
 
@@ -198,8 +200,10 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         """Hand workers the tagged receivers; consult app-registered transport factories first.
 
         Every service tagged :data:`RECEIVER_TAG` becomes consumable under its
-        ``alias`` — collected here, after every bundle and compiler pass before
-        this one has registered what it will.
+        ``alias`` — aliased under :class:`ReceiverInterface` by that alias here,
+        after every bundle and compiler pass before this one has registered what
+        it will, so the worker factory's ``ServiceLocator[ReceiverInterface]``
+        hands each back keyed by its alias.
 
         Autoconfiguration tags every class registered under
         :class:`TransportFactoryInterface`. When at least one exists, the shared
@@ -209,8 +213,11 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         engine cannot resolve an empty collection.
         """
         _register_middleware_with_arguments(builder)
-        _ = builder.get_definition(WorkerFactory).set_argument("receiver_keys", _receivers(builder))
-        if not builder.find_tagged_service_ids(_TRANSPORT_FACTORY_TAG):
+        for alias, (service, qualifier) in _receivers(builder).items():
+            builder.set_alias(
+                ReceiverInterface, service, alias_qualifier=alias, target_qualifier=qualifier
+            )
+        if not builder.find_tagged_service_ids(TRANSPORT_FACTORY_TAG):
             return
         builder.get_definition(TransportFactory).provider = combined_transport_factory_with
 
@@ -223,6 +230,27 @@ class MessengerBundle(Bundle[MessageBusConfig]):
             raise RuntimeError(message)
         binding = _ContainerBinding(container)
         self._handlers.decorate(binding)
+
+    @override
+    async def shutdown(self) -> None:
+        """Close every connection a publishing transport of *this* kernel opened.
+
+        A producer opens its broker on first publish and nothing closes it
+        afterwards — the consuming side's run loop does that, and a publisher
+        has no loop. So the transport factory this kernel built is asked to
+        release what its own senders opened.
+
+        Scoped to this kernel on purpose. Two applications can run in one
+        process, each publishing through its own connections, and closing every
+        connection in the process would drop one the other is still using.
+
+        An application that never resolved a transport factory built none, so
+        there is nothing to close and no adapter is imported to be asked.
+        """
+        factory = self._transports.factory
+        if factory is None:
+            return
+        await factory.close_publishers()
 
 
 def _register_middleware_with_arguments(builder: ContainerBuilder) -> None:

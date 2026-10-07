@@ -22,13 +22,13 @@ dead-lettering — lives in :mod:`xtr_messenger.bridge.amqp` and needs the
 from __future__ import annotations
 
 from .binding import bind_bus
-from .broker import ensure_started
+from .started_brokers import StartedBrokers
 from .taskiq_sender import TaskiqSender
 from .taskiq_worker import TaskiqWorker
 
 __all__ = [
+    "StartedBrokers",
     "TaskiqSender",
     "TaskiqWorker",
     "bind_bus",
-    "ensure_started",
 ]

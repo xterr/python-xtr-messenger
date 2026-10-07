@@ -138,7 +138,7 @@ class AuditIngest:  # built once, on its first message
 
 A function, a callable object or a class all work. A class is built **once**, on its first
 message, and shared by every message after — with no arguments on its own, or by the container
-when [one is wired](#wiring-with-a-container). A handler is a service, not a value: building one
+when [one is wired](#kernel--bundle). A handler is a service, not a value: building one
 per message would cost a construction each, thousands of times a second. Messages may be handled
 concurrently, so keep per-message state off `self`.
 
@@ -214,7 +214,7 @@ TransportConfig(
 ```
 
 <details>
-<summary><b>All 26 settings an <code>amqp://</code> transport accepts</b></summary>
+<summary><b>All 27 settings an <code>amqp://</code> transport accepts</b></summary>
 
 | Group | Settings |
 | --- | --- |
@@ -223,18 +223,34 @@ TransportConfig(
 | Queue | `queue`, `queue_type`, `queue_durable`, `queue_auto_delete`, `queue_exclusive`, `queue_max_priority`, `routing_key` |
 | Connection | `heartbeat`, `connect_timeout`, `connection_name`, `frame_max`, `channel_max` |
 | TLS | `cacert`, `cert`, `key`, `verify` |
-| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup` |
+| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup`, `delayed_message_exchange_plugin` |
 
 `max_async_tasks` is how many messages a worker handles at once: ten per CPU, capped at 100,
 unless set. A message is acked once handled, so `prefetch_count` (10 by default) caps it too —
 a worker handles the smaller of the two at once. Raise both together to go wider.
+
+Delays — a `DelayStamp`, and the retry ladder's backoff — ride RabbitMQ's delayed-message
+exchange, which needs the **`rabbitmq_delayed_message_exchange` plugin** enabled on the broker
+(`rabbitmq-plugins enable rabbitmq_delayed_message_exchange`). That is what
+`delayed_message_exchange_plugin` (on by default) declares. On a broker without the plugin set
+it to `false`: a delayed send is then refused with `UnsupportedStampError` rather than
+published without its delay — and pair it with `max_attempts=1`, because the retry ladder's
+backoff has nowhere to ride either.
+
+The TLS settings belong to `amqps://` and are refused on plain `amqp://`, where the driver
+would silently ignore them. `verify=false` is warned about once per factory — a notice, not a
+per-broker drumbeat. `connect_timeout` is passed to the driver's connect call, where it is
+read; `heartbeat` takes whole seconds and refuses values below one, which the driver would
+read as "no heartbeat at all".
 
 An unrecognised setting is **refused** with `UnknownTransportOptionError`, naming what the scheme
 does accept, and a value it cannot use — `prefetch_count=lots` — with
 `InvalidTransportOptionError`. A typo in configuration is always a mistake, and one that is
 ignored leaves a transport running on defaults nobody chose.
 
-Credentials are not settings — a URL already expresses them, so they stay in the DSN.
+Credentials are not settings — a URL already expresses them, so they stay in the DSN,
+percent-encoded: a password carrying `@`, `?` or `#` must escape them (`%40`, `%3F`, `%23`),
+or the DSN is refused rather than read with part of the password as options.
 
 </details>
 
@@ -284,31 +300,21 @@ receives is dispatched into a bus, and the bus calls the handlers.
 ### From the console
 
 With the `console` extra, `messenger:consume` does the same from an
-[xtr-console](https://github.com/xterr/python-xtr-console) application. Importing
-`xtr_messenger.command` declares it; it needs only a `WorkerFactory` to build workers with.
-
-```python
-# app/console.py
-import app.handlers  # noqa: F401
-
-from app.bus import CONFIG
-from xtr_console import Application
-from xtr_messenger import WorkerFactory
-from xtr_messenger.command import ConsumeMessagesCommand
-
-ConsumeMessagesCommand.use_workers(WorkerFactory(CONFIG))
-raise SystemExit(Application("app").run())
-```
+[xtr-console](https://github.com/xterr/python-xtr-console) application. It needs a
+`WorkerFactory` to build workers with, which a [kernel](#kernel--bundle) supplies: with the
+`MessengerBundle` active the console bundle picks the command up automatically and the
+container builds it from the `WorkerFactory` the bundle provides — handlers wired to the
+container.
 
 ```sh
-uv run python -m app.console messenger:consume high low
-uv run python -m app.console messenger:consume high --time-limit 3600
+uv run python -m app messenger:consume high low
+uv run python -m app messenger:consume high --time-limit 3600
 ```
 
 SIGTERM, or the time limit running out, stops the worker once the message in hand is settled;
-Ctrl-C cancels it. With a [kernel](#kernel--bundle) the `MessengerBundle` builds the command
-from the `WorkerFactory` it provides — handlers wired to the container, and the console
-bundle picks the command up automatically when both bundles are active.
+Ctrl-C cancels it. Run without a container — a plain console with no kernel behind it — the
+command's `WorkerFactory` cannot be filled, so the console reports the missing parameter
+rather than build it bare.
 
 ### Who retries
 
@@ -452,6 +458,25 @@ container supplies each named entry; the logging middleware writes through the
 [xtr-console](https://github.com/xterr/python-xtr-console) the same container makes its
 console handlers follow every command, so `messenger:consume -vv` reads out every handler
 that ran.
+
+### The `messenger` standard-library channel
+
+One thing does not travel through `LoggerInterface`: a warning an **adapter** has to raise
+while it is still being configured. An `amqp://` transport is built by a discovered factory
+from strings alone — no logger reaches it — so those records go to the standard library's
+`logging.getLogger("messenger")` instead. The name is the same `"messenger"` the bundle adds to
+logging's config, so an application capturing the standard library's logging reads them beside
+the bus's own records; one that configures no logging at all still sees them, because that is
+where `logging`'s own default output goes.
+
+| Record | Level | Why it is said |
+| --- | --- | --- |
+| `TLS certificate verification is disabled (verify=false): the broker's identity is not checked` | `WARNING` | `verify=false` keeps the encryption and drops the identity check with it. A security downgrade written in a DSN is easy to carry from a staging deploy into production unnoticed, so it is never silent — said once per transport factory, not once per broker built |
+| `dead-lettering a poison delivery: <reason>` | `WARNING` | A delivery that can never be handled — unparsable, or naming a task nobody registered — is quarantined to the dead-letter queue instead of being redelivered forever. The reason is logged; the body is not, because a message body may carry anything a producer put in it |
+
+That is the whole channel today. It is a plain `logging` logger, so an application silences or
+re-routes it the usual way — `logging.getLogger("messenger")` — and nothing here configures
+handlers, levels or propagation on your behalf.
 
 What `middleware` names runs in that order, after the middleware that
 [holds messages back](#dispatching-after-the-current-message). Routing and handling always come
@@ -708,6 +733,13 @@ If your broker owns its own consume loop, also implement `WorkerProvidingInterfa
 what it receives into the `bus` its `worker()` is given. Most transports should not: a whole
 transport is driven by the library's `Worker`.
 
+If your senders open a connection of their own — a producer has to, because the consuming
+side's run loop is what normally opens and closes one — also implement
+`PublisherClosingInterface`. Close exactly what *this* factory's senders opened: one process
+may run two applications, each with its own factory, and closing more than your own would drop
+a connection the other is still publishing through. `TransportFactory` forwards to every
+factory behind it, and the `MessengerBundle` asks the one its own kernel built as it shuts down.
+
 ## Use in an application
 
 Everything adding this package to an application on
@@ -726,7 +758,10 @@ Everything adding this package to an application on
 - **Configure** — needed to move a message: with no configuration there are no transports, and
   a message routed nowhere is neither sent nor handled. Transports and routing go in
   `<app>/config/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
-  [Kernel / bundle](#kernel--bundle).
+  [Kernel / bundle](#kernel--bundle). An `amqp://` transport expects the RabbitMQ
+  `rabbitmq_delayed_message_exchange` plugin on the broker — delays and retry backoff ride it —
+  unless `delayed_message_exchange_plugin=false` turns it off, which also turns a delayed send
+  into an `UnsupportedStampError`.
 - **Environment** — nothing required; a broker DSN is usually `env("MESSENGER_DSN")`, read
   only when the bus is built.
 - **Ignore** — nothing.

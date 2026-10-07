@@ -5,12 +5,18 @@ import os
 import signal
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, cast, final
 from uuid import UUID, uuid4
 
 import pytest
 from typing_extensions import override
-from xtr_console import Application, CommandTester, ExitCode
+from xtr_console import (
+    Application,
+    CommandInvokerInterface,
+    CommandTester,
+    ExitCode,
+    MissingContainerError,
+)
 
 from xtr_messenger import (
     Dsn,
@@ -26,10 +32,14 @@ from xtr_messenger import (
     as_message,
     as_message_handler,
 )
-from xtr_messenger.command import ConsumeMessagesCommand
+from xtr_messenger.command import (
+    ConsumeMessagesCommand,  # noqa: TC001 — imported at runtime for the @as_command registration side effect
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator, Mapping
+    from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+
+    from xtr_console.command import CommandArguments, CommandDescriptor, CommandSignature
 
 pytestmark = pytest.mark.anyio
 
@@ -93,24 +103,38 @@ def factories() -> list[TransportFactoryInterface]:
     return [InMemoryTransportFactory(), IdleTransportFactory()]
 
 
-@pytest.fixture
-def console() -> CommandTester:
-    return CommandTester(Application(catch_exceptions=False), "messenger:consume")
+@final
+class _ProvidingInvoker(CommandInvokerInterface):
+    """Builds the consume command with a worker factory, as a container would."""
+
+    def __init__(self, workers: WorkerFactory) -> None:
+        self._workers = workers
+
+    @override
+    async def invoke(
+        self,
+        command: CommandDescriptor,
+        signature: CommandSignature,
+        arguments: CommandArguments,
+    ) -> object:
+        del signature
+        command_type = cast("type[ConsumeMessagesCommand]", command.target)
+        # The arguments come parsed off the command line, typed only as objects.
+        call = cast("Callable[..., Awaitable[object]]", command_type(self._workers))
+        return await call(*arguments.args, **arguments.kwargs)
 
 
 @pytest.fixture
-def tester(
-    console: CommandTester, handled: list[UUID], factories: list[TransportFactoryInterface]
-) -> Iterator[CommandTester]:
+def tester(handled: list[UUID], factories: list[TransportFactoryInterface]) -> CommandTester:
     handlers = HandlersLocator()
 
     @as_message_handler(ConsumeJob, handlers)
     async def run(message: ConsumeJob) -> None:
         handled.append(message.job_id)
 
-    ConsumeMessagesCommand.use_workers(WorkerFactory(CONFIG, factories, handlers))
-    yield console
-    ConsumeMessagesCommand.use_workers(None)
+    application = Application(catch_exceptions=False)
+    application.use_invoker(_ProvidingInvoker(WorkerFactory(CONFIG, factories, handlers)))
+    return CommandTester(application, "messenger:consume")
 
 
 async def test_it_handles_what_the_named_transport_holds(
@@ -171,10 +195,29 @@ async def test_sigterm_stops_the_worker_and_is_handed_back(tester: CommandTester
     assert not loop.remove_signal_handler(signal.SIGTERM)
 
 
-async def test_it_asks_for_a_factory_when_neither_a_container_nor_one_is_given(
-    console: CommandTester,
-) -> None:
-    code = await console.execute(["jobs"])
+@pytest.mark.skipif(sys.platform == "win32", reason="the event loop cannot handle signals")
+async def test_a_pre_existing_sigterm_handler_is_restored(tester: CommandTester) -> None:
+    """The command borrows SIGTERM while it runs, then hands back whatever was
+    installed before rather than leaving the default."""
 
-    assert code == ExitCode.FAILURE
-    assert "No worker factory" in console.display
+    def original(signum: int, frame: object) -> None:
+        del signum, frame
+
+    previous = signal.signal(signal.SIGTERM, original)
+    try:
+        async with asyncio.timeout(5):
+            code = await tester.execute(["idle", "--time-limit", "0.05"])
+
+        assert code == ExitCode.SUCCESS
+        assert signal.getsignal(signal.SIGTERM) is original
+    finally:
+        _ = signal.signal(signal.SIGTERM, previous)
+
+
+async def test_without_a_container_the_console_names_the_worker_factory_it_needs() -> None:
+    # A plain application: no invoker builds the command, so the console falls
+    # back to building it bare and finds the parameter it cannot fill.
+    tester = CommandTester(Application(catch_exceptions=False), "messenger:consume")
+
+    with pytest.raises(MissingContainerError, match="workers"):
+        _ = await tester.execute(["jobs"])

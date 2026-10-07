@@ -9,7 +9,6 @@ serializer or the broker — only the transport underneath is in-memory.
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING
 
 import pytest
 from taskiq import InMemoryBroker, SmartRetryMiddleware
@@ -28,13 +27,9 @@ from xtr_messenger import (
     TransportMessageIdStamp,
     as_message_handler,
 )
-from xtr_messenger.bridge.taskiq import TaskiqSender, bind_bus
-from xtr_messenger.bridge.taskiq.broker import forget_started
+from xtr_messenger.bridge.taskiq import StartedBrokers, TaskiqSender, bind_bus
 from xtr_messenger.bridge.taskiq.labels import RETRIES_LABEL
 from xtr_messenger.message_registry import declared_names
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 pytestmark = pytest.mark.anyio
 
@@ -42,10 +37,8 @@ _INGEST = "test.ingest.v1"
 
 
 @pytest.fixture
-def broker() -> Iterator[InMemoryBroker]:
-    made = InMemoryBroker(await_inplace=True)
-    yield made
-    forget_started(made)
+def broker() -> InMemoryBroker:
+    return InMemoryBroker(await_inplace=True)
 
 
 @pytest.fixture
@@ -63,7 +56,7 @@ def _bind(
 
 
 def _publisher(broker: InMemoryBroker, serializer: JsonSerializer | None = None) -> MessageBus:
-    sender = TaskiqSender(broker, serializer=serializer)
+    sender = TaskiqSender(broker, StartedBrokers(), serializer=serializer)
     routing = SendersLocator({IngestDocument: "q"}, {"q": sender})
     return MessageBus([SendMessageMiddleware(routing)])
 
@@ -240,5 +233,4 @@ async def test_retries_are_reported_to_the_handler_as_they_climb() -> None:
     with contextlib.suppress(Exception):
         _ = await _publisher(broker).dispatch(ingest_document())
 
-    forget_started(broker)
     assert attempts == [0, 1, 2]

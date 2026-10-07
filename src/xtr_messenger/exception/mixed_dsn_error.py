@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from xtr_messenger._redaction import redacted
+
 from .message_bus_error import MessageBusError
 
 __all__ = ["MixedDsnError"]
@@ -13,7 +15,7 @@ class MixedDsnError(MessageBusError):
     dsns: tuple[str, ...]
 
     def __init__(self, dsns: tuple[str, ...]) -> None:
-        """Record the conflicting DSNs."""
-        self.dsns = dsns
+        """Record the conflicting DSNs, redacted — an attribute leaks as easily as a message."""
+        self.dsns = tuple(redacted(dsn) for dsn in dsns)
         remedy = "run one worker per DSN"
         super().__init__(f"a worker serves one broker, but got {len(dsns)} DSNs; {remedy}")

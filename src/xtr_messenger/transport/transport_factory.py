@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, final
 from typing_extensions import override
 
 from xtr_messenger.exception import UnsupportedDsnError
+from xtr_messenger.publisher_closing_interface import PublisherClosingInterface
 
 from .transport_factory_discovery import factory_for
 from .transport_factory_interface import TransportFactoryInterface
@@ -23,7 +24,7 @@ __all__ = ["TransportFactory"]
 
 
 @final
-class TransportFactory(TransportFactoryInterface):
+class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
     """Builds transports by asking the factory that recognises their DSN.
 
     A factory itself, so everything that builds a transport depends on one
@@ -31,13 +32,13 @@ class TransportFactory(TransportFactoryInterface):
     lets a bus be handed one collaborator rather than a list plus the rules
     for choosing from it.
 
-    Built with no arguments it **discovers** adapters by DSN scheme, loading
-    only the one a scheme needs — an application speaking ``sync://`` never
-    imports a broker library. Given a list it uses exactly those, in order,
-    which is how you supply an adapter that needs a collaborator discovery
-    cannot provide::
+        Built with no arguments it **discovers** adapters by DSN scheme, loading
+        only the one a scheme needs — an application speaking ``sync://`` never
+        imports a broker library. Given a list it uses exactly those, in order,
+        which is how you supply an adapter that needs a collaborator discovery
+        cannot provide::
 
-        TransportFactory([AmqpTransportFactory(serializer=mine)])
+            TransportFactory([AmqpTransportFactory(serializer=mine)])
     """
 
     __slots__ = ("_discovered", "_factories")
@@ -62,6 +63,30 @@ class TransportFactory(TransportFactoryInterface):
             UnsupportedDsnError: If nothing recognises the scheme.
         """
         return self.serving(group).create(group)
+
+    @override
+    async def close_publishers(self) -> None:
+        """Close the publish connections of every factory behind this one.
+
+        Exactly the factories *this* one holds, so an application closes its
+        own connections and leaves another application's alone. A factory with
+        no connections to release — most of them — is skipped.
+        """
+        for factory in self._behind():
+            if isinstance(factory, PublisherClosingInterface):
+                await factory.close_publishers()
+
+    def _behind(self) -> tuple[TransportFactoryInterface, ...]:
+        """Return the factories this one delegates to.
+
+        In discovery mode that is whatever has been discovered so far, which is
+        the point: a scheme nothing asked for was never loaded, and loading it
+        now to ask it to close nothing would import a broker library an
+        application never spoke to.
+        """
+        if self._factories is not None:
+            return self._factories
+        return tuple(self._discovered.values())
 
     def _discover(self, dsn: Dsn) -> TransportFactoryInterface | None:
         """Return the factory serving ``dsn``, discovering it at most once.

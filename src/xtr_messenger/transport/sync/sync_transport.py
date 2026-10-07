@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from xtr_messenger.stamp import ReceivedStamp, SentStamp
+from xtr_messenger.exception import UnsupportedStampError
+from xtr_messenger.stamp import DelayStamp, ReceivedStamp, SentStamp
 from xtr_messenger.transport.transport_interface import TransportInterface
 
 if TYPE_CHECKING:
@@ -46,7 +47,16 @@ class SyncTransport(TransportInterface):
 
     @override
     async def send(self, envelope: Envelope) -> Envelope:
-        """Mark the envelope received, under the name it was sent to."""
+        """Mark the envelope received, under the name it was sent to.
+
+        Raises:
+            UnsupportedStampError: If the envelope carries a
+                :class:`~xtr_messenger.stamp.DelayStamp`: handling is immediate
+                here, so a delay cannot be honoured and is refused rather than
+                dropped.
+        """
+        if envelope.last(DelayStamp) is not None:
+            raise UnsupportedStampError("DelayStamp", "sync")
         sent = envelope.last(SentStamp)
         return envelope.with_stamps(ReceivedStamp(sent.sender_alias if sent else "sync"))
 

@@ -8,19 +8,21 @@ from typing import TYPE_CHECKING, final
 from taskiq.kicker import AsyncKicker
 from typing_extensions import override
 
+from xtr_messenger.exception import UnsupportedStampError
 from xtr_messenger.message_registry import name_of
 from xtr_messenger.stamp import DelayStamp, TransportMessageIdStamp
 from xtr_messenger.transport.sender import SenderInterface
 from xtr_messenger.transport.serialization import JsonSerializer
 
-from .broker import ensure_started
-from .labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
+from .labels import DELAY_LABEL, HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
 
 if TYPE_CHECKING:
     from taskiq import AsyncBroker, AsyncTaskiqTask
 
     from xtr_messenger.envelope import Envelope
     from xtr_messenger.transport.serialization import SerializerInterface
+
+    from .started_brokers import StartedBrokers
 
 __all__ = ["TaskiqSender"]
 
@@ -40,18 +42,35 @@ class TaskiqSender(SenderInterface):
     tell "first delivery" from "label was lost" rather than guessing.
     """
 
-    __slots__ = ("_broker", "_queue", "_serializer")
+    __slots__ = ("_broker", "_queue", "_serializer", "_started", "_supports_delay")
 
     def __init__(
         self,
         broker: AsyncBroker,
+        started: StartedBrokers,
         serializer: SerializerInterface | None = None,
         queue: str | None = None,
+        *,
+        supports_delay: bool = True,
     ) -> None:
-        """Publish through ``broker``, optionally pinning a named queue."""
+        """Publish through ``broker``, optionally pinning a named queue.
+
+        ``started`` is where this sender records that it opened the broker's
+        connection. Give every sender built for one owner the same one: senders
+        sharing a broker then open it once between them, and whoever owns the
+        registry can close exactly those connections again.
+
+        ``supports_delay`` says whether ``broker`` can hold a message back.
+        Built ``False`` — as the AMQP factory does when the delayed-message
+        exchange is turned off — a publish carrying a
+        :class:`~xtr_messenger.stamp.DelayStamp` is refused rather than sent
+        without its delay.
+        """
         self._broker = broker
+        self._started = started
         self._serializer = serializer if serializer is not None else JsonSerializer()
         self._queue = queue
+        self._supports_delay = supports_delay
 
     @property
     def broker(self) -> AsyncBroker:
@@ -75,9 +94,15 @@ class TaskiqSender(SenderInterface):
 
     @override
     async def send(self, envelope: Envelope) -> Envelope:
-        """Encode, publish, and stamp the envelope with the task id."""
+        """Encode, publish, and stamp the envelope with the task id.
+
+        Raises:
+            UnsupportedStampError: If the envelope carries a
+                :class:`~xtr_messenger.stamp.DelayStamp` and this sender's
+                broker cannot hold a message back.
+        """
         encoded = self._serializer.encode(envelope)
-        await ensure_started(self._broker)
+        await self._started.ensure_started(self._broker)
         kicker: AsyncKicker[..., None] = AsyncKicker(
             task_name=name_of(type(envelope.message)),
             broker=self._broker,
@@ -95,5 +120,9 @@ class TaskiqSender(SenderInterface):
             labels[QUEUE_LABEL] = self._queue
         delay = envelope.last(DelayStamp)
         if delay is not None:
-            labels["delay"] = delay.delay_ms / _MILLISECONDS_PER_SECOND
+            if not self._supports_delay:
+                # Only the AMQP factory builds this off, when the broker's
+                # delayed-message exchange is disabled.
+                raise UnsupportedStampError(type(delay).__name__, "amqp")
+            labels[DELAY_LABEL] = delay.delay_ms / _MILLISECONDS_PER_SECOND
         return labels

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from xtr_messenger._redaction import redacted
+
 from .message_bus_error import MessageBusError
 
 __all__ = ["UnsupportedDsnError"]
@@ -18,4 +20,5 @@ class UnsupportedDsnError(MessageBusError):
         self.transport_name = transport_name
         self.dsn = dsn
         remedy = "install the matching extra, or pass your own factory"
-        super().__init__(f"no transport factory for {transport_name!r} dsn {dsn!r}; {remedy}")
+        shown = redacted(dsn)
+        super().__init__(f"no transport factory for {transport_name!r} dsn {shown!r}; {remedy}")

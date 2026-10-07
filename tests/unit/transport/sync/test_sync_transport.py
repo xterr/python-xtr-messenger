@@ -3,7 +3,15 @@ from __future__ import annotations
 import pytest
 
 from tests.support.messages import ingest_document
-from xtr_messenger import Envelope, HandledStamp, ReceivedStamp, SentStamp, SyncTransport
+from xtr_messenger import (
+    DelayStamp,
+    Envelope,
+    HandledStamp,
+    ReceivedStamp,
+    SentStamp,
+    SyncTransport,
+    UnsupportedStampError,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -58,3 +66,15 @@ async def test_reject_is_a_no_op() -> None:
     transport = SyncTransport()
 
     await transport.reject(Envelope(ingest_document()))
+
+
+async def test_a_delayed_envelope_is_refused_rather_than_sent_immediately() -> None:
+    """A sync transport handles at once, so it cannot honour a delay: refusing
+    surfaces the mismatch instead of dropping the request silently."""
+    envelope = Envelope(ingest_document()).with_stamps(DelayStamp(1000))
+
+    with pytest.raises(UnsupportedStampError) as excinfo:
+        _ = await SyncTransport().send(envelope)
+
+    assert excinfo.value.stamp_name == "DelayStamp"
+    assert excinfo.value.transport == "sync"

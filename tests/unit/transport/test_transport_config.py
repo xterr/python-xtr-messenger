@@ -62,3 +62,50 @@ def test_a_malformed_dsn_is_refused_when_the_transport_reads_it() -> None:
         _ = config.parsed
 
     assert excinfo.value.dsn == "just-a-host"
+
+
+def test_repr_hides_the_dsn_credentials() -> None:
+    rendered = repr(TransportConfig("amqp://user:s3cret@host/vh"))
+
+    assert "s3cret" not in rendered
+
+
+def test_repr_hides_credentials_in_a_dsn_with_no_authority() -> None:
+    """The shape that reaches an error message: no ``://``, so no authority to
+    read the userinfo out of."""
+    rendered = repr(TransportConfig("user:s3cret@host/vh"))
+
+    assert "s3cret" not in rendered
+
+
+def test_repr_neither_raises_nor_leaks_on_an_unreadable_dsn() -> None:
+    """A traceback renders whatever a frame holds. A repr that raised while
+    hiding the password would replace the diagnosis with its own crash."""
+    rendered = repr(TransportConfig("amqp://user:s3cret@[::1/vh"))
+
+    assert "s3cret" not in rendered
+
+
+#: The DSN shapes a well-formed authority never catches, each paired with the
+#: fragments of its password; a ``repr`` reaches a traceback, so it must leave
+#: none of them.
+_LEAKY_DSNS = (
+    ("amqp://user:s3/cret@host/vh", ("s3", "cret")),
+    ("amqp://user:s3?cret@host/vh", ("s3", "cret")),
+    ("amqp://user:s3#cret@host/vh", ("s3", "cret")),
+    ("user:s3/cret@host/vh", ("s3", "cret")),
+    ("user:s3cret@host/vh?next=amqp://x", ("s3", "cret")),
+    ("user:s3cret", ("s3", "cret")),
+    ("rabbit:guest", ("guest",)),
+)
+
+
+@pytest.mark.parametrize(("dsn", "secrets"), _LEAKY_DSNS)
+def test_repr_hides_credentials_the_authority_path_misses(
+    dsn: str,
+    secrets: tuple[str, ...],
+) -> None:
+    rendered = repr(TransportConfig(dsn))
+
+    for secret in secrets:
+        assert secret not in rendered

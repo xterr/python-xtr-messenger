@@ -52,8 +52,14 @@ def test_an_unknown_exchange_type_names_the_allowed_values() -> None:
     assert "topic" in excinfo.value.expected
 
 
-def test_no_name_accepts_taskiqs_default_exchange() -> None:
-    assert ExchangeOptions().declared(declare=True) is None
+def test_no_name_keeps_the_default_name_and_still_carries_the_declare_flag() -> None:
+    """Returning ``None`` here let the broker library build its own exchange,
+    which declares unconditionally — so ``auto_setup=false`` declared an
+    exchange anyway whenever no name was configured."""
+    declared = ExchangeOptions().declared(declare=False)
+
+    assert declared.name == "taskiq"
+    assert declared.declare is False
 
 
 def test_declared_builds_the_exchange() -> None:
@@ -64,7 +70,6 @@ def test_declared_builds_the_exchange() -> None:
         auto_delete=True,
     ).declared(declare=True)
 
-    assert exchange is not None
     assert exchange.name == "jobs.ex"
     assert exchange.type == ExchangeType.DIRECT
     assert exchange.durable is False
@@ -75,5 +80,4 @@ def test_declared_builds_the_exchange() -> None:
 def test_declaration_can_be_turned_off() -> None:
     exchange = ExchangeOptions(name="jobs.ex").declared(declare=False)
 
-    assert exchange is not None
     assert exchange.declare is False

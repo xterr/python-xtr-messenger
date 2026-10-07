@@ -130,9 +130,29 @@ class WorkerFactory:
             factory for factory, _ in served if isinstance(factory, WorkerProvidingInterface)
         ]
         if providing:
-            if registered:
-                raise IncompatibleReceiversError(tuple(group), tuple(registered))
-            return providing[0].worker(group, bus, event_dispatcher=self._event_dispatcher)
+            brokered = tuple(
+                name
+                for factory, part in served
+                if isinstance(factory, WorkerProvidingInterface)
+                for name in part
+            )
+            others = (
+                *(
+                    name
+                    for factory, part in served
+                    if not isinstance(factory, WorkerProvidingInterface)
+                    for name in part
+                ),
+                *registered,
+            )
+            if others:
+                raise IncompatibleReceiversError(brokered, others)
+            return providing[0].worker(
+                group,
+                bus,
+                event_dispatcher=self._event_dispatcher,
+                resetter=self._resetter,
+            )
         for factory, part in served:
             found.update(_receivers_of(factory.create(part)))
         found.update(registered)

@@ -23,6 +23,7 @@ from xtr_messenger import (
     UnknownTransportError,
     UnknownTransportOptionError,
     UnsupportedDsnError,
+    UnsupportedStampError,
     exception,
 )
 
@@ -46,6 +47,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     UnknownTransportError,
     UnknownTransportOptionError,
     UnsupportedDsnError,
+    UnsupportedStampError,
 )
 
 
@@ -94,6 +96,14 @@ def test_invalid_dsn_error_carries_the_dsn() -> None:
     assert "has no scheme" in str(error)
 
 
+def test_invalid_dsn_error_hides_credentials_in_its_message() -> None:
+    """The DSN shape this error is actually raised for: credentials, and the
+    missing ``://`` that is why it is raised at all."""
+    error = InvalidDsnError("user:s3cret@host/vh")
+
+    assert "s3cret" not in str(error)
+
+
 def test_invalid_transport_option_error_carries_the_option_value_and_expected() -> None:
     error = InvalidTransportOptionError("prefetch_count", "abc", "an integer")
 
@@ -131,6 +141,14 @@ def test_mixed_dsn_error_carries_the_conflicting_dsns() -> None:
 
     assert error.dsns == ("amqp://a", "amqp://b")
     assert "got 2 DSNs" in str(error)
+
+
+def test_mixed_dsn_error_redacts_the_dsns_it_carries() -> None:
+    """The attribute reaches logs and error reports as easily as the message
+    does, so the credentials are stripped before they are stored."""
+    error = MixedDsnError(("amqp://user:s3cret@a/vh", "amqp://user:s3cret@b/vh"))
+
+    assert error.dsns == ("amqp://a/vh", "amqp://b/vh")
 
 
 def test_no_handler_for_message_error_carries_the_type_and_handled_types() -> None:
@@ -219,6 +237,57 @@ def test_unsupported_dsn_error_carries_the_transport_name_and_dsn() -> None:
     assert error.transport_name == "jobs"
     assert error.dsn == "kafka://host"
     assert "no transport factory for 'jobs'" in str(error)
+
+
+def test_unsupported_dsn_error_hides_credentials_in_its_message() -> None:
+    error = UnsupportedDsnError("jobs", "amqp://user:s3cret@host/vh")
+
+    assert "s3cret" not in str(error)
+
+
+#: The DSN shapes a well-formed authority never catches, each paired with the
+#: fragments of its password; both DSN errors render the DSN into their
+#: message, so none of them may survive in either.
+_LEAKY_DSNS = (
+    ("amqp://user:s3/cret@host/vh", ("s3", "cret")),
+    ("amqp://user:s3?cret@host/vh", ("s3", "cret")),
+    ("amqp://user:s3#cret@host/vh", ("s3", "cret")),
+    ("user:s3/cret@host/vh", ("s3", "cret")),
+    ("user:s3cret@host/vh?next=amqp://x", ("s3", "cret")),
+    ("user:s3cret", ("s3", "cret")),
+    ("rabbit:guest", ("guest",)),
+)
+
+
+@pytest.mark.parametrize(("dsn", "secrets"), _LEAKY_DSNS)
+def test_invalid_dsn_error_hides_credentials_the_authority_path_misses(
+    dsn: str,
+    secrets: tuple[str, ...],
+) -> None:
+    message = str(InvalidDsnError(dsn))
+
+    for secret in secrets:
+        assert secret not in message
+
+
+@pytest.mark.parametrize(("dsn", "secrets"), _LEAKY_DSNS)
+def test_unsupported_dsn_error_hides_credentials_the_authority_path_misses(
+    dsn: str,
+    secrets: tuple[str, ...],
+) -> None:
+    message = str(UnsupportedDsnError("jobs", dsn))
+
+    for secret in secrets:
+        assert secret not in message
+
+
+def test_unsupported_stamp_error_names_the_stamp_and_transport() -> None:
+    error = UnsupportedStampError("DelayStamp", "sync")
+
+    assert error.stamp_name == "DelayStamp"
+    assert error.transport == "sync"
+    assert "sync" in str(error)
+    assert "DelayStamp" in str(error)
 
 
 def test_incompatible_receivers_error_names_both_sides() -> None:

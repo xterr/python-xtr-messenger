@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final
+from uuid import uuid4
 
 import pytest
 from taskiq import InMemoryBroker
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.fakes import RecordingBus
-from tests.support.messages import ingest_document
+from tests.support.messages import AnalyseDocument, ingest_document
 from xtr_messenger import (
     Envelope,
     ErrorDetailsStamp,
@@ -20,7 +21,6 @@ from xtr_messenger import (
     RedeliveryStamp,
 )
 from xtr_messenger.bridge.taskiq.binding import bind_bus
-from xtr_messenger.bridge.taskiq.broker import forget_started
 from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
 from xtr_messenger.event import (
     AbstractWorkerMessageEvent,
@@ -31,9 +31,7 @@ from xtr_messenger.event import (
 from xtr_messenger.message_registry import declared_names
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
-    from taskiq import AsyncTaskiqTask
+    from taskiq import AsyncTaskiqTask, TaskiqMessage
 
 pytestmark = pytest.mark.anyio
 
@@ -42,10 +40,8 @@ _LOST = 1_000_000
 
 
 @pytest.fixture
-def broker() -> Iterator[InMemoryBroker]:
-    made = InMemoryBroker(await_inplace=True)
-    yield made
-    forget_started(made)
+def broker() -> InMemoryBroker:
+    return InMemoryBroker(await_inplace=True)
 
 
 def _body() -> tuple[str, str]:
@@ -157,6 +153,24 @@ async def test_a_malformed_headers_label_fails_loudly(broker: InMemoryBroker) ->
     body, _headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
+    result = await handle.wait_result()
+
+    assert result.is_err
+    assert isinstance(result.error, MessageDecodingFailedError)
+
+
+async def test_a_body_whose_type_does_not_match_the_task_fails_loudly(
+    broker: InMemoryBroker,
+) -> None:
+    """The task is invoked under one name; a body that decodes to a different
+    declared message is a mismatch, refused rather than dispatched as the
+    wrong type."""
+    _ = bind_bus(broker, RecordingBus())
+    other = JsonSerializer().encode(Envelope.wrap(AnalyseDocument(document_id=uuid4())))
+
+    handle = await _kick(
+        broker, _INGEST, other.body, **{RETRIES_LABEL: 0, HEADERS_LABEL: json.dumps(other.headers)}
+    )
     result = await handle.wait_result()
 
     assert result.is_err
@@ -308,3 +322,86 @@ async def test_without_max_attempts_no_failure_claims_a_retry(broker: InMemoryBr
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
 
     assert failures[0].will_retry is False
+
+
+@final
+class CountingResetter:
+    """Counts the resets owed after each message, settled either way."""
+
+    def __init__(self) -> None:
+        self.resets: int = 0
+
+    async def reset(self) -> None:
+        self.resets += 1
+
+
+async def test_services_are_reset_after_a_handled_message(broker: InMemoryBroker) -> None:
+    """The library's own worker resets after each message; a task bound here
+    owes the same, or request-scoped services leak across messages."""
+    resetter = CountingResetter()
+    _ = bind_bus(broker, RecordingBus(), resetter=resetter)
+    body, headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+
+    assert resetter.resets == 1
+
+
+async def test_services_are_reset_after_a_failed_message(broker: InMemoryBroker) -> None:
+    resetter = CountingResetter()
+    _ = bind_bus(broker, RecordingBus(failure=RuntimeError("boom")), resetter=resetter)
+    body, headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+    result = await handle.wait_result()
+
+    assert result.is_err
+    assert resetter.resets == 1
+
+
+async def test_services_are_reset_after_an_undecodable_message(broker: InMemoryBroker) -> None:
+    resetter = CountingResetter()
+    _ = bind_bus(broker, RecordingBus(), resetter=resetter)
+    body, _headers = _body()
+
+    _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
+
+    assert resetter.resets == 1
+
+
+async def test_an_undecodable_message_is_dead_lettered_instead_of_retried(
+    broker: InMemoryBroker,
+) -> None:
+    """Decoding is deterministic: redelivering the same body can never end
+    differently, so with a quarantine given the delivery goes there at once
+    and the task returns normally — acknowledged, never retried."""
+    quarantined: list[tuple[TaskiqMessage, MessageDecodingFailedError]] = []
+
+    async def dead_letter(message: TaskiqMessage, error: MessageDecodingFailedError) -> None:
+        quarantined.append((message, error))
+
+    bus = RecordingBus()
+    _ = bind_bus(broker, bus, dead_letter=dead_letter)
+    body, _headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
+    result = await handle.wait_result()
+
+    assert not result.is_err
+    assert bus.dispatched == []
+    [(message, error)] = quarantined
+    assert message.task_name == _INGEST
+    assert isinstance(error, MessageDecodingFailedError)
+
+
+async def test_without_a_quarantine_an_undecodable_message_still_fails(
+    broker: InMemoryBroker,
+) -> None:
+    _ = bind_bus(broker, RecordingBus())
+    body, _headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
+    result = await handle.wait_result()
+
+    assert result.is_err
+    assert isinstance(result.error, MessageDecodingFailedError)

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from .codec import MessageCodecInterface
     from .codec.message_codec_interface import JsonValue
 
-__all__ = ["TYPE_HEADER", "JsonSerializer"]
+__all__ = ["STAMP_HEADER_PREFIX", "TYPE_HEADER", "JsonSerializer"]
 
 TYPE_HEADER = "type"
 STAMP_HEADER_PREFIX = "X-Message-Stamp-"
