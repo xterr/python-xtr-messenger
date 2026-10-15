@@ -6,9 +6,11 @@
 | `in-memory://` | Records what was dispatched; a worker or a test drains it. `?serialize=true` round-trips every message through the serializer | — |
 | `amqp://…`, `amqps://…` | RabbitMQ, with a retry ladder and dead-lettering | `[amqp]` |
 
-Any other taskiq broker goes through `[taskiq]` — `TaskiqSender` / `TaskiqWorker` under
-`xtr_messenger.bridge.taskiq`. Nothing under `xtr_messenger.transport/` needs an extra;
-anything needing a driver is a bridge.
+Any other taskiq broker goes through the taskiq bridge — `TaskiqSender` / `TaskiqWorker` under
+`xtr_messenger.bridge.taskiq` — which works installed without aio-pika: the application installs
+taskiq and that broker's own package itself (`uv add xtr-messenger taskiq taskiq-redis`), never an
+extra. Nothing under `xtr_messenger.transport/` needs anything optional; anything needing a driver
+is a bridge.
 
 ## Writing settings
 

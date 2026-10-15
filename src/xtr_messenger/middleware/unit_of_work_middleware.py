@@ -1,7 +1,8 @@
 """Every message dispatched through the container's buses is one unit of work.
 
-Needs the ``di`` extra, so the package's ``middleware`` module does not import
-it; the bundle does.
+Its units of work are the container's scopes, so it means nothing without a
+container: the package's ``middleware`` module leaves it out, and the bundle,
+which puts it on every bus, exports it.
 """
 
 from __future__ import annotations

@@ -1,7 +1,8 @@
 """Console commands for a messenger process, on xtr-console.
 
-Install with the ``console`` extra. Importing this package declares
-``messenger:consume`` with ``@as_command``, like any other command module.
+Needs xtr-console installed beside this package. Importing this package
+declares ``messenger:consume`` with ``@as_command``, like any other command
+module.
 
 The :class:`~xtr_messenger.bundle.MessengerBundle` loads this module for its
 kernel when the console bundle is active, so the container builds the command

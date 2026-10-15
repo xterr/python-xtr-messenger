@@ -21,8 +21,8 @@ def _sources(package: str) -> list[pathlib.Path]:
 
 
 def test_the_generic_layer_names_no_broker_driver() -> None:
-    """The moment ``bridge/taskiq`` imports aio_pika, the ``[taskiq]`` extra
-    stops being installable on its own and a second broker cannot reuse it."""
+    """The moment ``bridge/taskiq`` imports aio_pika, the taskiq bridge can no
+    longer be installed without aio-pika and a second broker cannot reuse it."""
     offenders = [p.name for p in _sources("taskiq") if "aio_pika" in p.read_text()]
 
     assert offenders == []

@@ -23,7 +23,9 @@ middleware records what it did by appending a **stamp**. A **routing table** map
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
 - 🪶 **Four core dependencies** — `msgspec`, `typing-extensions`, and two interface-only
-  packages, `xtr-logging-contracts` and `xtr-event-dispatcher-contracts`. A broker is an extra.
+  packages, `xtr-logging-contracts` and `xtr-event-dispatcher-contracts`. No broker is a
+  dependency — RabbitMQ is the `amqp` extra — and neither is the container: the bundle is used
+  when xtr-dependency-injection is installed beside it.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
@@ -39,22 +41,26 @@ Where that goes is configuration. Whether it happens in-process or on RabbitMQ i
 ## Install
 
 ```sh
-uv add xtr-messenger                    # sync:// and in-memory://
-uv add "xtr-messenger[amqp]"            # + RabbitMQ
-uv add "xtr-messenger[taskiq]"          # + any other taskiq broker
-uv add "xtr-messenger[pydantic]"        # + pydantic messages
-uv add "xtr-messenger[di]"              # + a MessengerBundle for xtr-dependency-injection
-uv add "xtr-messenger[console]"         # + the messenger:consume console command
+uv add xtr-messenger                           # sync:// and in-memory://
+uv add "xtr-messenger[amqp]"                   # + RabbitMQ
+uv add xtr-messenger taskiq taskiq-redis       # + any other taskiq broker, here Redis
+uv add "xtr-messenger[pydantic]"               # + pydantic messages
+uv add xtr-messenger xtr-dependency-injection  # + the container, for the MessengerBundle
+uv add xtr-console                             # beside it: the messenger:consume console command
 ```
 
 | Extra | Brings | For |
 | --- | --- | --- |
 | *(none)* | `msgspec`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core |
 | `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
-| `taskiq` | `taskiq` | Publishing and consuming over **any** taskiq broker |
-| `amqp` | `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
-| `di` | `xtr-dependency-injection` | A `MessengerBundle` for [xtr-dependency-injection](../xtr-dependency-injection) |
-| `console` | `xtr-console` | `messenger:consume`, on an [xtr-console](https://github.com/xterr/python-xtr-console) application |
+| `amqp` | `taskiq`, `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
+
+Any other taskiq broker is not an extra: the application installs taskiq and that broker's own
+package itself — `taskiq-redis` above — and the [taskiq bridge](#transports) publishes and
+consumes through it. No xtr package is an extra either. Installed beside it,
+[xtr-dependency-injection](../xtr-dependency-injection) brings the `MessengerBundle` and
+[xtr-console](https://github.com/xterr/python-xtr-console) the `messenger:consume` command; the
+bus and its workers run without either.
 
 Requires Python 3.11+. An application that wants records written somewhere adds `xtr-logging`
 itself.
@@ -299,7 +305,7 @@ receives is dispatched into a bus, and the bus calls the handlers.
 
 ### From the console
 
-With the `console` extra, `messenger:consume` does the same from an
+With xtr-console installed beside it, `messenger:consume` does the same from an
 [xtr-console](https://github.com/xterr/python-xtr-console) application. It needs a
 `WorkerFactory` to build workers with, which a [kernel](#kernel--bundle) supplies: with the
 `MessengerBundle` active the console bundle picks the command up automatically and the
@@ -676,22 +682,24 @@ while a worker drains the queue, and `clear()` resets it between tests.
 | --- | --- | --- | --- |
 | `SyncTransport` | `transport/sync/` | — | Handling in-process; local development |
 | `InMemoryTransport` | `transport/in_memory/` | — | Tests: records what was dispatched, and can be consumed |
-| `TaskiqSender` | `bridge/taskiq/` | `[taskiq]` | Publishing via **any** taskiq broker |
-| `TaskiqWorker` | `bridge/taskiq/` | `[taskiq]` | Consuming via taskiq's own worker |
+| `TaskiqSender` | `bridge/taskiq/` | `taskiq` | Publishing via **any** taskiq broker |
+| `TaskiqWorker` | `bridge/taskiq/` | `taskiq` | Consuming via taskiq's own worker |
 | `create_amqp_broker` | `bridge/amqp/` | `[amqp]` | RabbitMQ, with retries and dead-lettering |
 
 The tree encodes what each piece costs to import:
 
 ```
 transport/          nothing    — sync, in_memory, the contracts
-bridge/taskiq/      [taskiq]   — broker-agnostic: publish, consume, bind a bus
+bridge/taskiq/      taskiq     — broker-agnostic: publish, consume, bind a bus
 bridge/amqp/        [amqp]     — RabbitMQ only: connection, retry ladder, dead-lettering
 ```
 
-Everything under `transport/` imports with no extra installed; a transport needing a driver is
-a bridge, reachable only once its extra is present. Nothing in `bridge/taskiq/` names a broker
-driver either, so `[taskiq]` is usable on its own for Redis, NATS or an in-memory broker. Tests
-enforce all three claims.
+Everything under `transport/` imports with nothing optional installed; a transport needing a
+driver is a bridge, reachable only once that driver is installed — taskiq for the taskiq bridge,
+which the `amqp` extra brings too. Nothing in `bridge/taskiq/` names a broker driver either, so
+the taskiq bridge works installed without aio-pika: beside taskiq, the application adds the
+package of the broker it picks — Redis, NATS — or uses taskiq's in-memory broker. Tests enforce
+all three claims.
 
 ### Writing your own
 
@@ -745,8 +753,11 @@ factory behind it, and the `MessengerBundle` asks the one its own kernel built a
 Everything adding this package to an application on
 [xtr-dependency-injection](../xtr-dependency-injection) takes — and, read backwards, what removing it undoes.
 
-- **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
-  what you use.
+- **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
+  installed beside it, never as an extra. Add `amqp` or `pydantic` for what you use, or install
+  taskiq and its broker's own package beside it for any other taskiq broker. Install xtr-console
+  beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
+  xtr-event-dispatcher to hear the worker events.
 - **Recipe** — `uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and
   *Environment* steps below: it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py`
   and `MESSENGER_DSN` (commented out) in `.env`. It prints the step to name and route your
@@ -773,13 +784,14 @@ Everything adding this package to an application on
 
 ## Kernel / bundle
 
-An application using [xtr-dependency-injection](../xtr-dependency-injection) lists
+An application using [xtr-dependency-injection](../xtr-dependency-injection) — installed beside
+the package, which does not depend on it; only `xtr_messenger.bundle` needs it — lists
 `MessengerBundle` in its `app/bundles.py` and configures it with `@configure`. Handlers ask
 for what they need the way any container-injected service does; import nothing from this
 library's integration:
 
 ```sh
-uv add "xtr-messenger[di]"
+uv add xtr-messenger xtr-dependency-injection
 ```
 
 ```python

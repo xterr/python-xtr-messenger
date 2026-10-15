@@ -21,8 +21,10 @@ DSN. The dispatch site never knows which.
 - Publish: `envelope = await bus.dispatch(message, *stamps)`.
 - Build a bus by hand: `MessageBusFactory(CONFIG).bus()`. Build a worker:
   `WorkerFactory(CONFIG).worker(["high"])`, then `await worker.run()`.
-- In an application: activate `MessengerBundle`, inject `MessageBusInterface`, and take
-  container services in handlers as `Injected[T]`.
+- In an application, with xtr-dependency-injection installed beside the package (it is not a
+  dependency): activate `MessengerBundle`, inject `MessageBusInterface`, and take container
+  services in handlers as `Injected[T]`. Without the container, build the bus and the workers
+  from the factories above; only `xtr_messenger.bundle` needs it.
 - Tests: route to `in-memory://?serialize=true` and inspect `InMemoryTransport.messages`.
 - Read a stamp inside a handler by asking for a second parameter annotated `Envelope`.
 - Transport DSNs and their settings: [references/transports.md](references/transports.md).
@@ -169,7 +171,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-With the `console` extra, `<script> messenger:consume high low` does the same, and
+With xtr-console installed beside it, `<script> messenger:consume high low` does the same, and
 `--time-limit 3600` stops it after an hour. A kernel with the `MessengerBundle` active builds
 the command from the `WorkerFactory` the bundle provides, and the console bundle picks it up
 automatically. Run without a container the command's `WorkerFactory` cannot be filled, so the
@@ -223,8 +225,11 @@ it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py` and `M
 (commented out) in `.env`. It prints the step to name and route your transports, which a recipe
 cannot make for you.
 
-1. **Install** — `uv add "xtr-messenger[di,console]"`; add `amqp`, `taskiq` or `pydantic` for
-   what you use.
+1. **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
+   installed beside it, never as an extra. Add `amqp` or `pydantic` for what you use, or install
+   taskiq and its broker's own package beside it for any other taskiq broker. Install xtr-console
+   beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
+   xtr-event-dispatcher to hear the worker events.
 2. **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported
    from `xtr_messenger.bundle`.
 3. **Brings along** — the logging, console and event dispatcher bundles, when those packages are

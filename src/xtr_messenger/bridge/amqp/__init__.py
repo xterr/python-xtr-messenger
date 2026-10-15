@@ -1,6 +1,6 @@
 """The RabbitMQ bridge, built on the taskiq one.
 
-Installed with the ``amqp`` extra, which brings the ``taskiq`` extra with it.
+Installed with the ``amqp`` extra, which brings taskiq and taskiq-aio-pika.
 This package holds only what is genuinely RabbitMQ: the connection and its
 queues, the retry ladder, and real dead-lettering. Publishing and consuming
 themselves are broker-agnostic and live in

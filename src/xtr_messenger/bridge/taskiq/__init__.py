@@ -1,8 +1,9 @@
 """The taskiq bridge — broker-agnostic.
 
-Installed with the ``taskiq`` extra. Nothing here names a broker: these
-pieces work with any taskiq broker, so wiring a second one costs a factory
-and no changes to this package.
+Needs taskiq, which the ``amqp`` extra brings; for any other broker the
+application installs taskiq and that broker's own package itself. Nothing
+here names a broker: these pieces work with any taskiq broker, so wiring a
+second one costs a factory and no changes to this package.
 
 * :class:`~xtr_messenger.bridge.taskiq.taskiq_sender.TaskiqSender` publishes an
   envelope as a taskiq task, addressed by the message's own name.

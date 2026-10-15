@@ -1,7 +1,8 @@
 """Transports shipped with the library.
 
-These two need no third-party dependency. The taskiq adapter lives in
-:mod:`xtr_messenger.bridge.amqp` and is installed with the ``taskiq`` extra.
+These two need no third-party dependency. Those that do live under
+:mod:`xtr_messenger.bridge`: the taskiq bridge, on taskiq, and RabbitMQ on
+top of it, with the ``amqp`` extra.
 """
 
 from __future__ import annotations
