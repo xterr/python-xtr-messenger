@@ -1,6 +1,6 @@
 """The xtr-messenger bundle: a bus and worker factory from a kernel.
 
-An application listing :class:`MessengerBundle` in its ``bundles.py`` gets a
+An application listing :class:`MessengerBundle` in its ``config/bundles.py`` gets a
 :class:`MessageBusInterface`, a :class:`WorkerFactory`, and every handler its
 scan finds already wired to the container. When the console bundle is
 active, ``messenger:consume`` is registered too; when the logging bundle is,

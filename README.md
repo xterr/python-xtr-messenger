@@ -759,25 +759,26 @@ Everything adding this package to an application on
   beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
   xtr-event-dispatcher to hear the worker events.
 - **Recipe** — `uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and
-  *Environment* steps below: it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py`
-  and `MESSENGER_DSN` (commented out) in `.env`. It prints the step to name and route your
-  transports, which a recipe cannot make for you.
-- **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported
+  *Environment* steps below: it lists `MessengerBundle`, writes a starting `<app>/config/packages/messenger.py`
+  and `MESSENGER_DSN=amqp://guest:guest@127.0.0.1:5672/?queue=messages` in `.env`, a RabbitMQ on
+  this machine for the `amqp` extra. It prints the step to name and route your transports, which
+  a recipe cannot make for you.
+- **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/config/bundles.py`, imported
   from `xtr_messenger.bundle`.
 - **Brings along** — the logging, console and event dispatcher bundles, when those packages
   are installed.
 - **Configure** — needed to move a message: with no configuration there are no transports, and
   a message routed nowhere is neither sent nor handled. Transports and routing go in
-  `<app>/config/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
+  `<app>/config/packages/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
   [Kernel / bundle](#kernel--bundle). An `amqp://` transport expects the RabbitMQ
   `rabbitmq_delayed_message_exchange` plugin on the broker — delays and retry backoff ride it —
   unless `delayed_message_exchange_plugin=false` turns it off, which also turns a delayed send
   into an `UnsupportedStampError`.
-- **Environment** — nothing required; a broker DSN is usually `env("MESSENGER_DSN")`, read
-  only when the bus is built.
+- **Environment** — `MESSENGER_DSN`, the broker the written configuration's `jobs` transport
+  reads with `env("MESSENGER_DSN")`, only when the bus is built.
 - **Ignore** — nothing.
 - **Run** — a worker is `<script> messenger:consume <transport>`.
-- **Remove** — drop the `BUNDLES` entry, delete `<app>/config/messenger.py`, then
+- **Remove** — drop the `BUNDLES` entry, delete `<app>/config/packages/messenger.py`, then
   `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 - **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
   messenger` shows the resolved transports and routing.
@@ -786,7 +787,7 @@ Everything adding this package to an application on
 
 An application using [xtr-dependency-injection](../xtr-dependency-injection) — installed beside
 the package, which does not depend on it; only `xtr_messenger.bundle` needs it — lists
-`MessengerBundle` in its `app/bundles.py` and configures it with `@configure`. Handlers ask
+`MessengerBundle` in its `app/config/bundles.py` and configures it with `@configure`. Handlers ask
 for what they need the way any container-injected service does; import nothing from this
 library's integration:
 
@@ -795,14 +796,14 @@ uv add xtr-messenger xtr-dependency-injection
 ```
 
 ```python
-# app/bundles.py
+# app/config/bundles.py
 from xtr_messenger.bundle import MessengerBundle
 
 BUNDLES = {MessengerBundle: {"all": True}}
 ```
 
 ```python
-# app/config/messenger.py
+# app/config/packages/messenger.py
 from xtr_dependency_injection import configure
 
 from xtr_messenger import MessageBusConfig, TransportConfig

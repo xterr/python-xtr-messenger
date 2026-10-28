@@ -8,19 +8,21 @@
 [files]
 # Destination under the application package = template under this recipe.
 # Needed to move a message: with no configuration there are no transports.
-"config/messenger.py" = "files/config/messenger.py.tmpl"
+"config/packages/messenger.py" = "files/config/messenger.py.tmpl"
 
 [env]
-# The broker DSN the written configuration reads. No default to offer, so it
-# is written commented out and stays unset until a broker is chosen.
-MESSENGER_DSN = ""
+# The broker DSN the written configuration reads: a RabbitMQ on this machine
+# with its stock account, for the amqp extra. Read when the bus is built, not
+# when the application boots; change it, or put the real one in .env.local.
+MESSENGER_DSN = "amqp://guest:guest@127.0.0.1:5672/?queue=messages"
 
 [gitignore]
 lines = []
 
 [notes]
 steps = [
-  "Name the transports in config/messenger.py and route your messages to them: a message routed nowhere is neither sent nor handled.",
+  "Name the transports in config/packages/messenger.py and route your messages to them: a message routed nowhere is neither sent nor handled.",
+  "MESSENGER_DSN points at a RabbitMQ on this machine, which the amqp extra reaches (uv add \"xtr-messenger[amqp]\"). The broker needs the rabbitmq_delayed_message_exchange plugin for delays and retry backoff, or add delayed_message_exchange_plugin=false to the DSN.",
 ]
 check = [
   "<script> debug:bundles — messenger is listed and active",

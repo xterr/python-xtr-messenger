@@ -221,23 +221,24 @@ what is undrained, and `clear()` resets between tests.
 ## Use in an application
 
 `uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and *Environment* steps below:
-it lists `MessengerBundle`, writes a starting `<app>/config/messenger.py` and `MESSENGER_DSN`
-(commented out) in `.env`. It prints the step to name and route your transports, which a recipe
-cannot make for you.
+it lists `MessengerBundle`, writes a starting `<app>/config/packages/messenger.py` and
+`MESSENGER_DSN=amqp://guest:guest@127.0.0.1:5672/?queue=messages` in `.env`, a local RabbitMQ for
+the `amqp` extra. It prints the step to name and route your transports, which a recipe cannot
+make for you.
 
 1. **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
    installed beside it, never as an extra. Add `amqp` or `pydantic` for what you use, or install
    taskiq and its broker's own package beside it for any other taskiq broker. Install xtr-console
    beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
    xtr-event-dispatcher to hear the worker events.
-2. **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/bundles.py`, imported
+2. **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/config/bundles.py`, imported
    from `xtr_messenger.bundle`.
 3. **Brings along** — the logging, console and event dispatcher bundles, when those packages are
    installed. Each is optional.
 4. **Configure** — required to move anything: with no configuration there are no transports.
 
    ```python
-   # <app>/config/messenger.py
+   # <app>/config/packages/messenger.py
    from xtr_dependency_injection import configure
 
    from xtr_messenger import MessageBusConfig, TransportConfig
@@ -253,8 +254,8 @@ cannot make for you.
        )
    ```
 
-5. **Environment** — nothing required; a broker DSN is usually `env("MESSENGER_DSN")`, read only
-   when the bus is built.
+5. **Environment** — `MESSENGER_DSN`, the broker the written `jobs` transport reads with
+   `env("MESSENGER_DSN")`, only when the bus is built.
 6. **Ignore** — nothing.
 7. **Use** — inject `MessageBusInterface` to publish. In a handler, container services arrive
    only through a marker: `Injected[T]`, `Annotated[T, Target("name")]` or
@@ -270,7 +271,7 @@ cannot make for you.
 8. **Run** — a worker is `<script> messenger:consume <transport>`.
 9. **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
    messenger` shows the resolved transports and routing.
-10. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/messenger.py`, then
+10. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/packages/messenger.py`, then
    `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 
 The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a per-kernel `HandlersLocator`
