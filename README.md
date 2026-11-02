@@ -45,6 +45,7 @@ Where that goes is configuration. Whether it happens in-process or on RabbitMQ i
 ```sh
 uv add xtr-messenger                           # sync:// and in-memory://
 uv add "xtr-messenger[amqp]"                   # + RabbitMQ
+uv add "xtr-messenger[orm]"                    # + a table on an xtr-orm database
 uv add xtr-messenger taskiq taskiq-redis       # + any other taskiq broker, here Redis
 uv add xtr-messenger xtr-dependency-injection  # + the container, for the MessengerBundle
 uv add xtr-console                             # beside it: the messenger:consume console command
@@ -54,10 +55,12 @@ uv add xtr-console                             # beside it: the messenger:consum
 | --- | --- | --- |
 | *(none)* | `xtr-serializer`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core, dataclass and pydantic messages |
 | `amqp` | `taskiq`, `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
+| `orm` | [xtr-orm-messenger](../xtr-orm-messenger) | `orm://`: messages in a table on an [xtr-orm](../xtr-orm) connection |
 
 Any other taskiq broker is not an extra: the application installs taskiq and that broker's own
 package itself — `taskiq-redis` above — and the [taskiq bridge](#transports) publishes and
-consumes through it. No xtr package is an extra either. Installed beside it,
+consumes through it. The one xtr package that is an extra is the transport behind `orm`, a
+transport like `amqp`'s: no other is. Installed beside it,
 [xtr-dependency-injection](../xtr-dependency-injection) brings the `MessengerBundle` and
 [xtr-console](https://github.com/xterr/python-xtr-console) the `messenger:consume` command; the
 bus and its workers run without either.
@@ -208,6 +211,7 @@ one connection.
 | `sync://` | Handles in the calling process, during the dispatch |
 | `in-memory://` | Records what was dispatched, for a worker or a test to drain; `?serialize=true` round-trips it |
 | `amqp://…`, `amqps://…` | RabbitMQ via taskiq |
+| `orm://<connection>` | A table on an xtr-orm connection — the `orm` extra, registered by the orm bundle |
 
 A transport other than `sync://` writes its messages, so it is built with the envelope
 serializer — `JsonSerializer`, see [Carrying messages exactly](#carrying-messages-exactly). The
