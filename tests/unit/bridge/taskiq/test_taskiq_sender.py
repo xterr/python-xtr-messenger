@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import msgspec
+import json
+
 import pytest
 from taskiq import InMemoryBroker
 
 from tests.support.messages import ingest_document
+from tests.support.serialization import json_serializer
 from tests.support.taskiq import RecordingMiddleware
-from xtr_messenger import DelayStamp, Envelope, JsonSerializer, TransportMessageIdStamp
+from xtr_messenger import DelayStamp, Envelope, TransportMessageIdStamp
 from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
 from xtr_messenger.bridge.taskiq.started_brokers import StartedBrokers
 from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
@@ -55,10 +57,10 @@ async def test_the_task_name_is_the_message_name(
     that name is the one a publish reaches."""
     bodies: list[str] = []
     _sink(broker, bodies)
-    wire = JsonSerializer()
+    wire = json_serializer()
     message = ingest_document()
 
-    _ = await TaskiqSender(broker, publishers, serializer=wire).send(Envelope.wrap(message))
+    _ = await TaskiqSender(broker, publishers, wire).send(Envelope.wrap(message))
 
     assert bodies == [wire.encode(Envelope.wrap(message)).body]
 
@@ -70,7 +72,9 @@ async def test_every_publish_marks_the_first_delivery(
     _sink(broker, [])
     labels = _captured(broker)
 
-    _ = await TaskiqSender(broker, publishers).send(Envelope.wrap(ingest_document()))
+    _ = await TaskiqSender(broker, publishers, json_serializer()).send(
+        Envelope.wrap(ingest_document())
+    )
 
     assert int(str(labels[0][RETRIES_LABEL])) == 0
 
@@ -81,11 +85,13 @@ async def test_the_headers_label_carries_the_encoded_headers(
     _sink(broker, [])
     labels = _captured(broker)
 
-    _ = await TaskiqSender(broker, publishers).send(Envelope.wrap(ingest_document()))
+    _ = await TaskiqSender(broker, publishers, json_serializer()).send(
+        Envelope.wrap(ingest_document())
+    )
 
     raw = labels[0][HEADERS_LABEL]
     assert isinstance(raw, str)
-    assert msgspec.json.decode(raw, type=dict[str, str])["type"] == _INGEST
+    assert json.loads(raw)["type"] == _INGEST
 
 
 async def test_a_pinned_queue_travels_as_a_label(
@@ -94,7 +100,7 @@ async def test_a_pinned_queue_travels_as_a_label(
     _sink(broker, [])
     labels = _captured(broker)
 
-    sender = TaskiqSender(broker, publishers, queue="jobs_high")
+    sender = TaskiqSender(broker, publishers, json_serializer(), queue="jobs_high")
 
     _ = await sender.send(Envelope.wrap(ingest_document()))
 
@@ -107,7 +113,9 @@ async def test_no_queue_label_when_none_is_pinned(
     _sink(broker, [])
     labels = _captured(broker)
 
-    _ = await TaskiqSender(broker, publishers).send(Envelope.wrap(ingest_document()))
+    _ = await TaskiqSender(broker, publishers, json_serializer()).send(
+        Envelope.wrap(ingest_document())
+    )
 
     assert QUEUE_LABEL not in labels[0]
 
@@ -119,7 +127,7 @@ async def test_a_delay_stamp_becomes_a_delay_in_seconds(
     labels = _captured(broker)
     envelope = Envelope.wrap(ingest_document()).with_stamps(DelayStamp(5000))
 
-    _ = await TaskiqSender(broker, publishers).send(envelope)
+    _ = await TaskiqSender(broker, publishers, json_serializer()).send(envelope)
 
     assert float(str(labels[0]["delay"])) == 5.0
 
@@ -129,7 +137,9 @@ async def test_send_reports_the_transport_message_id(
 ) -> None:
     _sink(broker, [])
 
-    result = await TaskiqSender(broker, publishers).send(Envelope.wrap(ingest_document()))
+    result = await TaskiqSender(broker, publishers, json_serializer()).send(
+        Envelope.wrap(ingest_document())
+    )
 
     stamp = result.last(TransportMessageIdStamp)
     assert stamp is not None
@@ -139,22 +149,19 @@ async def test_send_reports_the_transport_message_id(
 def test_it_exposes_its_broker_queue_and_serializer(
     broker: InMemoryBroker, publishers: StartedBrokers
 ) -> None:
-    wire = JsonSerializer()
+    wire = json_serializer()
 
-    sender = TaskiqSender(broker, publishers, serializer=wire, queue="jobs")
+    sender = TaskiqSender(broker, publishers, wire, queue="jobs")
 
     assert sender.broker is broker
     assert sender.queue == "jobs"
     assert sender.serializer is wire
 
 
-def test_it_defaults_to_no_queue_and_a_json_serializer(
-    broker: InMemoryBroker, publishers: StartedBrokers
-) -> None:
-    sender = TaskiqSender(broker, publishers)
+def test_it_defaults_to_no_queue(broker: InMemoryBroker, publishers: StartedBrokers) -> None:
+    sender = TaskiqSender(broker, publishers, json_serializer())
 
     assert sender.queue is None
-    assert isinstance(sender.serializer, JsonSerializer)
 
 
 async def test_a_delay_is_refused_when_the_broker_cannot_hold_a_message_back(
@@ -166,7 +173,9 @@ async def test_a_delay_is_refused_when_the_broker_cannot_hold_a_message_back(
     envelope = Envelope.wrap(ingest_document()).with_stamps(DelayStamp(5000))
 
     with pytest.raises(UnsupportedStampError, match="DelayStamp"):
-        _ = await TaskiqSender(broker, publishers, supports_delay=False).send(envelope)
+        _ = await TaskiqSender(broker, publishers, json_serializer(), supports_delay=False).send(
+            envelope
+        )
 
 
 async def test_an_undelayed_message_is_sent_even_without_delay_support(
@@ -175,7 +184,7 @@ async def test_an_undelayed_message_is_sent_even_without_delay_support(
     bodies: list[str] = []
     _sink(broker, bodies)
 
-    _ = await TaskiqSender(broker, publishers, supports_delay=False).send(
+    _ = await TaskiqSender(broker, publishers, json_serializer(), supports_delay=False).send(
         Envelope.wrap(ingest_document())
     )
 

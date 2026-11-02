@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Annotated, Final, cast, final
 
+import xtr_serializer
 from xtr_dependency_injection import (
     ScopeFactoryInterface,
     ServiceLocator,
@@ -29,6 +30,7 @@ from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.named import MiddlewareBuilder
 from xtr_messenger.middleware.unit_of_work_middleware import UnitOfWorkMiddleware
 from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
+from xtr_messenger.transport.serialization import JsonSerializer, SerializerInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 from xtr_messenger.worker import AsyncResetter
@@ -42,6 +44,7 @@ __all__ = [
     "BuiltTransports",
     "combined_transport_factory",
     "combined_transport_factory_with",
+    "envelope_serializer",
     "logging_middleware_for_messenger",
     "message_bus",
     "named_middleware",
@@ -75,20 +78,30 @@ class BuiltTransports:
         self.factory: TransportFactory | None = None
 
 
-def combined_transport_factory(built: BuiltTransports) -> TransportFactory:
+def envelope_serializer(serializer: xtr_serializer.SerializerInterface) -> SerializerInterface:
+    """Build the envelope serializer, writing bodies and stamps through the serializer bundle's."""
+    return JsonSerializer(serializer)
+
+
+def combined_transport_factory(
+    built: BuiltTransports, serializer: SerializerInterface
+) -> TransportFactory:
     """Build one TransportFactory discovering adapters by DSN scheme, on demand.
 
     Discovery mode on purpose: only the adapter a configured scheme needs is
     imported, when something first asks for it, so an application that only
-    speaks ``sync://`` never pays to import a broker library.
+    speaks ``sync://`` never pays to import a broker library. Each adapter
+    that writes messages is handed ``serializer``.
     """
-    factory = TransportFactory()
+    factory = TransportFactory(serializer=serializer)
     built.factory = factory
     return factory
 
 
 def combined_transport_factory_with(
-    registered: Sequence[TransportFactoryInterface], built: BuiltTransports
+    registered: Sequence[TransportFactoryInterface],
+    built: BuiltTransports,
+    serializer: SerializerInterface,
 ) -> TransportFactory:
     """Build one TransportFactory, ``registered`` factories ahead of discovery.
 
@@ -101,7 +114,7 @@ def combined_transport_factory_with(
     ``Sequence[TransportFactoryInterface]``; with none registered the
     discovery-only :func:`combined_transport_factory` is used instead.
     """
-    factory = TransportFactory([*registered, TransportFactory()])
+    factory = TransportFactory([*registered, TransportFactory(serializer=serializer)])
     built.factory = factory
     return factory
 

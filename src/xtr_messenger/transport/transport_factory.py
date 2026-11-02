@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from xtr_messenger.dsn import Dsn
     from xtr_messenger.transport.sender import SenderInterface
+    from xtr_messenger.transport.serialization import SerializerInterface
 
     from .transport_config import TransportConfig
 
@@ -32,25 +33,41 @@ class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
     lets a bus be handed one collaborator rather than a list plus the rules
     for choosing from it.
 
-        Built with no arguments it **discovers** adapters by DSN scheme, loading
-        only the one a scheme needs — an application speaking ``sync://`` never
-        imports a broker library. Given a list it uses exactly those, in order,
-        which is how you supply an adapter that needs a collaborator discovery
-        cannot provide::
+    Built with no list it **discovers** adapters by DSN scheme, loading only
+    the one a scheme needs — an application speaking ``sync://`` never imports
+    a broker library. A discovered adapter that writes messages is handed
+    ``serializer``; one that cannot work without it is refused when its scheme
+    is first asked for, so an application that never writes a message needs
+    none. Given a list it uses exactly those, in order, which is how you supply
+    an adapter that needs a collaborator discovery cannot provide::
 
-            TransportFactory([AmqpTransportFactory(serializer=mine)])
+        from xtr_messenger.bridge.amqp import AmqpTransportFactory
+        from xtr_messenger.bridge.amqp.amqp_options import AmqpOptions
+
+        TransportFactory([AmqpTransportFactory(mine, options=AmqpOptions(...))])
     """
 
-    __slots__ = ("_discovered", "_factories")
+    __slots__ = ("_discovered", "_factories", "_serializer")
 
-    def __init__(self, factories: Sequence[TransportFactoryInterface] | None = None) -> None:
-        """Delegate to ``factories`` in order, or to discovery when omitted."""
+    def __init__(
+        self,
+        factories: Sequence[TransportFactoryInterface] | None = None,
+        *,
+        serializer: SerializerInterface | None = None,
+    ) -> None:
+        """Delegate to ``factories`` in order, or to discovery handing over ``serializer``."""
         self._factories = None if factories is None else tuple(factories)
+        self._serializer = serializer
         self._discovered: dict[str, TransportFactoryInterface] = {}
 
     @override
     def supports(self, dsn: Dsn) -> bool:
-        """Report whether any factory behind this one recognises ``dsn``."""
+        """Report whether any factory behind this one recognises ``dsn``.
+
+        Raises:
+            MissingSerializerError: If the factory discovered for ``dsn``
+                needs the serializer this one was built without.
+        """
         if self._factories is None:
             return self._discover(dsn) is not None
         return any(factory.supports(dsn) for factory in self._factories)
@@ -61,6 +78,8 @@ class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
 
         Raises:
             UnsupportedDsnError: If nothing recognises the scheme.
+            MissingSerializerError: If the factory discovered for the scheme
+                needs the serializer this one was built without.
         """
         return self.serving(group).create(group)
 
@@ -99,7 +118,7 @@ class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
         """
         known = self._discovered.get(dsn.scheme)
         if known is None:
-            known = factory_for(dsn)
+            known = factory_for(dsn, self._serializer)
             if known is not None:
                 self._discovered[dsn.scheme] = known
         return known
@@ -112,6 +131,8 @@ class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
 
         Raises:
             UnsupportedDsnError: If nothing recognises the scheme.
+            MissingSerializerError: If the factory discovered for the scheme
+                needs the serializer this one was built without.
         """
         name = next(iter(group))
         dsn = group[name].parsed

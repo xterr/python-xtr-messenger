@@ -14,6 +14,7 @@ import pytest
 from taskiq import InMemoryBroker, SmartRetryMiddleware
 
 from tests.support.messages import IngestDocument, ingest_document
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     Envelope,
     HandleMessageMiddleware,
@@ -52,11 +53,13 @@ def _bind(
     serializer: JsonSerializer | None = None,
 ) -> tuple[str, ...]:
     """Bind ``broker`` to a bus handling from ``registry``, as a worker does."""
-    return bind_bus(broker, MessageBus([HandleMessageMiddleware(registry)]), serializer)
+    wire = serializer if serializer is not None else json_serializer()
+    return bind_bus(broker, MessageBus([HandleMessageMiddleware(registry)]), wire)
 
 
 def _publisher(broker: InMemoryBroker, serializer: JsonSerializer | None = None) -> MessageBus:
-    sender = TaskiqSender(broker, StartedBrokers(), serializer=serializer)
+    wire = serializer if serializer is not None else json_serializer()
+    sender = TaskiqSender(broker, StartedBrokers(), wire)
     routing = SendersLocator({IngestDocument: "q"}, {"q": sender})
     return MessageBus([SendMessageMiddleware(routing)])
 
@@ -155,7 +158,7 @@ async def test_stamps_survive_the_trip_to_the_handler(
     registry: HandlersLocator,
 ) -> None:
     seen: list[Envelope] = []
-    serializer = JsonSerializer(stamp_types=[TransportMessageIdStamp])
+    serializer = json_serializer(stamp_types=[TransportMessageIdStamp])
 
     @as_message_handler(IngestDocument, registry)
     async def ingest(message: IngestDocument, envelope: Envelope) -> None:

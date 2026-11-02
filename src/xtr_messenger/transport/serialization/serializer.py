@@ -11,10 +11,11 @@ wrongly shaped object arriving deep inside a handler.
 
 from __future__ import annotations
 
+from types import GenericAlias
 from typing import TYPE_CHECKING, cast, final
 
-import msgspec
 from typing_extensions import override
+from xtr_serializer import SerializerError
 
 from xtr_messenger.envelope import Envelope
 from xtr_messenger.exception import (
@@ -29,53 +30,57 @@ from xtr_messenger.stamp import (
 )
 from xtr_messenger.stamp_registry import stamp_type_for
 
-from .codec import default_codecs
 from .encoded_envelope import EncodedEnvelope
 from .serializer_interface import SerializerInterface
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable, Mapping
 
-    from .codec import MessageCodecInterface
-    from .codec.message_codec_interface import JsonValue
+    import xtr_serializer
 
 __all__ = ["STAMP_HEADER_PREFIX", "TYPE_HEADER", "JsonSerializer"]
 
 TYPE_HEADER = "type"
 STAMP_HEADER_PREFIX = "X-Message-Stamp-"
 
-_NO_CODEC = "no codec handles this message type; pass one to JsonSerializer(codecs=...)"
+_FORMAT = "json"
 
 
 @final
 class JsonSerializer(SerializerInterface):
-    """Encodes messages and their stamps as JSON.
+    """Encodes messages and their stamps as JSON, exactly.
 
-    Messages are converted by the first codec that recognises their type.
-    By default that is
-    :func:`~xtr_messenger.transport.serialization.codec.default_codecs`, which
-    handles dataclasses, plus pydantic models when pydantic is installed.
-    Pass ``codecs`` to take control of the order or to add your own.
+    The body is written by ``serializer`` as the message's own class, and read
+    back as the class its ``type`` header names, so it arrives as it left:
+    nested dataclasses and models, decimals, enums, a ``ZonedDateTime``, a
+    subclass in a field typed with its base when the base declares a
+    hierarchy. A message that could not make the trip exactly is refused when
+    it is encoded. Every stamp is written the same way, so an application's
+    stamp keeps its values too.
 
-    Decoding is an allow-list: a stamp header names a class this process
-    must import, so an unrecognised one is dropped rather than resolved.
-    The list defaults to the stamps the library ships plus every stamp
-    declared with :func:`~xtr_messenger.decorator.as_stamp` — declare a
-    custom stamp, or pass ``stamp_types``, for it to survive the trip.
+    Decoding is an allow-list: the ``type`` header resolves only to a declared
+    message, and a stamp header names a class this process must import, so an
+    unrecognised one is dropped rather than resolved. The stamp list defaults
+    to the stamps the library ships plus every stamp declared with
+    :func:`~xtr_messenger.decorator.as_stamp` — declare a custom stamp, or pass
+    ``stamp_types``, for it to survive the trip.
+
+    What arrives is untrusted, so a decoding error says what did not fit and
+    where, never what the data held.
 
     Stamps inheriting
     :class:`~xtr_messenger.stamp.NonSendableStampInterface` never leave the
     process, so they are never written and never restored.
     """
 
-    __slots__ = ("_codecs", "_stamp_types")
+    __slots__ = ("_serializer", "_stamp_types")
 
     def __init__(
         self,
+        serializer: xtr_serializer.SerializerInterface,
         stamp_types: Iterable[type[StampInterface]] | None = None,
-        codecs: Sequence[MessageCodecInterface] = (),
     ) -> None:
-        """Restore ``stamp_types`` on decode; convert messages via ``codecs``.
+        """Write bodies and stamps with ``serializer``; restore ``stamp_types`` on decode.
 
         Omitting ``stamp_types`` restores the stamps the library ships and
         every stamp declared with :func:`~xtr_messenger.decorator.as_stamp`
@@ -83,57 +88,63 @@ class JsonSerializer(SerializerInterface):
         explicit iterable to restore exactly those, or ``()`` to restore none
         at all.
         """
+        self._serializer = serializer
         self._stamp_types: dict[str, type[StampInterface]] | None = (
             None if stamp_types is None else {t.__name__: t for t in stamp_types}
         )
-        self._codecs: tuple[MessageCodecInterface, ...] = tuple(codecs) or default_codecs()
 
     @override
     def encode(self, envelope: Envelope) -> EncodedEnvelope:
         """Render ``envelope`` as a JSON body plus type and stamp headers.
 
         Raises:
-            MessageEncodingFailedError: If no codec handles the message type,
-                or the codec cannot encode it.
+            MessageEncodingFailedError: If the message or a stamp holds a
+                value that would not read back exactly.
         """
         message_type = type(envelope.message)
         name = name_of(message_type)
-        codec = self._codec_for(message_type)
-        if codec is None:
-            raise MessageEncodingFailedError(_NO_CODEC, name)
-        body = codec.encode(envelope.message)
-        headers = {TYPE_HEADER: name}
-        headers.update(_encode_stamps(envelope.without_stamps(NonSendableStampInterface).stamps))
-        return EncodedEnvelope(body=_dump(body), headers=headers)
+        try:
+            body = self._serializer.serialize(envelope.message, _FORMAT, type_=message_type)
+            headers = {TYPE_HEADER: name}
+            headers.update(self._encode_stamps(envelope.without_stamps(NonSendableStampInterface)))
+        except SerializerError as error:
+            raise MessageEncodingFailedError(str(error), name) from error
+        return EncodedEnvelope(body=body, headers=headers)
 
     @override
     def decode(self, encoded: EncodedEnvelope) -> Envelope:
         """Rebuild the typed message and its stamps.
 
         Raises:
-            MessageDecodingFailedError: If the body, the type header, or a
-                field does not match the registered message type.
+            MessageDecodingFailedError: If the type header is missing or names
+                no declared message, or the body or a stamp header does not
+                fit its class.
         """
         name = encoded.headers.get(TYPE_HEADER)
         if not name:
             raise MessageDecodingFailedError(f"missing {TYPE_HEADER!r} header")
+        message_type = _declared(name)
+        if message_type is None:
+            # Raised outside the lookup's handler: its error repeats the name, which is wire data.
+            raise MessageDecodingFailedError(
+                f"the {TYPE_HEADER!r} header names no declared message"
+            )
         try:
-            message_type = type_for_name(name)
-        except UnknownMessageNameError as exc:
-            raise MessageDecodingFailedError(str(exc), message_name=name) from exc
-        codec = self._codec_for(message_type)
-        if codec is None:
-            raise MessageDecodingFailedError(_NO_CODEC, name)
-        message = codec.decode(message_type, _load(encoded.body, name))
+            message = self._serializer.deserialize(encoded.body, message_type, _FORMAT)
+        except SerializerError as error:
+            raise MessageDecodingFailedError(str(error), name) from error
         return Envelope(message, self._decode_stamps(encoded.headers, name))
 
-    def _stamp_type_for(self, name: str) -> type[StampInterface] | None:
-        if self._stamp_types is None:
-            return stamp_type_for(name)
-        return self._stamp_types.get(name)
-
-    def _codec_for(self, message_type: type) -> MessageCodecInterface | None:
-        return next((codec for codec in self._codecs if codec.supports(message_type)), None)
+    def _encode_stamps(self, envelope: Envelope) -> dict[str, str]:
+        grouped: dict[str, list[StampInterface]] = {}
+        for stamp in envelope.stamps:
+            grouped.setdefault(type(stamp).__name__, []).append(stamp)
+        return {
+            f"{STAMP_HEADER_PREFIX}{stamp_name}": self._serializer.serialize(
+                stamps, _FORMAT, type_=_list_of(type(stamps[0]))
+            )
+            for stamp_name, stamps in grouped.items()
+        }
 
     def _decode_stamps(self, headers: Mapping[str, str], name: str) -> tuple[StampInterface, ...]:
         stamps: list[StampInterface] = []
@@ -143,60 +154,32 @@ class JsonSerializer(SerializerInterface):
             stamp_type = self._stamp_type_for(header[len(STAMP_HEADER_PREFIX) :])
             if stamp_type is None:
                 continue
-            stamps.extend(_decode_stamp_list(stamp_type, value, name))
+            try:
+                decoded = self._serializer.deserialize(value, _list_of(stamp_type), _FORMAT)
+            except SerializerError as error:
+                reason = f"{stamp_type.__name__} header: {error}"
+                raise MessageDecodingFailedError(reason, name) from error
+            # Read as exactly that list type: the serializer refuses anything else.
+            stamps.extend(cast("list[StampInterface]", decoded))
         return tuple(stamps)
 
-
-def _encode_stamps(stamps: tuple[StampInterface, ...]) -> dict[str, str]:
-    grouped: dict[str, list[object]] = {}
-    for stamp in stamps:
-        grouped.setdefault(type(stamp).__name__, []).append(
-            cast("object", msgspec.to_builtins(stamp))
-        )
-    return {f"{STAMP_HEADER_PREFIX}{name}": _dump(items) for name, items in grouped.items()}
+    def _stamp_type_for(self, name: str) -> type[StampInterface] | None:
+        if self._stamp_types is None:
+            return stamp_type_for(name)
+        return self._stamp_types.get(name)
 
 
-def _decode_stamp_list(
-    stamp_type: type[StampInterface], value: str, name: str
-) -> list[StampInterface]:
-    raw_list = _load(value, name)
-    if not isinstance(raw_list, list):
-        raise MessageDecodingFailedError("stamp header must hold a JSON list", name)
-    decoded: list[StampInterface] = []
-    for raw in raw_list:
-        stamp = _convert(stamp_type, raw, name)
-        if not isinstance(stamp, StampInterface):
-            raise MessageDecodingFailedError(
-                f"{stamp_type.__name__} did not decode to a stamp", name
-            )
-        decoded.append(stamp)
-    return decoded
+def _list_of(stamp_type: type[StampInterface]) -> GenericAlias:
+    """Return ``list[stamp_type]``, the type a stamp header is declared with.
 
-
-def _dump(value: object) -> str:
-    """Render ``value`` as a JSON string."""
-    return msgspec.json.encode(value).decode()
-
-
-def _load(body: str, message_name: str | None = None) -> JsonValue:
-    """Parse ``body`` into a JSON-native structure.
-
-    Raises:
-        MessageDecodingFailedError: If ``body`` is not valid JSON.
+    Built as a value: the stamp class is only known at runtime.
     """
+    return GenericAlias(list, (stamp_type,))
+
+
+def _declared(name: str) -> type[object] | None:
+    """Return the message declared under ``name``, or ``None`` when there is none."""
     try:
-        return cast("JsonValue", msgspec.json.decode(body))
-    except msgspec.DecodeError as exc:
-        raise MessageDecodingFailedError(f"not valid JSON: {exc}", message_name) from exc
-
-
-def _convert(stamp_type: type[StampInterface], raw: JsonValue, name: str) -> object:
-    """Rebuild one stamp, reporting a malformed one against its message.
-
-    Raises:
-        MessageDecodingFailedError: If ``raw`` does not fit ``stamp_type``.
-    """
-    try:
-        return msgspec.convert(raw, type=stamp_type, strict=True)
-    except (msgspec.ValidationError, TypeError) as exc:
-        raise MessageDecodingFailedError(str(exc), name) from exc
+        return type_for_name(name)
+    except UnknownMessageNameError:
+        return None

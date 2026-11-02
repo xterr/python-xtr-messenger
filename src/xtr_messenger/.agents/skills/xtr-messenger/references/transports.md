@@ -3,8 +3,12 @@
 | DSN | What it does | Needs |
 | --- | --- | --- |
 | `sync://` | Handles in the calling process, during the dispatch | — |
-| `in-memory://` | Records what was dispatched; a worker or a test drains it. `?serialize=true` round-trips every message through the serializer | — |
-| `amqp://…`, `amqps://…` | RabbitMQ, with a retry ladder and dead-lettering | `[amqp]` |
+| `in-memory://` | Records what was dispatched; a worker or a test drains it. `?serialize=true` round-trips every message through the serializer | the serializer, for `?serialize=true` |
+| `amqp://…`, `amqps://…` | RabbitMQ, with a retry ladder and dead-lettering | `[amqp]`, the serializer |
+
+A transport writing messages gets the envelope serializer from the factory discovering it —
+`TransportFactory(serializer=wire)`, or the bundle's — and raises `MissingSerializerError` when
+its scheme is first used without one.
 
 Any other taskiq broker goes through the taskiq bridge — `TaskiqSender` / `TaskiqWorker` under
 `xtr_messenger.bridge.taskiq` — which works installed without aio-pika: the application installs
@@ -78,9 +82,12 @@ the broker owns its own consume loop.
 
 Under a kernel, a class implementing `TransportFactoryInterface` in a scanned module is
 registered automatically and consulted ahead of entry-point discovery, in registration order.
-It must be buildable with no arguments. A collaborator a factory needs (a serializer, say)
-cannot travel in a DSN — pass the factory yourself:
-`MessageBusFactory(CONFIG, [AmqpTransportFactory(serializer=mine)]).bus()`.
+The container builds it, so it may take this package's `SerializerInterface` — the envelope
+serializer the bundle registers. Discovery hands that serializer to an advertised factory whose
+constructor takes a `serializer` parameter; any other collaborator cannot travel in a DSN, so
+pass the factory yourself: `MessageBusFactory(CONFIG, [AmqpTransportFactory(wire,
+options=AmqpOptions(...))]).bus()`, `AmqpOptions` imported from
+`xtr_messenger.bridge.amqp.amqp_options`.
 
 ## Receivers without a DSN
 

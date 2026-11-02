@@ -6,14 +6,14 @@ import pytest
 from typing_extensions import override
 
 from tests.support.messages import ingest_document
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     AckReceiptStamp,
     DelayStamp,
     EncodedEnvelope,
     Envelope,
     ErrorDetailsStamp,
-    JsonSerializer,
-    MessageEncodingFailedError,
+    MessageDecodingFailedError,
     ReceivedStamp,
     SerializerInterface,
     TransportMessageIdStamp,
@@ -29,7 +29,7 @@ class RecordingSerializer(SerializerInterface):
     """A serializer that records each call, delegating to a real one."""
 
     def __init__(self) -> None:
-        self._inner = JsonSerializer()
+        self._inner = json_serializer()
         self.encoded: list[Envelope] = []
         self.decoded: list[EncodedEnvelope] = []
 
@@ -176,12 +176,12 @@ async def test_a_given_serializer_round_trips_every_message_on_the_way_in() -> N
     assert transport.messages == (message,)
 
 
-async def test_a_serializer_surfaces_a_message_that_cannot_be_encoded() -> None:
-    """Round-tripping in a test turns an unserializable message into a test
-    failure rather than a production one."""
-    transport = InMemoryTransport(serializer=JsonSerializer())
+async def test_a_serializer_surfaces_a_message_the_consumer_cannot_decode() -> None:
+    """Round-tripping in a test turns a message no consumer can read back — here
+    one never declared — into a test failure rather than a production one."""
+    transport = InMemoryTransport(serializer=json_serializer())
 
-    with pytest.raises(MessageEncodingFailedError):
+    with pytest.raises(MessageDecodingFailedError):
         _ = await transport.send(Envelope("not a dataclass"))
 
 

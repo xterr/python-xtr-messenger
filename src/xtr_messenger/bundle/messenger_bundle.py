@@ -2,7 +2,9 @@
 
 An application listing :class:`MessengerBundle` in its ``config/bundles.py`` gets a
 :class:`MessageBusInterface`, a :class:`WorkerFactory`, and every handler its
-scan finds already wired to the container. When the console bundle is
+scan finds already wired to the container. The serializer bundle always comes
+along: the envelope serializer writes every message through its
+``SerializerInterface``. When the console bundle is
 active, ``messenger:consume`` is registered too; when the logging bundle is,
 the ``"messenger"`` channel is added to its config and the logging
 middleware writes through that channel's logger; when the event dispatcher
@@ -11,8 +13,7 @@ bundle is, every worker announces itself and its messages through it.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import replace
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Final, cast, final
 
 from typing_extensions import override
@@ -22,40 +23,34 @@ from xtr_dependency_injection import (
     ServiceConfigurator,
     ServiceKey,
     as_bundle,
-    bind_callable,
     bundle_active,
     qualified_name,
     required_bundle,
 )
-from xtr_service_contracts import ContainerInterface
+from xtr_serializer.bundle import SerializerBundle
 
-from xtr_messenger.exception import (
-    InvalidMiddlewareArgumentsError,
-    MessageBusError,
-    UnknownMiddlewareError,
-)
-from xtr_messenger.handler.handler_descriptor import Handler, HandlerDescriptor
+from xtr_messenger.exception import MessageBusError
+from xtr_messenger.handler.handler_descriptor import Handler
 from xtr_messenger.handler.handlers_locator import HandlersLocator
 from xtr_messenger.handler.handlers_registry import handlers_declared_on
 from xtr_messenger.handler.redispatch_message_handler import RedispatchMessageHandler
 from xtr_messenger.message import RedispatchMessage
 from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
-from xtr_messenger.middleware.middleware_arguments import (
-    entry_arguments,
-    entry_key,
-)
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
 from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 
+from ._container_binding import ContainerBinding
+from ._middleware_entries import register_middleware_with_arguments
 from ._services import (
     MESSENGER_CHANNEL,
     BuiltTransports,
     combined_transport_factory,
     combined_transport_factory_with,
+    envelope_serializer,
     logging_middleware_for_messenger,
     message_bus,
     named_middleware,
@@ -92,6 +87,7 @@ def _add_messenger_channel(config: object) -> object:
 
 
 @final
+@required_bundle(SerializerBundle)
 @required_bundle("xtr_logging.bundle:LoggingBundle", ignore_on_invalid=True)
 @required_bundle("xtr_console.bundle:ConsoleBundle", ignore_on_invalid=True)
 @required_bundle("xtr_event_dispatcher.bundle:EventDispatcherBundle", ignore_on_invalid=True)
@@ -164,7 +160,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         services: ServiceConfigurator,
         builder: ContainerBuilder,
     ) -> None:
-        """Register the shared TransportFactory, bus, worker factory, and command.
+        """Register the envelope serializer, shared TransportFactory, bus, worker factory, command.
 
         The redispatch handler is registered here rather than declared, so the
         container builds it with the container's publishing bus — the factories
@@ -177,6 +173,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         )
         _ = services.instance(self._handlers)
         _ = services.instance(self._transports)
+        _ = services.set(envelope_serializer)
         _ = services.set(combined_transport_factory)
         _ = services.set(named_middleware)
         if bundle_active(builder, "logging"):
@@ -212,7 +209,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         discovery-only factory loaded in :meth:`load_extension` stays, since the
         engine cannot resolve an empty collection.
         """
-        _register_middleware_with_arguments(builder)
+        register_middleware_with_arguments(builder)
         for alias, (service, qualifier) in _receivers(builder).items():
             builder.set_alias(
                 ReceiverInterface, service, alias_qualifier=alias, target_qualifier=qualifier
@@ -228,7 +225,7 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         if container is None:  # pragma: no cover — the kernel sets this before boot.
             message = "MessengerBundle.boot ran without a container"
             raise RuntimeError(message)
-        binding = _ContainerBinding(container)
+        binding = ContainerBinding(container)
         self._handlers.decorate(binding)
 
     @override
@@ -251,49 +248,6 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         if factory is None:
             return
         await factory.close_publishers()
-
-
-def _register_middleware_with_arguments(builder: ContainerBuilder) -> None:
-    """Register a middleware of its own for every chain entry that gives one arguments.
-
-    It is built like the middleware the name stands for — the arguments its
-    definition already has kept, the entry's set over them on the parameters
-    they name — and registered under
-    :func:`~xtr_messenger.middleware.middleware_arguments.entry_key` — so the
-    entry and the bare name, or two entries with different arguments, are
-    separate instances. An argument naming no parameter fails the build, as
-    any definition argument does.
-
-    Raises:
-        UnknownMiddlewareError: If an entry names middleware nothing is
-            registered for.
-        InvalidMiddlewareArgumentsError: If the middleware is built by a
-            factory.
-    """
-    config = builder.get_extension_config(MessageBusConfig)
-    entries = [entry for entry in config.middleware if isinstance(entry, Mapping)]
-    for ordinal, entry in enumerate(entries):
-        name, arguments = entry_arguments(entry)
-        if not builder.has(MiddlewareInterface, name):
-            known = tuple(
-                str(alias[1])
-                for alias in builder.get_aliases()
-                if alias[0] is MiddlewareInterface and isinstance(alias[1], str)
-            )
-            raise UnknownMiddlewareError(name, known)
-        named = builder.find_definition(MiddlewareInterface, name)
-        if named.kind != "class" or not isinstance(named.provider, type):
-            raise InvalidMiddlewareArgumentsError(
-                name, "it is built by a factory, which a configuration cannot give arguments"
-            )
-        middleware_cls = cast("type[MiddlewareInterface]", named.provider)
-        key = entry_key(name, ordinal)
-        _ = builder.register(middleware_cls, qualifier=key).set_arguments(
-            {**named.get_arguments(), **arguments}
-        )
-        builder.set_alias(
-            MiddlewareInterface, middleware_cls, alias_qualifier=key, target_qualifier=key
-        )
 
 
 def _receivers(builder: ContainerBuilder) -> dict[str, ServiceKey]:
@@ -327,31 +281,3 @@ def _transport_factories_in(obj: object) -> Iterable[type]:
     except TypeError:
         return ()
     return (obj,) if matches else ()
-
-
-@final
-class _ContainerBinding:
-    """Rebinds every :class:`HandlerDescriptor.call` through a container.
-
-    Two instances are equal so :meth:`HandlersLocator.decorate` replaces an
-    earlier binding instead of stacking on it — a handler declared after the
-    kernel booted is bound to the current container only.
-    """
-
-    __slots__ = ("_container",)
-
-    def __init__(self, container: ContainerInterface) -> None:
-        self._container = container
-
-    def __call__(self, descriptor: HandlerDescriptor) -> HandlerDescriptor:
-        target = descriptor.handler
-        bound = bind_callable(self._container, target)
-        return replace(descriptor, call=bound)
-
-    @override
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, _ContainerBinding)
-
-    @override
-    def __hash__(self) -> int:
-        return hash(_ContainerBinding)

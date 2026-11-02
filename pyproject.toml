@@ -17,16 +17,14 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "msgspec>=0.18",
     "typing-extensions>=4.4",
     "xtr-event-dispatcher-contracts>=5.0,<6",
     "xtr-logging-contracts>=5.0,<6",
+    # Message bodies and stamps are written and read back exactly through it.
+    "xtr-serializer>=5.0,<6",
 ]
 
 [project.optional-dependencies]
-pydantic = [
-    "pydantic>=2.0",
-]
 amqp = [
     "aio-pika>=9.4",
     "taskiq>=0.12.4",
@@ -105,14 +103,6 @@ reportImportCycles = "none"
 [[tool.basedpyright.executionEnvironments]]
 root = "src/xtr_messenger/bridge/amqp/amqp_broker.py"
 reportPrivateUsage = "none"
-
-# defstruct's field tuples are typed loosely in msgspec's stubs, and the
-# annotations feeding them come from get_type_hints, which returns Any.
-# Scoped here only; every other module keeps these on.
-[[tool.basedpyright.executionEnvironments]]
-root = "src/xtr_messenger/transport/serialization/codec/dataclass_codec.py"
-reportUnknownArgumentType = "none"
-reportAny = "none"
 
 # ─────────────────────────────────────────────────────────────────
 # ruff — select = ["ALL"], minimal justified ignores

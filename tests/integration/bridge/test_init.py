@@ -11,6 +11,7 @@ import pathlib
 
 from taskiq import InMemoryBroker
 
+from tests.support.serialization import json_serializer
 from xtr_messenger.bridge.taskiq import StartedBrokers, TaskiqSender, TaskiqWorker
 
 _BRIDGE = pathlib.Path(__file__).resolve().parents[3] / "src" / "xtr_messenger" / "bridge"
@@ -46,7 +47,7 @@ def test_the_amqp_layer_is_the_only_place_that_names_rabbitmq() -> None:
 
 def test_publishing_works_on_a_broker_that_is_not_amqp() -> None:
     """The point of the split: this is a broker-agnostic part, not a RabbitMQ one."""
-    assert TaskiqSender(InMemoryBroker(), StartedBrokers()) is not None
+    assert TaskiqSender(InMemoryBroker(), StartedBrokers(), json_serializer()) is not None
 
 
 def test_consuming_works_on_a_broker_that_is_not_amqp() -> None:

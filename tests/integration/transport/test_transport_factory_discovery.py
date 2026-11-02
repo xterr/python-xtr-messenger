@@ -46,11 +46,14 @@ def test_resolving_a_sync_bus_never_imports_a_broker_library() -> None:
 
 def test_an_amqp_bus_does_load_its_broker_library() -> None:
     code = (
-        "from xtr_messenger import MessageBusConfig, MessageBusFactory, TransportConfig\n"
+        "from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer\n"
+        "from xtr_messenger import JsonSerializer, MessageBusConfig, MessageBusFactory\n"
+        "from xtr_messenger import TransportConfig, TransportFactory\n"
         "config = MessageBusConfig(\n"
         "    transports={'q': TransportConfig('amqp://guest:guest@h:5672/', queue='jobs')}\n"
         ")\n"
-        "MessageBusFactory(config).bus()\n"
+        "wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))\n"
+        "MessageBusFactory(config, [TransportFactory(serializer=wire)]).bus()\n"
         "import sys\n"
         "assert 'taskiq' in sys.modules\n"
     )

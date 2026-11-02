@@ -31,7 +31,6 @@ from xtr_messenger.bridge.taskiq.taskiq_sender import TaskiqSender
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
 from xtr_messenger.exception import MixedDsnError
 from xtr_messenger.publisher_closing_interface import PublisherClosingInterface
-from xtr_messenger.transport.serialization import JsonSerializer
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 from xtr_messenger.transport.transport_options import reject_unknown_options
 from xtr_messenger.worker_providing_interface import WorkerProvidingInterface
@@ -84,10 +83,16 @@ class AmqpTransportFactory(
 
     def __init__(
         self,
+        serializer: SerializerInterface,
         options: AmqpOptions | None = None,
-        serializer: SerializerInterface | None = None,
     ) -> None:
-        """Apply these to everything it builds."""
+        """Apply these to everything it builds.
+
+        ``serializer`` is what both halves of every transport it builds write
+        and read messages with. Producer and consumer are separate processes,
+        so build both from the same configuration: the guarantee that matters
+        is that what one side writes, the other reads back exactly.
+        """
         self._options = options if options is not None else AmqpOptions()
         self._serializer = serializer
         # This factory's own publish connections, never another factory's.
@@ -109,7 +114,7 @@ class AmqpTransportFactory(
             name: TaskiqSender(
                 broker,
                 self._started,
-                serializer=self._wire(),
+                self._serializer,
                 queue=transport.queue_name if queues else None,
                 supports_delay=options.delayed_message_exchange_plugin,
             )
@@ -166,7 +171,7 @@ class AmqpTransportFactory(
         _ = bind_bus(
             broker,
             bus,
-            self._wire(),
+            self._serializer,
             event_dispatcher=event_dispatcher,
             receiver_names={transport.queue_name: name for name, transport in group.items()},
             max_attempts=options.reliability.max_attempts,
@@ -187,19 +192,6 @@ class AmqpTransportFactory(
                 else None
             ),
         )
-
-    def _wire(self) -> SerializerInterface:
-        """Return the serializer both halves of this transport use.
-
-        Producer and consumer are separate processes, so the guarantee that
-        matters is that an un-customised deploy is symmetric by
-        construction: both sides reach this method and get the same
-        configuration. Passing ``serializer`` overrides both at once, never
-        one of them.
-        """
-        if self._serializer is None:
-            self._serializer = JsonSerializer()
-        return self._serializer
 
     def _options_for(self, group: Mapping[str, TransportConfig]) -> AmqpOptions:
         """Read the settings every transport in ``group`` carries.

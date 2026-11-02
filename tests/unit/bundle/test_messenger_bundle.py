@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, final
 from uuid import UUID, uuid4
 
 import pytest
+import xtr_serializer
 from typing_extensions import override
 from xtr_dependency_injection import (
     Bundle,
@@ -30,9 +31,11 @@ from xtr_messenger import (
     Envelope,
     HandlersLocator,
     InvalidMiddlewareArgumentsError,
+    JsonSerializer,
     MessageBusConfig,
     MessageBusInterface,
     MiddlewareInterface,
+    SerializerInterface,
     StackInterface,
     UnknownMiddlewareError,
     WorkerFactory,
@@ -113,6 +116,26 @@ async def test_the_bundle_wires_a_bus_with_no_transports_when_unconfigured() -> 
         assert bus is not None
     finally:
         await booted.shutdown()
+
+
+async def test_the_envelope_serializer_writes_through_the_serializer_bundle() -> None:
+    kernel = Kernel(
+        MessengerBundle.__module__,
+        env="test",
+        bundles={MessengerBundle: {"all": True}},
+        resources=(),
+    )
+    booted = await kernel.boot()
+    try:
+        container: ContainerInterface = booted.container
+        envelopes = await container.get(SerializerInterface)
+        values = await container.get(xtr_serializer.SerializerInterface)
+        encoded = envelopes.encode(Envelope(RunJob(uuid4())))
+    finally:
+        await booted.shutdown()
+
+    assert isinstance(envelopes, JsonSerializer)
+    assert values.deserialize(encoded.body, RunJob, "json") == envelopes.decode(encoded).message
 
 
 async def test_a_class_handler_runs_with_container_built_dependencies() -> None:

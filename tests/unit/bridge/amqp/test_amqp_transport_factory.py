@@ -17,10 +17,10 @@ from taskiq_aio_pika import AioPikaBroker
 
 from tests.support.fakes import RecordingBus
 from tests.support.messages import IngestDocument, ingest_document
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     Dsn,
     Envelope,
-    JsonSerializer,
     MixedDsnError,
     PublisherClosingInterface,
     TransportConfig,
@@ -76,25 +76,25 @@ def _worker_broker(worker: object) -> AioPikaBroker:
 
 
 def test_construction_opens_no_connection() -> None:
-    senders = AmqpTransportFactory().create(_group())
+    senders = AmqpTransportFactory(json_serializer()).create(_group())
 
     assert _broker_of(senders["high"]).write_channel is None
 
 
 def test_the_producer_broker_declares_every_queue_it_publishes_to() -> None:
-    senders = AmqpTransportFactory().create(_group())
+    senders = AmqpTransportFactory(json_serializer()).create(_group())
 
     assert declared_queues(_broker_of(senders["high"])) == ("jobs_high", "jobs_low")
 
 
 def test_a_sender_carries_the_queue_its_transport_named() -> None:
-    sender = _sender(AmqpTransportFactory().create(_group())["low"])
+    sender = _sender(AmqpTransportFactory(json_serializer()).create(_group())["low"])
 
     assert sender.queue == "jobs_low"
 
 
 def test_transports_sharing_a_connection_share_one_broker() -> None:
-    senders = AmqpTransportFactory().create(_group())
+    senders = AmqpTransportFactory(json_serializer()).create(_group())
 
     assert _broker_of(senders["high"]) is _broker_of(senders["low"])
 
@@ -105,19 +105,21 @@ def test_a_queue_in_the_dsn_still_groups_onto_one_broker() -> None:
         "low": TransportConfig(f"{_HOST}?queue=jobs_low"),
     }
 
-    senders = AmqpTransportFactory().create(group)
+    senders = AmqpTransportFactory(json_serializer()).create(group)
 
     assert _broker_of(senders["high"]) is _broker_of(senders["low"])
 
 
 def test_a_worker_declares_only_the_queues_it_was_given() -> None:
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, RecordingBus()
+    )
 
     assert declared_queues(_worker_broker(worker)) == ("jobs_high",)
 
 
 def test_a_worker_can_serve_several_queues_at_once() -> None:
-    worker = AmqpTransportFactory().worker(_group(), RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(_group(), RecordingBus())
 
     assert declared_queues(_worker_broker(worker)) == ("jobs_high", "jobs_low")
 
@@ -129,7 +131,7 @@ def test_a_worker_spanning_two_connections_fails_loudly() -> None:
     }
 
     with pytest.raises(MixedDsnError) as excinfo:
-        _ = AmqpTransportFactory().worker(group, RecordingBus())
+        _ = AmqpTransportFactory(json_serializer()).worker(group, RecordingBus())
 
     assert len(excinfo.value.dsns) == 2
 
@@ -137,7 +139,9 @@ def test_a_worker_spanning_two_connections_fails_loudly() -> None:
 def test_the_worker_binds_a_task_for_every_declared_message() -> None:
     """The consumer half registers a task per declared name, dispatching into
     the bus it was given — so ``run`` needs no further wiring."""
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, RecordingBus()
+    )
 
     tasks = _worker_broker(worker).get_all_tasks()
     assert all(name in tasks for name in declared_names())
@@ -145,7 +149,9 @@ def test_the_worker_binds_a_task_for_every_declared_message() -> None:
 
 
 def test_the_worker_is_a_taskiq_worker() -> None:
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, RecordingBus()
+    )
 
     assert isinstance(worker, WorkerInterface)
     assert isinstance(worker, TaskiqWorker)
@@ -154,24 +160,26 @@ def test_the_worker_is_a_taskiq_worker() -> None:
 def test_the_worker_handles_the_configured_number_of_messages_at_once() -> None:
     group = {"high": TransportConfig(f"{_HOST}?queue=jobs_high&max_async_tasks=7")}
 
-    worker = AmqpTransportFactory().worker(group, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(group, RecordingBus())
 
     assert isinstance(worker, TaskiqWorker)
     assert worker.max_async_tasks == 7
 
 
 def test_the_worker_is_bounded_by_default() -> None:
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, RecordingBus()
+    )
 
     assert isinstance(worker, TaskiqWorker)
     assert worker.max_async_tasks == default_max_async_tasks()
 
 
 def test_both_halves_share_one_serializer() -> None:
-    """Producer and consumer are separate deploys; the only guarantee
-    available is that an un-customised one is symmetric by construction."""
-    mine = JsonSerializer()
-    factory = AmqpTransportFactory(serializer=mine)
+    """Producer and consumer are separate deploys; what one factory builds for
+    either half writes and reads with the one serializer it was given."""
+    mine = json_serializer()
+    factory = AmqpTransportFactory(mine)
 
     sender = _sender(factory.create({"q": TransportConfig(_HOST, queue="jobs")})["q"])
 
@@ -179,20 +187,20 @@ def test_both_halves_share_one_serializer() -> None:
 
 
 def test_it_is_a_worker_providing_interface() -> None:
-    assert isinstance(AmqpTransportFactory(), WorkerProvidingInterface)
+    assert isinstance(AmqpTransportFactory(json_serializer()), WorkerProvidingInterface)
 
 
 def test_it_is_a_publisher_closing_interface() -> None:
     """How a composite factory — and so the bundle's shutdown — finds the
     connections this adapter's senders opened."""
-    assert isinstance(AmqpTransportFactory(), PublisherClosingInterface)
+    assert isinstance(AmqpTransportFactory(json_serializer()), PublisherClosingInterface)
 
 
 @pytest.mark.anyio
 async def test_closing_publishers_after_no_publish_opens_nothing() -> None:
     """Nothing is recorded until a sender publishes, so a shutdown after no
     publish has nothing to release — and must not connect to find that out."""
-    factory = AmqpTransportFactory()
+    factory = AmqpTransportFactory(json_serializer())
     senders = factory.create(_group())
 
     await factory.close_publishers()
@@ -201,7 +209,7 @@ async def test_closing_publishers_after_no_publish_opens_nothing() -> None:
 
 
 def test_it_supports_the_amqp_schemes() -> None:
-    factory = AmqpTransportFactory()
+    factory = AmqpTransportFactory(json_serializer())
 
     assert factory.supports(Dsn.parse("amqp://host/"))
     assert factory.supports(Dsn.parse("amqps://host/"))
@@ -214,7 +222,7 @@ def test_options_override_the_dsn() -> None:
         "q": TransportConfig(f"{_HOST}?queue=jobs&max_attempts=3", options={"max_attempts": "9"})
     }
 
-    broker = _broker_of(AmqpTransportFactory().create(group)["q"])
+    broker = _broker_of(AmqpTransportFactory(json_serializer()).create(group)["q"])
 
     retry = next(m for m in broker.middlewares if isinstance(m, SmartRetryMiddleware))
     assert retry.default_retry_count == 9
@@ -226,14 +234,14 @@ def test_a_misspelled_option_is_refused() -> None:
     group = {"q": TransportConfig(f"{_HOST}?queue=jobs&max_attempt=10")}
 
     with pytest.raises(UnknownTransportOptionError, match="max_attempt"):
-        _ = AmqpTransportFactory().create(group)
+        _ = AmqpTransportFactory(json_serializer()).create(group)
 
 
 def test_an_option_meant_for_another_scheme_is_refused() -> None:
     group = {"q": TransportConfig(f"{_HOST}?queue=jobs&serialize=true")}
 
     with pytest.raises(UnknownTransportOptionError, match="serialize"):
-        _ = AmqpTransportFactory().create(group)
+        _ = AmqpTransportFactory(json_serializer()).create(group)
 
 
 def test_disabling_verification_warns_once_per_factory(
@@ -243,7 +251,7 @@ def test_disabling_verification_warns_once_per_factory(
     is a notice, while one per broker built is noise that buries it."""
     tls_host = "amqps://guest:guest@localhost:5671/"
     group = {"q": TransportConfig(f"{tls_host}?queue=jobs&verify=false")}
-    factory = AmqpTransportFactory()
+    factory = AmqpTransportFactory(json_serializer())
 
     with caplog.at_level(logging.WARNING, logger="messenger"):
         _ = factory.create(group)
@@ -255,7 +263,7 @@ def test_disabling_verification_warns_once_per_factory(
 
 def test_a_verified_connection_never_warns(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="messenger"):
-        _ = AmqpTransportFactory().create(_group())
+        _ = AmqpTransportFactory(json_serializer()).create(_group())
 
     assert caplog.records == []
 
@@ -263,7 +271,9 @@ def test_a_verified_connection_never_warns(caplog: pytest.LogCaptureFixture) -> 
 def test_the_workers_broker_is_not_recorded_as_a_publisher() -> None:
     """A worker's run loop closes its own broker; registering it with the
     publish-side bookkeeping was a no-op kept alive by habit."""
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, RecordingBus())
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, RecordingBus()
+    )
 
     assert isinstance(worker, TaskiqWorker)
     assert worker._publishers is None  # pyright: ignore[reportPrivateUsage] -- no public accessor; the absence of the record is the behaviour
@@ -275,11 +285,13 @@ async def test_the_worker_resets_services_after_each_message() -> None:
     resets after each message, and the AMQP worker owes the same contract."""
     resetter = CountingResetter()
     bus = RecordingBus()
-    worker = AmqpTransportFactory().worker({"high": _group()["high"]}, bus, resetter=resetter)
+    worker = AmqpTransportFactory(json_serializer()).worker(
+        {"high": _group()["high"]}, bus, resetter=resetter
+    )
     broker = _worker_broker(worker)
     task = broker.find_task(name_of(IngestDocument))
     assert task is not None
-    encoded = JsonSerializer().encode(Envelope.wrap(ingest_document()))
+    encoded = json_serializer().encode(Envelope.wrap(ingest_document()))
     message = TaskiqMessage(
         task_id="t1",
         task_name=name_of(IngestDocument),
@@ -297,12 +309,12 @@ async def test_the_worker_resets_services_after_each_message() -> None:
 def test_with_the_delay_plugin_off_senders_refuse_a_delay() -> None:
     group = {"q": TransportConfig(f"{_HOST}?queue=jobs&delayed_message_exchange_plugin=false")}
 
-    sender = _sender(AmqpTransportFactory().create(group)["q"])
+    sender = _sender(AmqpTransportFactory(json_serializer()).create(group)["q"])
 
     assert sender._supports_delay is False  # pyright: ignore[reportPrivateUsage] -- no public accessor
 
 
 def test_with_the_delay_plugin_on_senders_accept_a_delay() -> None:
-    sender = _sender(AmqpTransportFactory().create(_group())["high"])
+    sender = _sender(AmqpTransportFactory(json_serializer()).create(_group())["high"])
 
     assert sender._supports_delay is True  # pyright: ignore[reportPrivateUsage] -- no public accessor

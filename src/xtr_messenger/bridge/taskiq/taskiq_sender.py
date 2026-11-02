@@ -12,7 +12,6 @@ from xtr_messenger.exception import UnsupportedStampError
 from xtr_messenger.message_registry import name_of
 from xtr_messenger.stamp import DelayStamp, TransportMessageIdStamp
 from xtr_messenger.transport.sender import SenderInterface
-from xtr_messenger.transport.serialization import JsonSerializer
 
 from .labels import DELAY_LABEL, HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
 
@@ -48,12 +47,12 @@ class TaskiqSender(SenderInterface):
         self,
         broker: AsyncBroker,
         started: StartedBrokers,
-        serializer: SerializerInterface | None = None,
+        serializer: SerializerInterface,
         queue: str | None = None,
         *,
         supports_delay: bool = True,
     ) -> None:
-        """Publish through ``broker``, optionally pinning a named queue.
+        """Publish through ``broker``, encoding with ``serializer``, optionally pinning a queue.
 
         ``started`` is where this sender records that it opened the broker's
         connection. Give every sender built for one owner the same one: senders
@@ -68,7 +67,7 @@ class TaskiqSender(SenderInterface):
         """
         self._broker = broker
         self._started = started
-        self._serializer = serializer if serializer is not None else JsonSerializer()
+        self._serializer = serializer
         self._queue = queue
         self._supports_delay = supports_delay
 

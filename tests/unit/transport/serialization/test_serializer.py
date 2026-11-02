@@ -1,14 +1,21 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
-from typing import final
+from datetime import datetime
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
-from typing_extensions import override
 
-from tests.support.messages import IngestDocument, UndeclaredMessage, ingest_document
+from tests.support.messages import (
+    IngestDocument,
+    UndeclaredMessage,
+    assert_dispatch_invoice_is_exact,
+    dispatch_invoice,
+    ingest_document,
+)
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     EncodedEnvelope,
     Envelope,
@@ -23,12 +30,15 @@ from xtr_messenger import (
     as_message,
     as_stamp,
 )
-from xtr_messenger.message_registry import register_message
 from xtr_messenger.stamp import DEFAULT_STAMP_TYPES, DelayStamp
 from xtr_messenger.transport.serialization import TYPE_HEADER
-from xtr_messenger.transport.serialization.codec import JsonValue, MessageCodecInterface
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 ID_STAMP_HEADER = "X-Message-Stamp-TransportMessageIdStamp"
+# Stands for a value the wire carried that no error may repeat; it is no credential.
+SECRET = "s3cr3t-t0ken"  # noqa: S105 — a marker searched for in error messages
 
 
 @as_message(name="test.unit.serializer.empty.v1")
@@ -37,30 +47,29 @@ class EmptyMessage:
     pass
 
 
-@final
-class SpyCodec(MessageCodecInterface):
-    """A codec that claims one type and counts its encodes, for order tests."""
-
-    def __init__(self, handled: type) -> None:
-        self._handled = handled
-        self.encoded = 0
-
-    @override
-    def supports(self, message_type: type) -> bool:
-        return message_type is self._handled
-
-    @override
-    def encode(self, message: object) -> JsonValue:
-        self.encoded += 1
-        return {}
-
-    @override
-    def decode(self, message_type: type, raw: JsonValue) -> object:
-        raise NotImplementedError
+@as_message(name="test.unit.serializer.naive.v1")
+@dataclass(frozen=True, slots=True)
+class NaiveMessage:
+    at: datetime
 
 
 def serializer() -> JsonSerializer:
-    return JsonSerializer(stamp_types=[RedeliveryStamp, TransportMessageIdStamp])
+    return json_serializer(stamp_types=[RedeliveryStamp, TransportMessageIdStamp])
+
+
+def assert_quotes_nothing(error: BaseException, secret: str = SECRET) -> None:
+    """Neither the error nor anything it was raised from repeats ``secret``."""
+    seen: BaseException | None = error
+    while seen is not None:
+        assert secret not in str(seen)
+        seen = seen.__cause__ or seen.__context__
+
+
+def test_building_without_a_serializer_fails() -> None:
+    build = cast("Callable[[], object]", JsonSerializer)
+
+    with pytest.raises(TypeError, match="serializer"):
+        _ = build()
 
 
 def test_encoding_carries_the_message_name_in_the_type_header() -> None:
@@ -75,6 +84,30 @@ def test_a_message_survives_a_round_trip_unchanged() -> None:
     decoded = serializer().decode(serializer().encode(Envelope(message)))
 
     assert decoded.message == message
+
+
+def test_a_message_comes_back_exactly_with_every_nested_type() -> None:
+    sent = dispatch_invoice()
+
+    decoded = serializer().decode(serializer().encode(Envelope(sent)))
+
+    assert_dispatch_invoice_is_exact(decoded.message, sent)
+
+
+def test_the_body_writes_the_hierarchy_tag_and_the_zone() -> None:
+    body = serializer().encode(Envelope(dispatch_invoice())).body
+
+    assert '"$type":"test.attachment.invoice"' in body
+    assert "[Europe/Bucharest]" in body
+
+
+def test_a_value_the_body_cannot_carry_exactly_is_refused_when_encoding() -> None:
+    naive = NaiveMessage(datetime(2026, 1, 1, 9, 30))  # noqa: DTZ001 — the value being refused
+
+    with pytest.raises(MessageEncodingFailedError) as raised:
+        _ = serializer().encode(Envelope(naive))
+
+    assert raised.value.message_name == "test.unit.serializer.naive.v1"
 
 
 def test_registered_stamps_survive_a_round_trip() -> None:
@@ -94,9 +127,7 @@ def test_non_sendable_stamps_never_reach_the_wire() -> None:
 
 
 def test_a_producers_stamps_survive_a_default_round_trip() -> None:
-    """The default serializer once wrote every stamp and restored none, so an
-    un-customised deploy dropped everything a producer attached."""
-    wire = JsonSerializer()
+    wire = json_serializer()
     sent = Envelope(ingest_document()).with_stamps(
         TransportMessageIdStamp("abc"),
         DelayStamp(5000),
@@ -111,7 +142,7 @@ def test_a_producers_stamps_survive_a_default_round_trip() -> None:
 
 
 def test_restoring_no_stamps_is_possible_but_must_be_asked_for() -> None:
-    wire = JsonSerializer(stamp_types=())
+    wire = json_serializer(stamp_types=())
     sent = Envelope(ingest_document()).with_stamps(DelayStamp(1))
 
     assert wire.decode(wire.encode(sent)).stamps == ()
@@ -143,38 +174,68 @@ def test_decoding_without_a_type_header_fails_loudly() -> None:
         _ = serializer().decode(EncodedEnvelope(body="{}", headers={}))
 
 
-def test_decoding_an_unknown_message_name_fails_loudly() -> None:
-    encoded = EncodedEnvelope(body="{}", headers={TYPE_HEADER: "nope.v1"})
+def test_decoding_an_unknown_message_name_fails_without_repeating_it() -> None:
+    encoded = EncodedEnvelope(body="{}", headers={TYPE_HEADER: f"{SECRET}.v1"})
 
-    with pytest.raises(MessageDecodingFailedError, match=re.escape("nope.v1")):
+    with pytest.raises(MessageDecodingFailedError, match="names no declared message") as raised:
         _ = serializer().decode(encoded)
+
+    assert raised.value.message_name is None
+    assert_quotes_nothing(raised.value)
 
 
 def test_decoding_an_undeclared_message_fails_loudly() -> None:
     encoded = serializer().encode(Envelope(UndeclaredMessage("x")))
 
-    with pytest.raises(MessageDecodingFailedError, match="UndeclaredMessage"):
+    with pytest.raises(MessageDecodingFailedError, match="names no declared message"):
         _ = serializer().decode(encoded)
 
 
-def test_decoding_a_malformed_body_fails_loudly() -> None:
-    encoded = EncodedEnvelope(body="{not json", headers={TYPE_HEADER: "test.ingest.v1"})
+def test_decoding_a_body_that_is_not_json_fails_without_repeating_it() -> None:
+    encoded = EncodedEnvelope(body="{" + SECRET, headers={TYPE_HEADER: "test.ingest.v1"})
 
-    with pytest.raises(MessageDecodingFailedError, match="not valid JSON"):
+    with pytest.raises(MessageDecodingFailedError) as raised:
         _ = serializer().decode(encoded)
 
+    assert raised.value.message_name == "test.ingest.v1"
+    assert_quotes_nothing(raised.value)
 
-def test_decoding_a_stamp_header_that_is_not_a_list_fails_loudly() -> None:
+
+def test_decoding_a_forged_body_fails_without_repeating_it() -> None:
+    forged = f'{{"document_id": "{SECRET}", "tenant_id": 7}}'
+    encoded = EncodedEnvelope(body=forged, headers={TYPE_HEADER: "test.ingest.v1"})
+
+    with pytest.raises(MessageDecodingFailedError) as raised:
+        _ = serializer().decode(encoded)
+
+    assert raised.value.message_name == "test.ingest.v1"
+    assert_quotes_nothing(raised.value)
+
+
+def test_decoding_a_forged_hierarchy_tag_fails_without_repeating_it() -> None:
+    body = serializer().encode(Envelope(dispatch_invoice())).body
+    forged = body.replace("test.attachment.invoice", SECRET)
+    encoded = EncodedEnvelope(body=forged, headers={TYPE_HEADER: "test.dispatch_invoice.v1"})
+
+    with pytest.raises(MessageDecodingFailedError) as raised:
+        _ = serializer().decode(encoded)
+
+    assert_quotes_nothing(raised.value)
+
+
+def test_decoding_a_stamp_header_that_is_not_a_list_fails_without_repeating_it() -> None:
     encoded = EncodedEnvelope(
         body="{}",
         headers={
             TYPE_HEADER: "test.unit.serializer.empty.v1",
-            ID_STAMP_HEADER: '{"message_id": "x"}',
+            ID_STAMP_HEADER: f'{{"message_id": "{SECRET}"}}',
         },
     )
 
-    with pytest.raises(MessageDecodingFailedError, match="must hold a JSON list"):
+    with pytest.raises(MessageDecodingFailedError) as raised:
         _ = serializer().decode(encoded)
+
+    assert_quotes_nothing(raised.value)
 
 
 def test_decoding_a_malformed_stamp_fails_loudly() -> None:
@@ -188,36 +249,6 @@ def test_decoding_a_malformed_stamp_fails_loudly() -> None:
 
     with pytest.raises(MessageDecodingFailedError, match="message_id"):
         _ = serializer().decode(encoded)
-
-
-def test_encoding_a_message_no_codec_handles_fails_loudly() -> None:
-    with pytest.raises(MessageEncodingFailedError, match="no codec") as excinfo:
-        _ = JsonSerializer().encode(Envelope("just a string"))
-
-    assert excinfo.value.message_name == "builtins:str"
-
-
-class _NoCodecMessage:
-    """Declared, but neither a dataclass nor a model: no codec handles it."""
-
-
-register_message(_NoCodecMessage, "test.unit.serializer.no_codec.v1")
-
-
-def test_decoding_a_type_no_codec_handles_fails_loudly() -> None:
-    encoded = EncodedEnvelope(body="{}", headers={TYPE_HEADER: "test.unit.serializer.no_codec.v1"})
-
-    with pytest.raises(MessageDecodingFailedError, match="no codec"):
-        _ = JsonSerializer().decode(encoded)
-
-
-def test_the_first_codec_that_supports_the_type_is_used() -> None:
-    first, second = SpyCodec(IngestDocument), SpyCodec(IngestDocument)
-
-    _ = JsonSerializer(codecs=[first, second]).encode(Envelope(ingest_document()))
-
-    assert first.encoded == 1
-    assert second.encoded == 0
 
 
 def test_the_wire_header_names_are_pinned() -> None:
@@ -239,8 +270,16 @@ class DeclaredTenantStamp(StampInterface):
     tenant_id: str
 
 
+@as_stamp
+@dataclass(frozen=True, slots=True)
+class DeclaredDeadlineStamp(StampInterface):
+    """A stamp carrying a value a stamp header must keep exactly."""
+
+    at: datetime
+
+
 def test_a_declared_stamp_survives_a_default_round_trip() -> None:
-    wire = JsonSerializer()
+    wire = json_serializer()
     envelope = Envelope(ingest_document()).with_stamps(DeclaredTenantStamp("acme"))
 
     decoded = wire.decode(wire.encode(envelope))
@@ -248,8 +287,16 @@ def test_a_declared_stamp_survives_a_default_round_trip() -> None:
     assert decoded.last(DeclaredTenantStamp) == DeclaredTenantStamp("acme")
 
 
+def test_a_stamp_value_the_header_cannot_carry_exactly_is_refused_when_encoding() -> None:
+    repeated = datetime(2026, 10, 25, 3, 30, tzinfo=ZoneInfo("Europe/Bucharest"), fold=1)
+    envelope = Envelope(ingest_document()).with_stamps(DeclaredDeadlineStamp(repeated))
+
+    with pytest.raises(MessageEncodingFailedError):
+        _ = json_serializer().encode(envelope)
+
+
 def test_a_stamp_declared_after_the_serializer_was_built_still_decodes() -> None:
-    wire = JsonSerializer()
+    wire = json_serializer()
 
     @as_stamp
     @dataclass(frozen=True, slots=True)
@@ -264,7 +311,7 @@ def test_a_stamp_declared_after_the_serializer_was_built_still_decodes() -> None
 
 
 def test_an_explicit_stamp_list_ignores_declared_stamps() -> None:
-    wire = JsonSerializer(stamp_types=[RedeliveryStamp])
+    wire = json_serializer(stamp_types=[RedeliveryStamp])
     envelope = Envelope(ingest_document()).with_stamps(DeclaredTenantStamp("acme"))
 
     decoded = wire.decode(wire.encode(envelope))

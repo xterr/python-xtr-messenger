@@ -10,8 +10,9 @@ __all__ = ["MessageEncodingFailedError"]
 class MessageEncodingFailedError(MessageBusError):
     """A message could not be turned into something a transport can carry.
 
-    Raised on the producer's side, before anything is sent — a message type
-    no codec handles, or a field with no JSON form.
+    Raised on the producer's side, before anything is sent — a message or a
+    stamp holding a value the serializer cannot write, or would not read back
+    exactly.
     """
 
     reason: str

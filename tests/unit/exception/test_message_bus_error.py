@@ -14,6 +14,7 @@ from xtr_messenger import (
     MessageBusError,
     MessageDecodingFailedError,
     MessageEncodingFailedError,
+    MissingSerializerError,
     MixedDsnError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
@@ -38,6 +39,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     MessageBusError,
     MessageDecodingFailedError,
     MessageEncodingFailedError,
+    MissingSerializerError,
     MixedDsnError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
@@ -129,11 +131,11 @@ def test_message_decoding_failed_error_omits_the_name_when_unknown() -> None:
 
 
 def test_message_encoding_failed_error_carries_the_reason_and_name() -> None:
-    error = MessageEncodingFailedError("no codec", "test.v1")
+    error = MessageEncodingFailedError("no plain form", "test.v1")
 
-    assert error.reason == "no codec"
+    assert error.reason == "no plain form"
     assert error.message_name == "test.v1"
-    assert "cannot encode 'test.v1': no codec" in str(error)
+    assert "cannot encode 'test.v1': no plain form" in str(error)
 
 
 def test_mixed_dsn_error_carries_the_conflicting_dsns() -> None:

@@ -1,6 +1,6 @@
 ---
 name: xtr-messenger
-description: How to publish and handle messages with xtr-messenger — declaring messages and handlers, routing them to named transports, shaping the middleware chain, running a worker, and testing without a broker. Use when code must send a job, an event or a command to be handled elsewhere, when adding a background worker or a queue, when wiring RabbitMQ/AMQP or taskiq, when writing message handlers, stamps or middleware, when a dispatch raises NoHandlerForMessageError, NoSenderForMessageError, HandlersFailedError or MessageDecodingFailedError, or when adding MessengerBundle to an application on xtr-dependency-injection.
+description: How to publish and handle messages with xtr-messenger — declaring messages and handlers, routing them to named transports, carrying them exactly through the wire format, shaping the middleware chain, running a worker, and testing without a broker. Use when code must send a job, an event or a command to be handled elsewhere, when adding a background worker or a queue, when wiring RabbitMQ/AMQP or taskiq, when writing message handlers, stamps or middleware, when a dispatch raises NoHandlerForMessageError, NoSenderForMessageError, HandlersFailedError, MessageEncodingFailedError, MessageDecodingFailedError or MissingSerializerError, or when adding MessengerBundle to an application on xtr-dependency-injection.
 ---
 
 # xtr-messenger
@@ -12,15 +12,21 @@ DSN. The dispatch site never knows which.
 
 ## Quick reference
 
-- Declare a message: `@as_message(name="ingest.document.v1")` over a frozen dataclass (or a
-  pydantic model with the `pydantic` extra). Always pin an explicit versioned `name`.
+- Declare a message: `@as_message(name="ingest.document.v1")` over a frozen dataclass or a
+  pydantic model. Always pin an explicit versioned `name`.
 - Declare a handler: `@as_message_handler(IngestDocument)` on an async function or a class with
   `async def __call__`.
 - Configure once: `MessageBusConfig(transports={...}, routing={...})` with
   `TransportConfig("<dsn>")`. It is inert data and builds nothing.
 - Publish: `envelope = await bus.dispatch(message, *stamps)`.
-- Build a bus by hand: `MessageBusFactory(CONFIG).bus()`. Build a worker:
-  `WorkerFactory(CONFIG).worker(["high"])`, then `await worker.run()`.
+- Build a bus by hand: `MessageBusFactory(CONFIG).bus()` for `sync://`; any transport writing
+  messages takes the envelope serializer —
+  `MessageBusFactory(CONFIG, [TransportFactory(serializer=wire)]).bus()`. Build a worker the same
+  way — `WorkerFactory(CONFIG, [TransportFactory(serializer=wire)]).worker(["high"])` — then
+  `await worker.run()`.
+- The envelope serializer: `wire = JsonSerializer(Serializer([PydanticNormalizer()],
+  [JsonEncoder()]))`, the last three from xtr-serializer. Messages arrive exactly, or are refused
+  when sent.
 - In an application, with xtr-dependency-injection installed beside the package (it is not a
   dependency): activate `MessengerBundle`, inject `MessageBusInterface`, and take container
   services in handlers as `Injected[T]`. Without the container, build the bus and the workers
@@ -132,7 +138,31 @@ Failures of held-back messages come back as `DelayedMessageHandlingError`.
 
 `RedispatchMessage(BuildReport(id))` asks for a message to go out again **through routing**;
 `RedispatchMessage(BuildReport(id), "urgent")` pins the transport. Nothing needs declaring. It
-holds an envelope, which no codec carries, so handle it in the process that creates it.
+holds an envelope, which no serializer writes, so handle it in the process that creates it.
+
+## Carry a message exactly
+
+```python
+from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer
+
+from xtr_messenger import JsonSerializer, TransportFactory
+
+wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))
+bus = MessageBusFactory(CONFIG, [TransportFactory(serializer=wire)]).bus()
+```
+
+- The body is written as the message's class and read back as the class its `type` header
+  names: nested dataclasses and models, `Decimal`, `UUID`, enums and tuples come back equal and
+  of their declared type. Stamps are written the same way.
+- A value that would come back changed is refused when sent, with `MessageEncodingFailedError`:
+  a naive `datetime`, a `ZoneInfo` datetime in the hour the clocks repeat. Annotate a field
+  `ZonedDateTime` to keep the zone's name.
+- A field typed with a base carries a subclass only when the base declares its hierarchy:
+  `@discriminator_map()` on the base, `@discriminator_name("...")` on each class.
+- Decoding never coerces, ignores fields the message does not declare, and refuses data that
+  does not fit with `MessageDecodingFailedError` — saying where, never what the data held.
+- A transport writing messages built without a serializer — `amqp://`,
+  `in-memory://?serialize=true` — raises `MissingSerializerError` when its scheme is first used.
 
 ## Middleware
 
@@ -163,7 +193,7 @@ from xtr_messenger import WorkerFactory
 
 
 async def main() -> None:
-    worker = WorkerFactory(CONFIG).worker(["high"])
+    worker = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)]).worker(["high"])
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, worker.stop)
     await worker.run()
 
@@ -201,7 +231,7 @@ CONFIG = MessageBusConfig(
     transports={"jobs": TransportConfig("in-memory://?serialize=true")},
     routing={IngestDocument: "jobs"},
 )
-factories = [InMemoryTransportFactory()]
+factories = [InMemoryTransportFactory(wire)]  # wire: the JsonSerializer above
 
 bus = MessageBusFactory(CONFIG, factories).bus()
 _ = await bus.dispatch(IngestDocument(document_id=doc_id, tenant_id=tenant_id))
@@ -214,9 +244,9 @@ await WorkerFactory(CONFIG, factories).worker(["jobs"]).run()  # returns once dr
 assert jobs.rejected == ()
 ```
 
-`?serialize=true` round-trips every message through the serializer, so a field that would only
-fail on a real broker fails here. `sent` keeps the whole history of envelopes, `pending` counts
-what is undrained, and `clear()` resets between tests.
+`?serialize=true` round-trips every message through the factory's serializer, so a field that
+would only fail on a real broker fails here. `sent` keeps the whole history of envelopes,
+`pending` counts what is undrained, and `clear()` resets between tests.
 
 ## Use in an application
 
@@ -227,14 +257,15 @@ the `amqp` extra. It prints the step to name and route your transports, which a 
 make for you.
 
 1. **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
-   installed beside it, never as an extra. Add `amqp` or `pydantic` for what you use, or install
-   taskiq and its broker's own package beside it for any other taskiq broker. Install xtr-console
+   installed beside it, never as an extra. Add `amqp` for RabbitMQ, or install taskiq and its
+   broker's own package beside it for any other taskiq broker. Install xtr-console
    beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
    xtr-event-dispatcher to hear the worker events.
 2. **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/config/bundles.py`, imported
    from `xtr_messenger.bundle`.
-3. **Brings along** — the logging, console and event dispatcher bundles, when those packages are
-   installed. Each is optional.
+3. **Brings along** — the serializer bundle always: every message is written through its
+   `SerializerInterface`. The logging, console and event dispatcher bundles when those packages
+   are installed; each of those is optional.
 4. **Configure** — required to move anything: with no configuration there are no transports.
 
    ```python
@@ -274,8 +305,10 @@ make for you.
 10. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/packages/messenger.py`, then
    `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 
-The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a per-kernel `HandlersLocator`
-and the `messenger:consume` command when the console bundle is active. Every handler it finds is
+The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a per-kernel `HandlersLocator`,
+the envelope serializer under this package's `SerializerInterface` — a `JsonSerializer` over the
+serializer bundle's — and the `messenger:consume` command when the console bundle is active.
+Discovered transports get that serializer. Every handler it finds is
 bound at boot, so one asking for something the container cannot provide fails at boot, not on
 its first message. Every message is a unit of work: a `lifetime="scoped"` service is built once
 per message and released when the message is done with, even when a handler raised.
@@ -296,6 +329,7 @@ Everything derives from `MessageBusError` and carries typed attributes.
 | `UnknownTransportOptionError`, `InvalidTransportOptionError` | A setting is not accepted, or its value is not usable |
 | `UnknownMiddlewareError`, `InvalidMiddlewareArgumentsError` | Middleware is named but unregistered, or given arguments it does not take |
 | `MessageEncodingFailedError`, `MessageDecodingFailedError`, `UnknownMessageNameError` | A message cannot be put on, or taken off, the wire |
+| `MissingSerializerError` | A transport writing messages was built without a serializer |
 | `NotConsumableError`, `IncompatibleReceiversError`, `MixedDsnError` | A worker is asked to consume something it cannot |
 
 ## Do not
@@ -308,8 +342,10 @@ Everything derives from `MessageBusError` and carries typed attributes.
 - Do not expect a retry from the worker loop: it makes exactly one attempt and the transport
   owns redelivery. Make handlers idempotent.
 - Do not assume one failing handler stops the rest — every handler runs, then the dispatch fails.
-- Do not route a `RedispatchMessage` to a remote transport; it holds an envelope no codec
-  carries.
+- Do not route a `RedispatchMessage` to a remote transport; it holds an envelope no serializer
+  writes.
+- Do not build the producer and the worker with different serializers; each reads what the other
+  wrote.
 - Do not reach into a transport to call a handler; only the bus calls handlers.
 - Do not build the bus and the worker from separate `InMemoryTransportFactory` instances in a
   test — they would record into different queues.

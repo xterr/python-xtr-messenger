@@ -22,15 +22,17 @@ Dispatch wraps a message in an **envelope** and walks it through a **middleware 
 middleware records what it did by appending a **stamp**. A **routing table** maps a message
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
-- 🪶 **Four core dependencies** — `msgspec`, `typing-extensions`, and two interface-only
-  packages, `xtr-logging-contracts` and `xtr-event-dispatcher-contracts`. No broker is a
-  dependency — RabbitMQ is the `amqp` extra — and neither is the container: the bundle is used
-  when xtr-dependency-injection is installed beside it.
+- 🪶 **Four core dependencies** — [xtr-serializer](../xtr-serializer) (and through it
+  pydantic), `typing-extensions`, and two interface-only packages, `xtr-logging-contracts` and
+  `xtr-event-dispatcher-contracts`. No broker is a dependency — RabbitMQ is the `amqp` extra —
+  and neither is the container: the bundle is used when xtr-dependency-injection is installed
+  beside it.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
 - 🧩 **Protocol-based** — every collaborator is a constructor argument, so a DI container can own the graph.
-- 📨 **Dataclasses or pydantic** — both on one bus; dataclasses are checked for shape, models by their own rules.
+- 🎯 **Messages arrive exactly as they left** — dataclasses and pydantic models on one bus, nested
+  values, decimals, enums, zone-aware dates and class hierarchies included, or refused when sent.
 
 ```python
 await bus.dispatch(IngestDocument(document_id=doc.id))
@@ -44,15 +46,13 @@ Where that goes is configuration. Whether it happens in-process or on RabbitMQ i
 uv add xtr-messenger                           # sync:// and in-memory://
 uv add "xtr-messenger[amqp]"                   # + RabbitMQ
 uv add xtr-messenger taskiq taskiq-redis       # + any other taskiq broker, here Redis
-uv add "xtr-messenger[pydantic]"               # + pydantic messages
 uv add xtr-messenger xtr-dependency-injection  # + the container, for the MessengerBundle
 uv add xtr-console                             # beside it: the messenger:consume console command
 ```
 
 | Extra | Brings | For |
 | --- | --- | --- |
-| *(none)* | `msgspec`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core |
-| `pydantic` | `pydantic` | Messages validated by a model, not just a shape |
+| *(none)* | `xtr-serializer`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core, dataclass and pydantic messages |
 | `amqp` | `taskiq`, `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
 
 Any other taskiq broker is not an extra: the application installs taskiq and that broker's own
@@ -209,6 +209,12 @@ one connection.
 | `in-memory://` | Records what was dispatched, for a worker or a test to drain; `?serialize=true` round-trips it |
 | `amqp://…`, `amqps://…` | RabbitMQ via taskiq |
 
+A transport other than `sync://` writes its messages, so it is built with the envelope
+serializer — `JsonSerializer`, see [Carrying messages exactly](#carrying-messages-exactly). The
+bundle hands it over; without a container, give it to the factory every bus and worker builds
+from: `MessageBusFactory(CONFIG, [TransportFactory(serializer=wire)])`. Producer and worker must
+be built with the same one.
+
 Settings go in the query string or in `options`, whichever suits — a DSN travels in one
 environment variable, `options` survives review once there are several. `options` wins.
 
@@ -271,12 +277,12 @@ import signal
 
 import app.handlers.ingest  # noqa: F401 — importing declares the message and its handler
 
-from app.bus import CONFIG
-from xtr_messenger import WorkerFactory
+from app.bus import CONFIG, wire
+from xtr_messenger import TransportFactory, WorkerFactory
 
 
 async def main() -> None:
-    worker = WorkerFactory(CONFIG).worker(["high"])
+    worker = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)]).worker(["high"])
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, worker.stop)
     await worker.run()
 
@@ -469,7 +475,7 @@ that ran.
 
 One thing does not travel through `LoggerInterface`: a warning an **adapter** has to raise
 while it is still being configured. An `amqp://` transport is built by a discovered factory
-from strings alone — no logger reaches it — so those records go to the standard library's
+from strings and the envelope serializer — no logger reaches it — so those records go to the standard library's
 `logging.getLogger("messenger")` instead. The name is the same `"messenger"` the bundle adds to
 logging's config, so an application capturing the standard library's logging reads them beside
 the bus's own records; one that configures no logging at all still sees them, because that is
@@ -551,8 +557,8 @@ Nothing needs declaring: every bus from `MessageBusFactory` handles a redispatch
 itself, and every worker from `WorkerFactory` through a publishing bus it builds from the same
 configuration on the first redispatch — a worker that never redispatches opens no extra
 connection. With a [kernel](#kernel--bundle) the container's bus does it. A `RedispatchMessage`
-holds an envelope, which no codec carries, so handle it in the process that creates it rather
-than routing it to a remote transport.
+holds an envelope, which no serializer writes, so handle it in the process that creates it
+rather than routing it to a remote transport.
 
 ### Dispatching after the current message
 
@@ -582,25 +588,49 @@ async def place(message: PlaceOrder, bus: Injected[MessageBusInterface]) -> None
   so every configured middleware has finished with the current message first. A worker whose
   message succeeded but whose held-back message failed rejects its message, as any failure.
 
-## Validating messages
+## Carrying messages exactly
 
-Dataclass messages are checked for **shape** by msgspec: a missing or wrongly typed field
-raises `MessageDecodingFailedError` at the boundary rather than arriving half-built. Decoding
-never coerces — `"3"` is not accepted where an `int` is declared.
-
-A field the message does not declare is **ignored**, which is what lets a producer add one
-without redeploying every consumer first. Where both sides ship together and a stray field
-means a typo, ask for the other behaviour:
+Every transport but `sync://` writes a message as JSON and reads it back on the other side.
+`JsonSerializer` does it through [xtr-serializer](../xtr-serializer): the body is written as the
+message's own class and read back as the class its `type` header names, so the message arrives
+equal, and every value inside it has the type its annotation declares — nested dataclasses and
+models, `Decimal`, `UUID`, enums, tuples, sets. A message that would come back changed is
+**refused when it is sent**, with `MessageEncodingFailedError` naming the field, rather than
+arriving different on the consumer.
 
 ```python
-from xtr_messenger import DataclassCodec, JsonSerializer
+from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer
 
-strict = JsonSerializer(codecs=[DataclassCodec(forbid_unknown_fields=True)])
+from xtr_messenger import JsonSerializer
+
+wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))
 ```
 
-For rules a type cannot express, model the message with pydantic. Install the extra and it is
-picked up automatically; both styles work on the same bus. Strictness is the model's own
-choice, so a validator written to normalise its input keeps working.
+With a [kernel](#kernel--bundle) the bundle builds it from the serializer bundle's
+`SerializerInterface`; without one, hand it to whatever writes messages — see
+[Transports](#transports).
+
+- A datetime keeping its zone's name — and the hour the clocks repeat — is annotated
+  `ZonedDateTime`. A plain `datetime` field keeps the offset only, and a naive one is refused.
+- A field typed with a base class carries a subclass when the base declares its hierarchy:
+  `@discriminator_map()` on the base, `@discriminator_name("...")` on each class. The wire
+  names only registered classes, never an import path.
+- Stamps are written the same way, so a [stamp of your own](#stamps-of-your-own) keeps its
+  values too.
+- Decoding never coerces — `"3"` is not accepted where an `int` is declared — and a missing or
+  wrongly typed field raises `MessageDecodingFailedError` at the boundary rather than arriving
+  half-built.
+- A field the message does not declare is **ignored**, which is what lets a producer add one
+  without redeploying every consumer first. Where both sides ship together and a stray field
+  means a typo, refuse it: `ConfigDict(extra="forbid")` on a model, or
+  `Serializer(..., default_context={ALLOW_EXTRA_ATTRIBUTES: False})` for every message.
+
+What arrives is untrusted. A refusal says where the data did not fit and which types were
+involved, never what a value was — though it may name a key the data carried.
+
+For rules a type cannot express, model the message with pydantic; both styles work on the same
+bus. Strictness is the model's own choice, so a validator written to normalise its input keeps
+working.
 
 ```python
 from decimal import Decimal
@@ -645,6 +675,7 @@ typed attributes rather than only a message.
 | `DelayedMessageHandlingError` | A message held back with `DispatchAfterCurrentBusStamp` failed once the current one succeeded |
 | `MessageEncodingFailedError` | A message cannot be put on the wire |
 | `MessageDecodingFailedError`, `UnknownMessageNameError` | A payload cannot be turned back into its message |
+| `MissingSerializerError` | A transport has to write messages — `amqp://`, `in-memory://?serialize=true` — and its factory was given no serializer |
 
 ## Testing your application
 
@@ -659,7 +690,7 @@ CONFIG = MessageBusConfig(
     transports={"jobs": TransportConfig("in-memory://?serialize=true")},
     routing={IngestDocument: "jobs"},
 )
-factories = [InMemoryTransportFactory()]
+factories = [InMemoryTransportFactory(wire)]  # wire: the JsonSerializer above
 
 bus = MessageBusFactory(CONFIG, factories).bus()
 _ = await bus.dispatch(IngestDocument(document_id=doc_id, tenant_id=tenant_id))
@@ -673,7 +704,8 @@ assert jobs.rejected == ()
 ```
 
 `?serialize=true` round-trips every message through the serializer on the way in, so a field
-that would only fail on a real broker fails in the test instead. `sent` keeps the whole history
+that would only fail on a real broker fails in the test instead; it needs the factory built with
+one, and is refused with `MissingSerializerError` otherwise. `sent` keeps the whole history
 while a worker drains the queue, and `clear()` resets it between tests.
 
 ## Transports
@@ -725,12 +757,19 @@ Settings reach a factory through its method arguments — each `TransportConfig`
 because settings belong to a transport, not to a factory. One discovered `amqp://` factory
 serves two transports pointing at different queues with different retry policies.
 
-A *collaborator* cannot arrive that way. A serializer is an object, not a string, so supplying
-one means passing the factory yourself:
+One *collaborator* is handed to a discovered factory: the envelope serializer, which is the same
+for every transport. A factory whose constructor takes a `serializer` parameter is built with the
+one `TransportFactory(serializer=...)` holds; one requiring it, discovered without, is refused
+with `MissingSerializerError` the first time its scheme is used — so a `sync://` application
+needs none:
 
 ```python
-MessageBusFactory(CONFIG, [AmqpTransportFactory(serializer=mine)]).bus()
+MessageBusFactory(CONFIG, [TransportFactory(serializer=wire)]).bus()
 ```
+
+Any other collaborator is an object discovery cannot supply, so it means passing the factory
+yourself — `[AmqpTransportFactory(wire, options=AmqpOptions(...))]`, `AmqpOptions` imported from
+`xtr_messenger.bridge.amqp.amqp_options`.
 
 Handlers never reach a transport at all. Only the bus calls them, and every transport hands
 messages to a bus instead — `sync://` hands the envelope straight back marked received, and a
@@ -754,8 +793,8 @@ Everything adding this package to an application on
 [xtr-dependency-injection](../xtr-dependency-injection) takes — and, read backwards, what removing it undoes.
 
 - **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
-  installed beside it, never as an extra. Add `amqp` or `pydantic` for what you use, or install
-  taskiq and its broker's own package beside it for any other taskiq broker. Install xtr-console
+  installed beside it, never as an extra. Add `amqp` for RabbitMQ, or install taskiq and its
+  broker's own package beside it for any other taskiq broker. Install xtr-console
   beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
   xtr-event-dispatcher to hear the worker events.
 - **Recipe** — `uv run xtr-recipes recipes:sync` does the *Activate*, *Configure* and
@@ -765,8 +804,9 @@ Everything adding this package to an application on
   a recipe cannot make for you.
 - **Activate** — `MessengerBundle: {"all": True}` in `BUNDLES` in `<app>/config/bundles.py`, imported
   from `xtr_messenger.bundle`.
-- **Brings along** — the logging, console and event dispatcher bundles, when those packages
-  are installed.
+- **Brings along** — the [serializer bundle](../xtr-serializer) always, because this bundle
+  requires it: every message is written through its `SerializerInterface`. The logging, console
+  and event dispatcher bundles, when those packages are installed.
 - **Configure** — needed to move a message: with no configuration there are no transports, and
   a message routed nowhere is neither sent nor handled. Transports and routing go in
   `<app>/config/packages/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
@@ -843,8 +883,11 @@ class IssueInvoiceHandler:
 ```
 
 The bundle registers a `MessageBusInterface`, a `WorkerFactory` (and the `messenger:consume`
-command when the console bundle is active), and a per-kernel `HandlersLocator`. Every
-handler its scan finds is bound with `bind_callable` at boot, so a handler asking for
+command when the console bundle is active), a per-kernel `HandlersLocator`, and the envelope
+serializer under this package's `SerializerInterface` — a `JsonSerializer` writing through the
+serializer bundle's `SerializerInterface`, handed to every discovered transport that writes
+messages. Configure that serializer — its default context, say — through the serializer bundle.
+Every handler its scan finds is bound with `bind_callable` at boot, so a handler asking for
 something the container cannot provide fails at boot, not on its first message.
 
 Container dependencies reach a handler only through a container marker. A **function
@@ -902,8 +945,9 @@ A class in the application — or another bundle — that implements `TransportF
 is registered automatically and consulted **ahead of** the factories discovery finds by entry
 point, in registration order. That is how an app serves a private DSN scheme, or overrides a
 discovered one, without passing a factory list by hand — the class needs no decorator beyond
-living in a scanned module and being buildable with no arguments. With none registered the
-bundle falls back to entry-point discovery, so a zero-config app keeps working:
+living in a scanned module and being buildable by the container; one that writes messages
+takes this package's `SerializerInterface`. With none registered the bundle falls back to
+entry-point discovery, so a zero-config app keeps working:
 
 ```python
 from collections.abc import Mapping
@@ -976,7 +1020,7 @@ xtr_messenger/
 │   ├── sender/              SenderInterface, SendersLocator — the routing table
 │   ├── receiver/            ReceiverInterface, ChainedReceiver
 │   ├── sync/  in_memory/    a transport and its factory, each
-│   └── serialization/       the wire format, and codec/ for message shapes
+│   └── serialization/       the wire format: bodies and stamps through xtr-serializer
 ├── bridge/
 │   ├── taskiq/              broker-agnostic publish and consume
 │   └── amqp/                RabbitMQ on top of it
@@ -984,6 +1028,23 @@ xtr_messenger/
 │   └── consume.py           messenger:consume, on xtr-console
 └── bundle/                  MessengerBundle for xtr-dependency-injection
 ```
+
+## Known limitations
+
+- A plain `datetime` field holding a zone's time in the hour the clocks repeat or skip is
+  refused when the message is sent — annotate it `ZonedDateTime`, or store UTC.
+- A message class not declared with `@as_message` is written, under its import path, but never
+  read back: the consumer only resolves declared names.
+- A set or frozenset of integers chosen to collide costs quadratic time to read off the wire —
+  cap the message size at the broker.
+- The serializer bundle's default context applies to envelopes too: `SKIP_NULL_VALUES`,
+  `ATTRIBUTES` and the like shorten what is written, and the consumer refuses a message or stamp
+  missing a field it requires.
+- Discovery hands the serializer only to a constructor parameter named `serializer`.
+- A `Decimal`'s exponent is not bounded — bound it with `Field(max_digits=...)` on a field read
+  from untrusted producers.
+- Stamps come back grouped by class: the order among stamps of one class is kept, the order
+  between classes is not.
 
 ## Development
 

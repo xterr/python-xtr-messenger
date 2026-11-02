@@ -10,10 +10,12 @@ arrived through taskiq, through the library's own worker, or through
 
     import app.handlers.ingest  # noqa: F401 — declares the message and its handler
 
-    bind_bus(broker, MessageBusFactory(CONFIG, logger=logger).bus())
+    bind_bus(broker, MessageBusFactory(CONFIG, logger=logger).bus(), serializer)
 
 A bus from the factory runs the middleware the configuration names; what it
 dispatches arrives received, so it is handled rather than routed again.
+``serializer`` must read what the producer's wrote — build both from the same
+configuration.
 
 Given an event dispatcher, each task announces its message the way the
 library's own worker does — received, then handled or failed — so listeners
@@ -24,17 +26,17 @@ taskiq's retry and dead-letter middleware to act on.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, TypeAlias, final
+from typing import TYPE_CHECKING, TypeAlias, cast, final
 
-import msgspec
 from taskiq import Context, TaskiqDepends, TaskiqMessage
 
 from xtr_messenger._handling import Failed, announce_failure, handle
 from xtr_messenger.exception import MessageDecodingFailedError
 from xtr_messenger.message_registry import declared_names, name_of
 from xtr_messenger.stamp import ReceivedStamp, RedeliveryStamp
-from xtr_messenger.transport.serialization import EncodedEnvelope, JsonSerializer
+from xtr_messenger.transport.serialization import EncodedEnvelope
 
 from .labels import HEADERS_LABEL, QUEUE_LABEL, retries_from
 
@@ -132,7 +134,7 @@ class _Binding:
 def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     broker: AsyncBroker,
     bus: MessageBusInterface,
-    serializer: SerializerInterface | None = None,
+    serializer: SerializerInterface,
     *,
     event_dispatcher: EventDispatcherInterface | None = None,
     receiver_names: Mapping[str | None, str] | None = None,
@@ -149,7 +151,7 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     Args:
         broker: The broker to register the tasks on.
         bus: What each task dispatches its message into.
-        serializer: How messages were encoded; JSON when omitted.
+        serializer: What reads each message back, as the producer wrote it.
         event_dispatcher: Hears the worker events of
             :mod:`xtr_messenger.event` for every message.
         receiver_names: The transport name for each queue the broker
@@ -171,7 +173,7 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     """
     binding = _Binding(
         bus=bus,
-        serializer=serializer if serializer is not None else JsonSerializer(),
+        serializer=serializer,
         dispatcher=event_dispatcher,
         receiver_names=receiver_names if receiver_names is not None else {},
         max_attempts=max_attempts,
@@ -246,14 +248,23 @@ def _rebuild(
 
 
 def _headers_from(raw: object, task_name: str) -> dict[str, str]:
+    """Read the headers label, refusing anything but a JSON object of strings.
+
+    The label arrives from the broker, so the refusal names what it should have
+    held, never what it did.
+    """
     if not isinstance(raw, str):
         return {"type": task_name}
     try:
-        return msgspec.json.decode(raw, type=dict[str, str])
-    except msgspec.DecodeError as exc:
-        raise MessageDecodingFailedError(
-            f"headers label must hold a JSON object of strings: {exc}", task_name
-        ) from exc
+        parsed = cast("object", json.loads(raw))
+    except (ValueError, RecursionError):
+        parsed = None
+    if isinstance(parsed, dict):
+        items = cast("dict[object, object]", parsed).items()
+        headers = {k: v for k, v in items if isinstance(k, str) and isinstance(v, str)}
+        if len(headers) == len(items):
+            return headers
+    raise MessageDecodingFailedError("headers label must hold a JSON object of strings", task_name)
 
 
 def _attempt_from(labels: Mapping[str, object]) -> int:

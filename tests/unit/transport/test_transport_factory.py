@@ -5,8 +5,15 @@ from typing import TYPE_CHECKING, final
 import pytest
 from typing_extensions import override
 
+from tests.support.messages import (
+    assert_dispatch_invoice_is_exact,
+    dispatch_invoice,
+)
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     Dsn,
+    Envelope,
+    MissingSerializerError,
     PublisherClosingInterface,
     TransportConfig,
     TransportFactory,
@@ -100,11 +107,31 @@ def test_the_composite_is_itself_a_transport_factory() -> None:
 
 
 def test_it_discovers_by_scheme_when_given_no_factories() -> None:
-    composite = TransportFactory()
+    composite = TransportFactory(serializer=json_serializer())
 
     assert composite.supports(Dsn.parse("sync://"))
     assert composite.supports(Dsn.parse("amqp://h:5672/"))
     assert not composite.supports(Dsn.parse("carrier-pigeon://"))
+
+
+def test_discovery_refuses_a_scheme_needing_a_serializer_it_was_not_given() -> None:
+    composite = TransportFactory()
+
+    with pytest.raises(MissingSerializerError) as raised:
+        _ = composite.supports(Dsn.parse("amqp://h:5672/"))
+
+    assert raised.value.scheme == "amqp"
+
+
+async def test_discovery_hands_its_serializer_to_the_factory_it_builds() -> None:
+    composite = TransportFactory(serializer=json_serializer())
+    transport = composite.create(a_group("in-memory://?serialize=true"))["t"]
+    assert isinstance(transport, InMemoryTransport)
+    sent = dispatch_invoice()
+
+    _ = await transport.send(Envelope(sent))
+
+    assert_dispatch_invoice_is_exact(transport.messages[0], sent)
 
 
 def test_an_explicit_list_replaces_discovery_entirely() -> None:
@@ -214,7 +241,8 @@ async def test_closing_publishers_reaches_what_discovery_loaded(
     would have to be imported to be asked."""
     broker = BrokerFactory()
 
-    def only_the_fake(dsn: Dsn) -> TransportFactoryInterface | None:
+    def only_the_fake(dsn: Dsn, serializer: object) -> TransportFactoryInterface | None:
+        del serializer
         return broker if broker.supports(dsn) else None
 
     monkeypatch.setattr(transport_factory, "factory_for", only_the_fake)

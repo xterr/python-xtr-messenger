@@ -190,9 +190,8 @@ def _supplied_by_container(hint: object) -> bool:
 
     Asked of the container package itself — ``Injected[T]``, ``Autowire(...)`` and
     ``Target(...)`` all count — so the bus and the container never disagree.
-    Detected rather than required, the same way a pydantic codec is: with no
-    container installed there is nothing to recognise, so this cannot change
-    behaviour.
+    Detected rather than required: with no container installed there is
+    nothing to recognise, so this cannot change behaviour.
     """
     check = _container_check()
     return check is not None and check(hint)

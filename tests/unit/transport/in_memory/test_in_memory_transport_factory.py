@@ -5,13 +5,17 @@ from typing import final
 import pytest
 from typing_extensions import override
 
-from tests.support.messages import ingest_document
+from tests.support.messages import (
+    assert_dispatch_invoice_is_exact,
+    dispatch_invoice,
+    ingest_document,
+)
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     Dsn,
     EncodedEnvelope,
     Envelope,
-    JsonSerializer,
-    MessageEncodingFailedError,
+    MissingSerializerError,
     SerializerInterface,
     TransportConfig,
     UnknownTransportOptionError,
@@ -27,7 +31,7 @@ class SpySerializer(SerializerInterface):
     """A serializer that counts its encodes, delegating to a real one."""
 
     def __init__(self) -> None:
-        self._inner = JsonSerializer()
+        self._inner = json_serializer()
         self.encodes = 0
 
     @override
@@ -83,14 +87,24 @@ async def test_serialize_true_round_trips_through_the_given_serializer() -> None
     assert serializer.encodes == 1
 
 
-async def test_serialize_true_uses_a_default_serializer_when_none_is_given() -> None:
-    """With serialize on and no serializer configured, an unserializable
-    message still fails at the boundary rather than in production."""
-    factory = InMemoryTransportFactory()
-    built = factory.create({"test": TransportConfig("in-memory://?serialize=true")})
+async def test_serialize_true_carries_a_message_exactly() -> None:
+    factory = InMemoryTransportFactory(serializer=json_serializer())
+    transport = factory.create({"test": TransportConfig("in-memory://?serialize=true")})["test"]
+    assert isinstance(transport, InMemoryTransport)
+    sent = dispatch_invoice()
 
-    with pytest.raises(MessageEncodingFailedError):
-        _ = await built["test"].send(Envelope("not a dataclass"))
+    _ = await transport.send(Envelope(sent))
+
+    assert_dispatch_invoice_is_exact(transport.messages[0], sent)
+
+
+def test_serialize_true_without_a_serializer_is_refused_naming_the_setting() -> None:
+    group = {"test": TransportConfig("in-memory://?serialize=true")}
+
+    with pytest.raises(MissingSerializerError, match="serialize") as raised:
+        _ = InMemoryTransportFactory().create(group)
+
+    assert raised.value.scheme == "in-memory"
 
 
 async def test_without_serialize_the_transport_records_without_round_tripping() -> None:

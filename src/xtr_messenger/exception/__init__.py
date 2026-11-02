@@ -18,6 +18,7 @@ from .invalid_transport_option_error import InvalidTransportOptionError
 from .message_bus_error import MessageBusError
 from .message_decoding_failed_error import MessageDecodingFailedError
 from .message_encoding_failed_error import MessageEncodingFailedError
+from .missing_serializer_error import MissingSerializerError
 from .mixed_dsn_error import MixedDsnError
 from .no_handler_for_message_error import NoHandlerForMessageError
 from .no_sender_for_message_error import NoSenderForMessageError
@@ -40,6 +41,7 @@ __all__ = [
     "MessageBusError",
     "MessageDecodingFailedError",
     "MessageEncodingFailedError",
+    "MissingSerializerError",
     "MixedDsnError",
     "NoHandlerForMessageError",
     "NoSenderForMessageError",

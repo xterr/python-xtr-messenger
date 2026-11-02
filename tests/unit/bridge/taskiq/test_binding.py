@@ -12,10 +12,10 @@ from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.fakes import RecordingBus
 from tests.support.messages import AnalyseDocument, ingest_document
+from tests.support.serialization import json_serializer
 from xtr_messenger import (
     Envelope,
     ErrorDetailsStamp,
-    JsonSerializer,
     MessageDecodingFailedError,
     ReceivedStamp,
     RedeliveryStamp,
@@ -46,7 +46,7 @@ def broker() -> InMemoryBroker:
 
 def _body() -> tuple[str, str]:
     """Return an encoded IngestDocument body and its headers label."""
-    encoded = JsonSerializer().encode(Envelope.wrap(ingest_document()))
+    encoded = json_serializer().encode(Envelope.wrap(ingest_document()))
     return encoded.body, json.dumps(encoded.headers)
 
 
@@ -62,7 +62,7 @@ async def _kick(
 
 
 async def test_it_registers_a_task_per_declared_name(broker: InMemoryBroker) -> None:
-    names = bind_bus(broker, RecordingBus())
+    names = bind_bus(broker, RecordingBus(), json_serializer())
 
     assert names == declared_names()
     assert _INGEST in names
@@ -71,7 +71,7 @@ async def test_it_registers_a_task_per_declared_name(broker: InMemoryBroker) -> 
 
 async def test_a_task_rebuilds_the_envelope_and_dispatches_it(broker: InMemoryBroker) -> None:
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -84,7 +84,7 @@ async def test_a_task_rebuilds_the_envelope_and_dispatches_it(broker: InMemoryBr
 
 async def test_the_attempt_comes_from_the_retries_label(broker: InMemoryBroker) -> None:
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 2, HEADERS_LABEL: headers})
@@ -98,7 +98,7 @@ async def test_a_missing_retry_label_reads_as_a_very_late_attempt(broker: InMemo
     """The sender always sets ``_retries``; its absence is anomalous, so a
     handler's "is this the final try?" check errs on the safe side."""
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{HEADERS_LABEL: headers})
@@ -112,7 +112,7 @@ async def test_an_unreadable_retry_label_reads_as_a_very_late_attempt(
     broker: InMemoryBroker,
 ) -> None:
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: "later", HEADERS_LABEL: headers})
@@ -126,7 +126,7 @@ async def test_a_boolean_retry_label_reads_as_a_very_late_attempt(broker: InMemo
     """A boolean is not a count: taskiq round-trips it as one, so it is
     rejected rather than coerced to 0 or 1."""
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: True, HEADERS_LABEL: headers})
@@ -140,7 +140,7 @@ async def test_a_missing_headers_label_types_by_the_task_name(broker: InMemoryBr
     """Without the headers label the type is taken from the task name, which
     is the message's own name — enough to decode the body."""
     bus = RecordingBus()
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, _headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0})
@@ -148,15 +148,21 @@ async def test_a_missing_headers_label_types_by_the_task_name(broker: InMemoryBr
     assert type(bus.dispatched[0].message).__name__ == "IngestDocument"
 
 
-async def test_a_malformed_headers_label_fails_loudly(broker: InMemoryBroker) -> None:
-    _ = bind_bus(broker, RecordingBus())
+@pytest.mark.parametrize(
+    "label",
+    ["not json", '{"type": 1}', '["test.ingest.v1"]', "[" * 100_000],
+    ids=["not-json", "non-string-value", "not-an-object", "nested-past-the-parser"],
+)
+async def test_a_malformed_headers_label_fails_loudly(broker: InMemoryBroker, label: str) -> None:
+    _ = bind_bus(broker, RecordingBus(), json_serializer())
     body, _headers = _body()
 
-    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: label})
     result = await handle.wait_result()
 
     assert result.is_err
     assert isinstance(result.error, MessageDecodingFailedError)
+    assert result.error.reason == "headers label must hold a JSON object of strings"
 
 
 async def test_a_body_whose_type_does_not_match_the_task_fails_loudly(
@@ -165,8 +171,8 @@ async def test_a_body_whose_type_does_not_match_the_task_fails_loudly(
     """The task is invoked under one name; a body that decodes to a different
     declared message is a mismatch, refused rather than dispatched as the
     wrong type."""
-    _ = bind_bus(broker, RecordingBus())
-    other = JsonSerializer().encode(Envelope.wrap(AnalyseDocument(document_id=uuid4())))
+    _ = bind_bus(broker, RecordingBus(), json_serializer())
+    other = json_serializer().encode(Envelope.wrap(AnalyseDocument(document_id=uuid4())))
 
     handle = await _kick(
         broker, _INGEST, other.body, **{RETRIES_LABEL: 0, HEADERS_LABEL: json.dumps(other.headers)}
@@ -181,7 +187,7 @@ async def test_a_bus_failure_propagates_to_taskiq(broker: InMemoryBroker) -> Non
     """A failed dispatch reaches taskiq as an error, so its retry and
     dead-letter machinery can act on it."""
     bus = RecordingBus(failure=RuntimeError("boom"))
-    _ = bind_bus(broker, bus)
+    _ = bind_bus(broker, bus, json_serializer())
     body, headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -195,8 +201,8 @@ async def test_a_bus_failure_propagates_to_taskiq(broker: InMemoryBroker) -> Non
 async def test_binding_twice_lets_the_last_bus_win(broker: InMemoryBroker) -> None:
     """Binding again is harmless: each task replaces the one under its name."""
     first, second = RecordingBus(), RecordingBus()
-    names_first = bind_bus(broker, first)
-    names_second = bind_bus(broker, second)
+    names_first = bind_bus(broker, first, json_serializer())
+    names_second = bind_bus(broker, second, json_serializer())
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -226,7 +232,13 @@ async def test_a_task_announces_its_message_as_the_library_worker_does(
 ) -> None:
     dispatcher = EventDispatcher()
     seen = _names_seen(dispatcher)
-    _ = bind_bus(broker, RecordingBus(), event_dispatcher=dispatcher, receiver_names={None: "jobs"})
+    _ = bind_bus(
+        broker,
+        RecordingBus(),
+        json_serializer(),
+        event_dispatcher=dispatcher,
+        receiver_names={None: "jobs"},
+    )
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -238,7 +250,7 @@ async def test_the_received_stamp_names_the_transport_by_its_queue(
     broker: InMemoryBroker,
 ) -> None:
     bus = RecordingBus()
-    _ = bind_bus(broker, bus, receiver_names={None: "default", "urgent": "high"})
+    _ = bind_bus(broker, bus, json_serializer(), receiver_names={None: "default", "urgent": "high"})
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -257,7 +269,7 @@ async def test_the_received_stamp_names_the_transport_by_its_queue(
 
 async def test_a_queue_no_transport_serves_reads_as_taskiq(broker: InMemoryBroker) -> None:
     bus = RecordingBus()
-    _ = bind_bus(broker, bus, receiver_names={"a": "first", "b": "second"})
+    _ = bind_bus(broker, bus, json_serializer(), receiver_names={"a": "first", "b": "second"})
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -275,7 +287,7 @@ async def test_a_skipped_message_returns_normally_without_dispatching(
 
     dispatcher.add_listener(WorkerMessageReceivedEvent, skip)
     bus = RecordingBus()
-    _ = bind_bus(broker, bus, event_dispatcher=dispatcher)
+    _ = bind_bus(broker, bus, json_serializer(), event_dispatcher=dispatcher)
     body, headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -298,6 +310,7 @@ async def test_a_failure_is_announced_then_raised_saying_whether_it_is_retried(
     _ = bind_bus(
         broker,
         RecordingBus(failure=RuntimeError("boom")),
+        json_serializer(),
         event_dispatcher=dispatcher,
         max_attempts=3,
     )
@@ -316,7 +329,12 @@ async def test_without_max_attempts_no_failure_claims_a_retry(broker: InMemoryBr
     dispatcher = EventDispatcher()
     failures: list[WorkerMessageFailedEvent] = []
     dispatcher.add_listener(WorkerMessageFailedEvent, failures.append)
-    _ = bind_bus(broker, RecordingBus(failure=RuntimeError("boom")), event_dispatcher=dispatcher)
+    _ = bind_bus(
+        broker,
+        RecordingBus(failure=RuntimeError("boom")),
+        json_serializer(),
+        event_dispatcher=dispatcher,
+    )
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -339,7 +357,7 @@ async def test_services_are_reset_after_a_handled_message(broker: InMemoryBroker
     """The library's own worker resets after each message; a task bound here
     owes the same, or request-scoped services leak across messages."""
     resetter = CountingResetter()
-    _ = bind_bus(broker, RecordingBus(), resetter=resetter)
+    _ = bind_bus(broker, RecordingBus(), json_serializer(), resetter=resetter)
     body, headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -349,7 +367,9 @@ async def test_services_are_reset_after_a_handled_message(broker: InMemoryBroker
 
 async def test_services_are_reset_after_a_failed_message(broker: InMemoryBroker) -> None:
     resetter = CountingResetter()
-    _ = bind_bus(broker, RecordingBus(failure=RuntimeError("boom")), resetter=resetter)
+    _ = bind_bus(
+        broker, RecordingBus(failure=RuntimeError("boom")), json_serializer(), resetter=resetter
+    )
     body, headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
@@ -361,7 +381,7 @@ async def test_services_are_reset_after_a_failed_message(broker: InMemoryBroker)
 
 async def test_services_are_reset_after_an_undecodable_message(broker: InMemoryBroker) -> None:
     resetter = CountingResetter()
-    _ = bind_bus(broker, RecordingBus(), resetter=resetter)
+    _ = bind_bus(broker, RecordingBus(), json_serializer(), resetter=resetter)
     body, _headers = _body()
 
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
@@ -381,7 +401,7 @@ async def test_an_undecodable_message_is_dead_lettered_instead_of_retried(
         quarantined.append((message, error))
 
     bus = RecordingBus()
-    _ = bind_bus(broker, bus, dead_letter=dead_letter)
+    _ = bind_bus(broker, bus, json_serializer(), dead_letter=dead_letter)
     body, _headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
@@ -397,7 +417,7 @@ async def test_an_undecodable_message_is_dead_lettered_instead_of_retried(
 async def test_without_a_quarantine_an_undecodable_message_still_fails(
     broker: InMemoryBroker,
 ) -> None:
-    _ = bind_bus(broker, RecordingBus())
+    _ = bind_bus(broker, RecordingBus(), json_serializer())
     body, _headers = _body()
 
     handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})

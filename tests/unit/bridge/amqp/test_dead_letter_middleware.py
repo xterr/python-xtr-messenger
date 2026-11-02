@@ -7,10 +7,10 @@ attempt instead, so exhausted work can be inspected and replayed.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+import json
+from typing import TYPE_CHECKING, cast, final
 from uuid import uuid4
 
-import msgspec
 import pytest
 from aio_pika import Connection, Exchange, Message
 from aio_pika.channel import Channel
@@ -122,7 +122,7 @@ async def test_the_dead_lettered_message_is_replayable() -> None:
 
     published, _ = exchange.published[0]
     assert isinstance(published, Message)
-    replayed = msgspec.json.decode(published.body, type=dict[str, object])
+    replayed = cast("dict[str, object]", json.loads(published.body))
     assert replayed["task_name"] == "test.ingest.v1"
     assert replayed["task_id"] == message.task_id
     assert replayed["args"] == ['{"document_id": "x"}']

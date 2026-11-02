@@ -15,11 +15,13 @@ import sys
 
 def test_the_bundles_factory_never_imports_a_broker_library_for_sync_only() -> None:
     code = (
-        "from xtr_messenger import TransportConfig\n"
+        "from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer\n"
+        "from xtr_messenger import JsonSerializer, TransportConfig\n"
         "from xtr_messenger.bundle._services import (\n"
         "    BuiltTransports, combined_transport_factory,\n"
         ")\n"
-        "factory = combined_transport_factory(BuiltTransports())\n"
+        "wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))\n"
+        "factory = combined_transport_factory(BuiltTransports(), wire)\n"
         "senders = factory.create({'s': TransportConfig('sync://')})\n"
         "assert senders\n"
         "import sys\n"
@@ -39,7 +41,9 @@ def test_registered_factories_still_come_ahead_of_discovery_without_eager_import
     lazy too: the registered factory serves its scheme, and no broker library
     is imported for it."""
     code = (
-        "from xtr_messenger import Dsn, TransportConfig, TransportFactoryInterface\n"
+        "from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer\n"
+        "from xtr_messenger import Dsn, JsonSerializer, TransportConfig\n"
+        "from xtr_messenger import TransportFactoryInterface\n"
         "from xtr_messenger.bundle._services import (\n"
         "    BuiltTransports, combined_transport_factory_with,\n"
         ")\n"
@@ -49,7 +53,8 @@ def test_registered_factories_still_come_ahead_of_discovery_without_eager_import
         "    def create(self, group):\n"
         "        return {name: object() for name in group}\n"
         "mine = Mine()\n"
-        "factory = combined_transport_factory_with([mine], BuiltTransports())\n"
+        "wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))\n"
+        "factory = combined_transport_factory_with([mine], BuiltTransports(), wire)\n"
         "assert factory.serving({'s': TransportConfig('sync://')}) is mine\n"
         "import sys\n"
         "assert 'taskiq' not in sys.modules, 'taskiq imported for a sync-only app'\n"

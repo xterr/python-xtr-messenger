@@ -4,7 +4,8 @@ Dispatch wraps a message in an :class:`Envelope` and walks it through a
 middleware chain. MiddlewareInterface records what it did by appending a
 :class:`StampInterface`; routing sends the envelope to one or more named transports.
 
-The core has no third-party dependencies. Transports that need one live
+A message crossing a transport is written and read back with xtr-serializer,
+so it arrives exactly as it left. Transports that need a broker library live
 behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
 """
 
@@ -25,6 +26,7 @@ from .exception import (
     MessageBusError,
     MessageDecodingFailedError,
     MessageEncodingFailedError,
+    MissingSerializerError,
     MixedDsnError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
@@ -86,9 +88,7 @@ from .transport.serialization import (
     EncodedEnvelope,
     JsonSerializer,
     SerializerInterface,
-    default_codecs,
 )
-from .transport.serialization.codec import DataclassCodec, MessageCodecInterface
 from .transport.sync import SyncTransport, SyncTransportFactory
 from .transport.transport_config import TransportConfig
 from .transport.transport_factory import TransportFactory
@@ -112,7 +112,6 @@ except PackageNotFoundError:  # pragma: no cover
 
 __all__ = [
     "AckReceiptStamp",
-    "DataclassCodec",
     "DelayStamp",
     "DelayedMessageHandlingError",
     "DispatchAfterCurrentBusMiddleware",
@@ -142,10 +141,10 @@ __all__ = [
     "MessageBusError",
     "MessageBusFactory",
     "MessageBusInterface",
-    "MessageCodecInterface",
     "MessageDecodingFailedError",
     "MessageEncodingFailedError",
     "MiddlewareInterface",
+    "MissingSerializerError",
     "MixedDsnError",
     "NoHandlerForMessageError",
     "NoSenderForMessageError",
@@ -190,7 +189,6 @@ __all__ = [
     "as_stamp",
     "declared_names",
     "declared_stamps",
-    "default_codecs",
     "default_factories",
     "default_registry",
     "name_of",

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, final
 
 from typing_extensions import override
 
-from xtr_messenger.transport.serialization import JsonSerializer
+from xtr_messenger.exception import MissingSerializerError
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
 from xtr_messenger.transport.transport_options import as_bool, reject_unknown_options
 
@@ -41,7 +41,11 @@ class InMemoryTransportFactory(TransportFactoryInterface):
     __slots__ = ("_made", "_serializer")
 
     def __init__(self, serializer: SerializerInterface | None = None) -> None:
-        """Round-trip through ``serializer`` when a transport asks to."""
+        """Round-trip through ``serializer`` when a transport asks to.
+
+        Built without one, its transports record what they are handed as it
+        is, and one asking for ``?serialize=true`` is refused.
+        """
         self._serializer = serializer
         self._made: dict[str, InMemoryTransport] = {}
 
@@ -57,6 +61,12 @@ class InMemoryTransportFactory(TransportFactoryInterface):
         ``?serialize=true`` makes a recorder round-trip every message through
         the serializer, which turns an unserializable field into a test
         failure rather than a production one.
+
+        Raises:
+            UnknownTransportOptionError: If the DSN carries a setting this
+                transport does not accept.
+            MissingSerializerError: If a DSN asks for ``serialize=true`` and
+                this factory was built without a serializer.
         """
         return {name: self._transport(name, config) for name, config in group.items()}
 
@@ -68,13 +78,11 @@ class InMemoryTransportFactory(TransportFactoryInterface):
         return made
 
     def _serializer_for(self, config: TransportConfig) -> SerializerInterface | None:
-        """Return the serializer this transport round-trips through, if any.
-
-        Raises:
-            UnknownTransportOptionError: If the DSN carries a setting this
-                transport does not accept.
-        """
+        """Return the serializer this transport round-trips through, if any."""
         reject_unknown_options(IN_MEMORY_SCHEME, config.settings, IN_MEMORY_OPTIONS)
         if not as_bool(config.settings, "serialize"):
             return None
-        return self._serializer if self._serializer is not None else JsonSerializer()
+        if self._serializer is None:
+            reason = "serialize=true round-trips through one, and this factory was built without"
+            raise MissingSerializerError(IN_MEMORY_SCHEME, reason)
+        return self._serializer

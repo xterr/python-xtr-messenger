@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pathlib
 
-from xtr_messenger import Dsn
+import pytest
+
+from tests.support.serialization import json_serializer
+from xtr_messenger import Dsn, MissingSerializerError
 from xtr_messenger.transport import transport_factory_discovery as discovery
 from xtr_messenger.transport.transport_factory_discovery import (
     ENTRY_POINT_GROUP,
@@ -29,17 +32,28 @@ def test_an_unadvertised_scheme_resolves_to_nothing() -> None:
     assert factory_for(Dsn.parse("carrier-pigeon://")) is None
 
 
+def test_a_factory_needing_a_serializer_is_built_with_the_one_given() -> None:
+    factory = factory_for(Dsn.parse("amqp://h:5672/"), json_serializer())
+
+    assert type(factory).__name__ == "AmqpTransportFactory"
+
+
+def test_a_factory_needing_a_serializer_is_refused_without_one() -> None:
+    with pytest.raises(MissingSerializerError, match="amqp"):
+        _ = factory_for(Dsn.parse("amqp://h:5672/"))
+
+
 def test_default_factories_does_not_repeat_a_factory_serving_two_schemes() -> None:
     """amqp and amqps share one factory, which must be listed once."""
-    names = [type(f).__name__ for f in default_factories()]
+    names = [type(f).__name__ for f in default_factories(json_serializer())]
 
     assert len(names) == len(set(names))
 
 
 def test_default_factories_includes_the_builtin_factories() -> None:
-    names = {type(f).__name__ for f in default_factories()}
+    names = {type(f).__name__ for f in default_factories(json_serializer())}
 
-    assert {"SyncTransportFactory", "InMemoryTransportFactory"} <= names
+    assert {"SyncTransportFactory", "InMemoryTransportFactory", "AmqpTransportFactory"} <= names
 
 
 def test_the_group_name_is_part_of_the_public_contract() -> None:

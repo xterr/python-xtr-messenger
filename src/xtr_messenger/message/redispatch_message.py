@@ -23,7 +23,7 @@ class RedispatchMessage:
     overrides routing for that one dispatch; left empty, the routing table
     decides, as it would for any dispatch.
 
-    It holds an envelope, which no codec carries, so it lives only in the
+    It holds an envelope, which no serializer writes, so it lives only in the
     process that dispatches it: handle it where it is created rather than
     routing it to a transport.
     """
