@@ -257,7 +257,8 @@ the `amqp` extra. It prints the step to name and route your transports, which a 
 make for you.
 
 1. **Install** — `uv add xtr-messenger xtr-dependency-injection`: the bundle needs the container
-   installed beside it, never as an extra. Add `amqp` for RabbitMQ, or install taskiq and its
+   installed beside it, never as an extra. Add `amqp` for RabbitMQ — it installs
+   xtr-amqp-messenger — or install taskiq and its
    broker's own package beside it for any other taskiq broker. Install xtr-console
    beside it for `messenger:consume`, xtr-logging for a `messenger` log channel, and
    xtr-event-dispatcher to hear the worker events.

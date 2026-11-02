@@ -24,9 +24,9 @@ type to one or more named **transports**. Nothing at the dispatch site knows whi
 
 - 🪶 **Four core dependencies** — [xtr-serializer](../xtr-serializer) (and through it
   pydantic), `typing-extensions`, and two interface-only packages, `xtr-logging-contracts` and
-  `xtr-event-dispatcher-contracts`. No broker is a dependency — RabbitMQ is the `amqp` extra —
-  and neither is the container: the bundle is used when xtr-dependency-injection is installed
-  beside it.
+  `xtr-event-dispatcher-contracts`. No broker is a dependency — RabbitMQ is
+  [xtr-amqp-messenger](../xtr-amqp-messenger), the `amqp` extra — and neither is the container:
+  the bundle is used when xtr-dependency-injection is installed beside it.
 - 🔌 **Transports are discovered** — one entry point adds a scheme; no fork, no registry to edit.
 - 💤 **Lazily loaded** — an app speaking `sync://` never imports a broker library.
 - 🎯 **Handlers run in one place** — the same way in-process, in a worker, or under a broker's own loop.
@@ -54,13 +54,13 @@ uv add xtr-console                             # beside it: the messenger:consum
 | Extra | Brings | For |
 | --- | --- | --- |
 | *(none)* | `xtr-serializer`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core, dataclass and pydantic messages |
-| `amqp` | `taskiq`, `taskiq-aio-pika` | RabbitMQ, with retries and real dead-lettering |
+| `amqp` | [xtr-amqp-messenger](../xtr-amqp-messenger) — and through it `taskiq`, `taskiq-aio-pika` | `amqp://`: RabbitMQ, with retries and real dead-lettering |
 | `orm` | [xtr-orm-messenger](../xtr-orm-messenger) | `orm://`: messages in a table on an [xtr-orm](../xtr-orm) connection |
 
 Any other taskiq broker is not an extra: the application installs taskiq and that broker's own
 package itself — `taskiq-redis` above — and the [taskiq bridge](#transports) publishes and
-consumes through it. The one xtr package that is an extra is the transport behind `orm`, a
-transport like `amqp`'s: no other is. Installed beside it,
+consumes through it. The only xtr packages that are extras are the transports behind `amqp` and
+`orm`: no other is. Installed beside it,
 [xtr-dependency-injection](../xtr-dependency-injection) brings the `MessengerBundle` and
 [xtr-console](https://github.com/xterr/python-xtr-console) the `messenger:consume` command; the
 bus and its workers run without either.
@@ -210,7 +210,7 @@ one connection.
 | --- | --- |
 | `sync://` | Handles in the calling process, during the dispatch |
 | `in-memory://` | Records what was dispatched, for a worker or a test to drain; `?serialize=true` round-trips it |
-| `amqp://…`, `amqps://…` | RabbitMQ via taskiq |
+| `amqp://…`, `amqps://…` | RabbitMQ via taskiq — the `amqp` extra, [xtr-amqp-messenger](../xtr-amqp-messenger) |
 | `orm://<connection>` | A table on an xtr-orm connection — the `orm` extra, registered by the orm bundle |
 
 A transport other than `sync://` writes its messages, so it is built with the envelope
@@ -229,35 +229,8 @@ TransportConfig(
 )
 ```
 
-<details>
-<summary><b>All 27 settings an <code>amqp://</code> transport accepts</b></summary>
-
-| Group | Settings |
-| --- | --- |
-| Retries | `max_attempts`, `base_delay_seconds`, `dead_letter_queue` |
-| Exchange | `exchange`, `exchange_type`, `exchange_durable`, `exchange_auto_delete` |
-| Queue | `queue`, `queue_type`, `queue_durable`, `queue_auto_delete`, `queue_exclusive`, `queue_max_priority`, `routing_key` |
-| Connection | `heartbeat`, `connect_timeout`, `connection_name`, `frame_max`, `channel_max` |
-| TLS | `cacert`, `cert`, `key`, `verify` |
-| Consumption | `prefetch_count`, `max_async_tasks`, `auto_setup`, `delayed_message_exchange_plugin` |
-
-`max_async_tasks` is how many messages a worker handles at once: ten per CPU, capped at 100,
-unless set. A message is acked once handled, so `prefetch_count` (10 by default) caps it too —
-a worker handles the smaller of the two at once. Raise both together to go wider.
-
-Delays — a `DelayStamp`, and the retry ladder's backoff — ride RabbitMQ's delayed-message
-exchange, which needs the **`rabbitmq_delayed_message_exchange` plugin** enabled on the broker
-(`rabbitmq-plugins enable rabbitmq_delayed_message_exchange`). That is what
-`delayed_message_exchange_plugin` (on by default) declares. On a broker without the plugin set
-it to `false`: a delayed send is then refused with `UnsupportedStampError` rather than
-published without its delay — and pair it with `max_attempts=1`, because the retry ladder's
-backoff has nowhere to ride either.
-
-The TLS settings belong to `amqps://` and are refused on plain `amqp://`, where the driver
-would silently ignore them. `verify=false` is warned about once per factory — a notice, not a
-per-broker drumbeat. `connect_timeout` is passed to the driver's connect call, where it is
-read; `heartbeat` takes whole seconds and refuses values below one, which the driver would
-read as "no heartbeat at all".
+Each transport's settings are its own: every one an `amqp://` transport accepts is listed by
+[xtr-amqp-messenger](../xtr-amqp-messenger#settings).
 
 An unrecognised setting is **refused** with `UnknownTransportOptionError`, naming what the scheme
 does accept, and a value it cannot use — `prefetch_count=lots` — with
@@ -267,8 +240,6 @@ ignored leaves a transport running on defaults nobody chose.
 Credentials are not settings — a URL already expresses them, so they stay in the DSN,
 percent-encoded: a password carrying `@`, `?` or `#` must escape them (`%40`, `%3F`, `%23`),
 or the DSN is refused rather than read with part of the password as options.
-
-</details>
 
 ## Running a worker
 
@@ -720,22 +691,26 @@ while a worker drains the queue, and `clear()` resets it between tests.
 | `InMemoryTransport` | `transport/in_memory/` | — | Tests: records what was dispatched, and can be consumed |
 | `TaskiqSender` | `bridge/taskiq/` | `taskiq` | Publishing via **any** taskiq broker |
 | `TaskiqWorker` | `bridge/taskiq/` | `taskiq` | Consuming via taskiq's own worker |
-| `create_amqp_broker` | `bridge/amqp/` | `[amqp]` | RabbitMQ, with retries and dead-lettering |
+| `AmqpTransportFactory` | [xtr-amqp-messenger](../xtr-amqp-messenger) | `[amqp]` | RabbitMQ, with retries and dead-lettering |
+| `OrmTransportFactory` | [xtr-orm-messenger](../xtr-orm-messenger) | `[orm]` | A table on an xtr-orm connection |
 
 The tree encodes what each piece costs to import:
 
 ```
 transport/          nothing    — sync, in_memory, the contracts
 bridge/taskiq/      taskiq     — broker-agnostic: publish, consume, bind a bus
-bridge/amqp/        [amqp]     — RabbitMQ only: connection, retry ladder, dead-lettering
 ```
 
 Everything under `transport/` imports with nothing optional installed; a transport needing a
 driver is a bridge, reachable only once that driver is installed — taskiq for the taskiq bridge,
-which the `amqp` extra brings too. Nothing in `bridge/taskiq/` names a broker driver either, so
+which the `amqp` extra brings too. Nothing in this package names a broker driver, so
 the taskiq bridge works installed without aio-pika: beside taskiq, the application adds the
-package of the broker it picks — Redis, NATS — or uses taskiq's in-memory broker. Tests enforce
-all three claims.
+package of the broker it picks — Redis, NATS — or uses taskiq's in-memory broker. RabbitMQ is a
+package of its own, built on that bridge. Tests enforce all three claims.
+
+`xtr_messenger.bridge.amqp` and its modules still import, as the very objects
+xtr-amqp-messenger defines, through this major version; import from `xtr_amqp_messenger`
+instead — the old path goes in the next one.
 
 ### Writing your own
 
@@ -772,8 +747,9 @@ MessageBusFactory(CONFIG, [TransportFactory(serializer=wire)]).bus()
 ```
 
 Any other collaborator is an object discovery cannot supply, so it means passing the factory
-yourself — `[AmqpTransportFactory(wire, options=AmqpOptions(...))]`, `AmqpOptions` imported from
-`xtr_messenger.bridge.amqp.amqp_options`.
+yourself — `[AmqpTransportFactory(wire, options=AmqpOptions(...))]`, `AmqpTransportFactory`
+imported from `xtr_amqp_messenger` and `AmqpOptions` from
+`xtr_amqp_messenger.transport.amqp_options`.
 
 Handlers never reach a transport at all. Only the bus calls them, and every transport hands
 messages to a bus instead — `sync://` hands the envelope straight back marked received, and a
@@ -1027,7 +1003,7 @@ xtr_messenger/
 │   └── serialization/       the wire format: bodies and stamps through xtr-serializer
 ├── bridge/
 │   ├── taskiq/              broker-agnostic publish and consume
-│   └── amqp/                RabbitMQ on top of it
+│   └── amqp/                where RabbitMQ used to be: re-exports xtr-amqp-messenger
 ├── command/
 │   └── consume.py           messenger:consume, on xtr-console
 └── bundle/                  MessengerBundle for xtr-dependency-injection

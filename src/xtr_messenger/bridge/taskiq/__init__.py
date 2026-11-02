@@ -16,8 +16,7 @@ second one costs a factory and no changes to this package.
   why handler modules never import one.
 
 The RabbitMQ wiring built on top of this — connection, retry ladder,
-dead-lettering — lives in :mod:`xtr_messenger.bridge.amqp` and needs the
-``amqp`` extra.
+dead-lettering — is the xtr-amqp-messenger package, the ``amqp`` extra.
 """
 
 from __future__ import annotations

@@ -35,8 +35,8 @@ collaborator — a private handlers locator, anything that is an object rather
 than a string — is a constructor argument, so supplying one means passing the
 factory yourself::
 
-    from xtr_messenger.bridge.amqp import AmqpTransportFactory
-    from xtr_messenger.bridge.amqp.amqp_options import AmqpOptions
+    from xtr_amqp_messenger import AmqpTransportFactory
+    from xtr_amqp_messenger.transport.amqp_options import AmqpOptions
 
     MessageBusFactory(config, [AmqpTransportFactory(mine, options=AmqpOptions(...))])
 

@@ -18,7 +18,15 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
 def test_every_builtin_scheme_is_advertised() -> None:
-    assert {"sync", "in-memory", "amqp"} <= set(advertised_schemes())
+    assert {"sync", "in-memory"} <= set(advertised_schemes())
+
+
+def test_this_package_advertises_only_the_transports_it_ships() -> None:
+    """RabbitMQ is advertised by xtr-amqp-messenger, which serves its schemes."""
+    manifest = (_REPO_ROOT / "pyproject.toml").read_text()
+
+    assert 'amqp = "xtr_messenger' not in manifest
+    assert 'amqps = "xtr_messenger' not in manifest
 
 
 def test_a_scheme_resolves_to_the_factory_that_serves_it() -> None:

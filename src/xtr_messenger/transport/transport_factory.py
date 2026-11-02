@@ -41,8 +41,8 @@ class TransportFactory(TransportFactoryInterface, PublisherClosingInterface):
     none. Given a list it uses exactly those, in order, which is how you supply
     an adapter that needs a collaborator discovery cannot provide::
 
-        from xtr_messenger.bridge.amqp import AmqpTransportFactory
-        from xtr_messenger.bridge.amqp.amqp_options import AmqpOptions
+        from xtr_amqp_messenger import AmqpTransportFactory
+        from xtr_amqp_messenger.transport.amqp_options import AmqpOptions
 
         TransportFactory([AmqpTransportFactory(mine, options=AmqpOptions(...))])
     """

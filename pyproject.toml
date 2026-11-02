@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-keywords = ["message-bus", "message-queue", "middleware", "envelope", "taskiq", "amqp"]
+keywords = ["message-bus", "message-queue", "middleware", "envelope", "taskiq"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -25,12 +25,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# RabbitMQ: the transport is its own package, built on the taskiq bridge.
 amqp = [
-    "aio-pika>=9.4",
-    "taskiq>=0.12.4",
-    "taskiq-aio-pika>=0.6.0",
-    "anyio>=4.0",
-    "typing-extensions>=4.4",
+    "xtr-amqp-messenger>=5.0,<6",
 ]
 orm = [
     "xtr-orm-messenger>=5.0,<6",
@@ -42,8 +39,6 @@ orm = [
 [project.entry-points."xtr_messenger.transport_factories"]
 sync = "xtr_messenger.transport.sync:SyncTransportFactory"
 in-memory = "xtr_messenger.transport.in_memory:InMemoryTransportFactory"
-amqp = "xtr_messenger.bridge.amqp:AmqpTransportFactory"
-amqps = "xtr_messenger.bridge.amqp:AmqpTransportFactory"
 
 # Advertises the bundle so debug:bundles can name it when installed but not listed.
 # Advertising activates nothing: an application lists the bundles it wants.
@@ -61,10 +56,10 @@ dev = [
     "pytest>=8",
     "pytest-cov>=5",
     "anyio>=4.0",
-    "aio-pika>=9.4",
     "taskiq>=0.12.4",
-    "taskiq-aio-pika>=0.6.0",
     "ty>=0.0.83",
+    # The modules under xtr_messenger.bridge.amqp re-export it; their tests import both.
+    "xtr-amqp-messenger>=5.0,<6",
     "xtr-console>=5.0,<6",
     "xtr-dependency-injection>=5.0,<6",
     "xtr-event-dispatcher>=5.0,<6",
@@ -100,12 +95,6 @@ reportPrivateUsage = "error"
 [[tool.basedpyright.executionEnvironments]]
 root = "src/xtr_messenger/middleware"
 reportImportCycles = "none"
-
-# taskiq exposes no public accessor for a broker's declared queues.
-# declared_queues() wraps that gap in one place so nothing else has to.
-[[tool.basedpyright.executionEnvironments]]
-root = "src/xtr_messenger/bridge/amqp/amqp_broker.py"
-reportPrivateUsage = "none"
 
 # ─────────────────────────────────────────────────────────────────
 # ruff — select = ["ALL"], minimal justified ignores

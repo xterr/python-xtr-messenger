@@ -1,8 +1,9 @@
 """The import layering the bridge tree encodes, enforced.
 
-``bridge/taskiq`` must work with any taskiq broker, so it cannot name one;
-``bridge/amqp`` builds on it, never the reverse; and RabbitMQ is named only
-in the AMQP layer. These are read from the source rather than trusted.
+``bridge/taskiq`` must work with any taskiq broker, so it cannot name one; the
+RabbitMQ transport — the xtr-amqp-messenger package — builds on it, never the
+reverse; and no module of this package names RabbitMQ's driver. These are read
+from the source rather than trusted.
 """
 
 from __future__ import annotations
@@ -14,7 +15,8 @@ from taskiq import InMemoryBroker
 from tests.support.serialization import json_serializer
 from xtr_messenger.bridge.taskiq import StartedBrokers, TaskiqSender, TaskiqWorker
 
-_BRIDGE = pathlib.Path(__file__).resolve().parents[3] / "src" / "xtr_messenger" / "bridge"
+_SOURCE = pathlib.Path(__file__).resolve().parents[3] / "src" / "xtr_messenger"
+_BRIDGE = _SOURCE / "bridge"
 
 
 def _sources(package: str) -> list[pathlib.Path]:
@@ -31,18 +33,24 @@ def test_the_generic_layer_names_no_broker_driver() -> None:
 
 def test_the_dependency_runs_one_way_only() -> None:
     """AMQP builds on taskiq. The reverse would make the split meaningless."""
-    offenders = [p.name for p in _sources("taskiq") if "bridge.amqp" in p.read_text()]
+    offenders = [
+        p.name
+        for p in _sources("taskiq")
+        if "bridge.amqp" in p.read_text() or "xtr_amqp_messenger" in p.read_text()
+    ]
 
     assert offenders == []
 
 
-def test_the_amqp_layer_is_the_only_place_that_names_rabbitmq() -> None:
-    amqp_sources = _sources("amqp")
-    assert amqp_sources
+def test_no_module_of_the_message_bus_names_the_rabbitmq_driver() -> None:
+    """RabbitMQ is the xtr-amqp-messenger package; what is left here only points at it."""
+    offenders = [
+        str(p.relative_to(_SOURCE))
+        for p in sorted(_SOURCE.rglob("*.py"))
+        if "aio_pika" in p.read_text()
+    ]
 
-    names_driver = [p.name for p in amqp_sources if "aio_pika" in p.read_text()]
-
-    assert names_driver != []
+    assert offenders == []
 
 
 def test_publishing_works_on_a_broker_that_is_not_amqp() -> None:

@@ -4,7 +4,7 @@
 | --- | --- | --- |
 | `sync://` | Handles in the calling process, during the dispatch | — |
 | `in-memory://` | Records what was dispatched; a worker or a test drains it. `?serialize=true` round-trips every message through the serializer | the serializer, for `?serialize=true` |
-| `amqp://…`, `amqps://…` | RabbitMQ, with a retry ladder and dead-lettering | `[amqp]`, the serializer |
+| `amqp://…`, `amqps://…` | RabbitMQ, with a retry ladder and dead-lettering — the xtr-amqp-messenger package; its settings are the `xtr-amqp-messenger` skill's | `[amqp]`, the serializer |
 
 A transport writing messages gets the envelope serializer from the factory discovering it —
 `TransportFactory(serializer=wire)`, or the bundle's — and raises `MissingSerializerError` when
@@ -86,8 +86,8 @@ The container builds it, so it may take this package's `SerializerInterface` —
 serializer the bundle registers. Discovery hands that serializer to an advertised factory whose
 constructor takes a `serializer` parameter; any other collaborator cannot travel in a DSN, so
 pass the factory yourself: `MessageBusFactory(CONFIG, [AmqpTransportFactory(wire,
-options=AmqpOptions(...))]).bus()`, `AmqpOptions` imported from
-`xtr_messenger.bridge.amqp.amqp_options`.
+options=AmqpOptions(...))]).bus()`, `AmqpTransportFactory` imported from `xtr_amqp_messenger`
+and `AmqpOptions` from `xtr_amqp_messenger.transport.amqp_options`.
 
 ## Receivers without a DSN
 

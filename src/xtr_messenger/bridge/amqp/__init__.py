@@ -1,29 +1,23 @@
-"""The RabbitMQ bridge, built on the taskiq one.
+"""Where the RabbitMQ transport used to live: it is now the xtr-amqp-messenger package.
 
-Installed with the ``amqp`` extra, which brings taskiq and taskiq-aio-pika.
-This package holds only what is genuinely RabbitMQ: the connection and its
-queues, the retry ladder, and real dead-lettering. Publishing and consuming
-themselves are broker-agnostic and live in
-:mod:`xtr_messenger.bridge.taskiq`.
-
-The dependency runs one way — AMQP builds on taskiq, never the reverse — so
-a second taskiq broker needs a package beside this one and no change within
-it.
-
-Dead-lettering is the part worth knowing about: taskiq alone acknowledges a
-message whose attempts have run out, so RabbitMQ never dead-letters it and
-the work is simply lost.
-:class:`~xtr_messenger.bridge.amqp.dead_letter_middleware.DeadLetterMiddleware`
-republishes it instead, in its original wire format, so it can be inspected
-and replayed.
+Kept so code importing from here keeps working through this major version;
+every name is the very object :mod:`xtr_amqp_messenger.transport` defines.
+Import from there instead — this module is removed in the next major version.
+Needs xtr-amqp-messenger installed, as ``xtr-messenger[amqp]`` does.
 """
 
 from __future__ import annotations
 
-from .amqp_broker import create_amqp_broker, declared_queues
-from .amqp_transport_factory import AMQP_SCHEMES, AmqpTransportFactory, MixedDsnError
-from .dead_letter_middleware import DeadLetterMiddleware
-from .reliability import DEFAULT_DEAD_LETTER_QUEUE, Reliability
+from xtr_amqp_messenger.transport import (
+    AMQP_SCHEMES,
+    DEFAULT_DEAD_LETTER_QUEUE,
+    AmqpTransportFactory,
+    DeadLetterMiddleware,
+    MixedDsnError,
+    Reliability,
+    create_amqp_broker,
+    declared_queues,
+)
 
 __all__ = [
     "AMQP_SCHEMES",

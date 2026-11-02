@@ -5,8 +5,9 @@ middleware chain. MiddlewareInterface records what it did by appending a
 :class:`StampInterface`; routing sends the envelope to one or more named transports.
 
 A message crossing a transport is written and read back with xtr-serializer,
-so it arrives exactly as it left. Transports that need a broker library live
-behind an extra — see :mod:`xtr_messenger.bridge.amqp`.
+so it arrives exactly as it left. A transport that needs a broker library is a
+package of its own, found by its DSN scheme once installed — RabbitMQ is
+xtr-amqp-messenger, the ``amqp`` extra.
 """
 
 from __future__ import annotations

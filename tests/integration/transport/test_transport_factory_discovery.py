@@ -35,27 +35,7 @@ def test_resolving_a_sync_bus_never_imports_a_broker_library() -> None:
         "import sys\n"
         "assert 'taskiq' not in sys.modules, 'taskiq imported for a sync-only app'\n"
         "assert 'aio_pika' not in sys.modules, 'aio_pika imported for a sync-only app'\n"
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=False
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_an_amqp_bus_does_load_its_broker_library() -> None:
-    code = (
-        "from xtr_serializer import JsonEncoder, PydanticNormalizer, Serializer\n"
-        "from xtr_messenger import JsonSerializer, MessageBusConfig, MessageBusFactory\n"
-        "from xtr_messenger import TransportConfig, TransportFactory\n"
-        "config = MessageBusConfig(\n"
-        "    transports={'q': TransportConfig('amqp://guest:guest@h:5672/', queue='jobs')}\n"
-        ")\n"
-        "wire = JsonSerializer(Serializer([PydanticNormalizer()], [JsonEncoder()]))\n"
-        "MessageBusFactory(config, [TransportFactory(serializer=wire)]).bus()\n"
-        "import sys\n"
-        "assert 'taskiq' in sys.modules\n"
+        "assert 'xtr_amqp_messenger' not in sys.modules, 'the AMQP transport imported'\n"
     )
 
     result = subprocess.run(
