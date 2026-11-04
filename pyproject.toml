@@ -1,6 +1,6 @@
 [project]
 name = "xtr-messenger"
-version = "5.2.1"
+version = "6.0.0"
 description = "A message bus for Python: envelopes, stamps, a middleware chain, and pluggable transports."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,19 +18,19 @@ classifiers = [
 ]
 dependencies = [
     "typing-extensions>=4.4",
-    "xtr-event-dispatcher-contracts>=5.0,<6",
-    "xtr-logging-contracts>=5.0,<6",
+    "xtr-event-dispatcher-contracts>=6.0,<7",
+    "xtr-logging-contracts>=6.0,<7",
     # Message bodies and stamps are written and read back exactly through it.
-    "xtr-serializer>=5.0,<6",
+    "xtr-serializer>=6.0,<7",
 ]
 
 [project.optional-dependencies]
 # RabbitMQ: the transport is its own package, built on the taskiq bridge.
 amqp = [
-    "xtr-amqp-messenger>=5.0,<6",
+    "xtr-amqp-messenger>=6.0,<7",
 ]
 orm = [
-    "xtr-orm-messenger>=5.0,<6",
+    "xtr-orm-messenger>=6.0,<7",
 ]
 
 # Transports advertise themselves here, keyed by the DSN scheme they serve so
@@ -59,12 +59,12 @@ dev = [
     "taskiq>=0.12.4",
     "ty>=0.0.83",
     # The modules under xtr_messenger.bridge.amqp re-export it; their tests import both.
-    "xtr-amqp-messenger>=5.0,<6",
-    "xtr-console>=5.0,<6",
-    "xtr-dependency-injection>=5.0,<6",
-    "xtr-event-dispatcher>=5.0,<6",
-    "xtr-logging>=5.0,<6",
-    "xtr-service-contracts>=5.0,<6",
+    "xtr-amqp-messenger>=6.0,<7",
+    "xtr-console>=6.0,<7",
+    "xtr-dependency-injection>=6.0,<7",
+    "xtr-event-dispatcher>=6.0,<7",
+    "xtr-logging>=6.0,<7",
+    "xtr-service-contracts>=6.0,<7",
     "yarl>=1.9",
 ]
 
