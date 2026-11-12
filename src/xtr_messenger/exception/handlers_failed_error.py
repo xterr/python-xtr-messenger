@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from xtr_messenger._text import safe_str
+
 from .message_bus_error import MessageBusError
 
 if TYPE_CHECKING:
@@ -38,6 +40,6 @@ class HandlersFailedError(MessageBusError):
         """Record the envelope handling left and what each failed handler raised."""
         self.envelope = envelope
         self.errors = dict(errors)
-        failures = "; ".join(f"{name}: {error}" for name, error in self.errors.items())
+        failures = "; ".join(f"{name}: {safe_str(error)}" for name, error in self.errors.items())
         kind = type(envelope.message).__qualname__
         super().__init__(f"{len(self.errors)} handler(s) of {kind} failed: {failures}")

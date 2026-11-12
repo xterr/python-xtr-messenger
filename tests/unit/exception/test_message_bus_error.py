@@ -3,8 +3,10 @@ from __future__ import annotations
 import pytest
 
 import xtr_messenger
+from tests.support.errors import UnprintableError
 from xtr_messenger import (
     DelayedMessageHandlingError,
+    Envelope,
     HandlersFailedError,
     HandlerSignatureError,
     IncompatibleReceiversError,
@@ -89,6 +91,24 @@ def test_handler_signature_error_carries_the_handler_and_parameters() -> None:
 
 def test_handler_signature_error_shows_none_for_no_parameters() -> None:
     assert "(<none>)" in str(HandlerSignatureError("ingest", ()))
+
+
+def test_handlers_failed_error_names_a_failure_that_cannot_print_itself() -> None:
+    failure = UnprintableError()
+
+    error = HandlersFailedError(Envelope(Sample()), {"bill": failure})
+
+    assert error.errors == {"bill": failure}
+    assert str(error).endswith("bill: [unprintable tests.support.errors.UnprintableError]")
+
+
+def test_delayed_message_handling_error_names_a_failure_that_cannot_print_itself() -> None:
+    failure = UnprintableError()
+
+    error = DelayedMessageHandlingError(Envelope(Sample()), [failure])
+
+    assert error.errors == (failure,)
+    assert str(error).endswith("failed: [unprintable tests.support.errors.UnprintableError]")
 
 
 def test_invalid_dsn_error_carries_the_dsn() -> None:

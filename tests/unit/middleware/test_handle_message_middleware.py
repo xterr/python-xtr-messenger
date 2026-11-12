@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
+from tests.support.errors import UnprintableError
 from tests.support.fakes import OneStep, TerminalMiddleware
 from tests.support.messages import (
     AnalyseDocument,
@@ -106,6 +107,27 @@ async def test_a_handler_failure_propagates() -> None:
         )
 
     assert isinstance(caught.value.__cause__, RuntimeError)
+
+
+async def test_a_failure_that_cannot_print_itself_propagates_as_the_failure_it_is() -> None:
+    """Reporting it must not raise in its place: the bus's error is still caused by it."""
+    registry = HandlersLocator()
+    failure = UnprintableError()
+
+    async def boom(message: object) -> None:
+        del message
+        raise failure
+
+    _ = registry.register(IngestDocument, boom, name="boom")
+
+    with pytest.raises(HandlersFailedError) as caught:
+        _ = await HandleMessageMiddleware(registry).handle(
+            Envelope(ingest_document()),
+            OneStep(TerminalMiddleware()),
+        )
+
+    assert caught.value.errors == {"boom": failure}
+    assert caught.value.__cause__ is failure
 
 
 async def test_every_handler_runs_when_one_fails_and_each_failure_is_kept() -> None:

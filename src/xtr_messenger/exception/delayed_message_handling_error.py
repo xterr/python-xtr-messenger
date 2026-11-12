@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from xtr_messenger._text import safe_str
+
 from .message_bus_error import MessageBusError
 
 if TYPE_CHECKING:
@@ -34,7 +36,7 @@ class DelayedMessageHandlingError(MessageBusError):
         """Record the message that succeeded and what its held-back messages raised."""
         self.envelope = envelope
         self.errors = tuple(errors)
-        failures = "; ".join(str(error) for error in self.errors)
+        failures = "; ".join(safe_str(error) for error in self.errors)
         kind = type(envelope.message).__qualname__
         super().__init__(
             f"{len(self.errors)} message(s) dispatched after {kind} was handled failed: {failures}"
