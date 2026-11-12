@@ -9,6 +9,7 @@ import pytest
 from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
+from tests.support.errors import UnprintableError
 from tests.support.fakes import RecordingBus, StubReceiver
 from xtr_messenger import (
     DelayStamp,
@@ -194,6 +195,19 @@ async def test_a_failing_dispatch_rejects_with_the_reason_attached() -> None:
 
     assert receiver.acked == []
     assert receiver.rejected[0].last(ErrorDetailsStamp) == ErrorDetailsStamp("ValueError", "boom")
+
+
+async def test_a_failure_that_cannot_print_itself_is_rejected_named_by_its_class() -> None:
+    """Settling a message must not depend on the failure's own ``__str__``."""
+    receiver = StubReceiver([Envelope("a")])
+    bus = RecordingBus(failure=UnprintableError())
+
+    await Worker(bus, receiver).run()
+
+    assert receiver.acked == []
+    assert receiver.rejected[0].last(ErrorDetailsStamp) == ErrorDetailsStamp(
+        "UnprintableError", "[unprintable tests.support.errors.UnprintableError]"
+    )
 
 
 async def test_one_undeliverable_message_does_not_stop_the_worker() -> None:

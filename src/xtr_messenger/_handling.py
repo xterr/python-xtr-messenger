@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final
 
+from ._text import safe_str
 from .envelope import Envelope
 from .event import (
     WorkerMessageFailedEvent,
@@ -108,7 +109,7 @@ async def announce_failure(
     error = failed.error
     # What went wrong is what a handler raised, not that handlers failed.
     cause = next(iter(error.errors.values())) if isinstance(error, HandlersFailedError) else error
-    envelope = failed.envelope.with_stamps(ErrorDetailsStamp(type(cause).__name__, str(cause)))
+    envelope = failed.envelope.with_stamps(ErrorDetailsStamp(type(cause).__name__, safe_str(cause)))
     if dispatcher is None:
         await settle(envelope)
         return
