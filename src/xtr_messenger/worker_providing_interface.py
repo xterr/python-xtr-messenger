@@ -52,5 +52,10 @@ class WorkerProvidingInterface(Protocol):
         :class:`~xtr_messenger.worker.Worker` honours, kept by a broker that
         runs its own loop too, so long-lived services are cleared between
         units of work whichever worker consumes.
+
+        The worker handles each message apart from the context its ``run()``
+        is awaited in, as the library's own do: whatever runs a worker — a
+        console command — may have a unit of work open, and one message
+        after another, or several at once, must not find it theirs.
         """
         ...

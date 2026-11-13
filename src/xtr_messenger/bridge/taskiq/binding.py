@@ -22,6 +22,16 @@ library's own worker does — received, then handled or failed — so listeners
 see one sequence whichever worker runs. A message a listener skips returns
 normally, which taskiq acknowledges; a failure is announced, then raised for
 taskiq's retry and dead-letter middleware to act on.
+
+A task handles its message apart from the context it runs in. Whatever
+started it — a receive loop run by hand inside a command, a broker running
+the task in the publisher's own — that context is not the message's, and a
+unit of work open there must not be the one a message's follow-ups join. A
+task :class:`~xtr_messenger.bridge.taskiq.taskiq_worker.TaskiqWorker` started
+is the one that stays where it is: that worker starts its receive loop in a
+context of its own, so the task carries nothing of the host's to begin with,
+and staying keeps what the broker's middleware set for the message — a
+tracing span, say — in reach of its handlers.
 """
 
 from __future__ import annotations
@@ -33,6 +43,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast, final
 from taskiq import Context, TaskiqDepends, TaskiqMessage
 
 from xtr_messenger._handling import Failed, announce_failure, handle
+from xtr_messenger._own_context import in_own_context, started_in_own_context
 from xtr_messenger.exception import MessageDecodingFailedError
 from xtr_messenger.message_registry import declared_names, name_of
 from xtr_messenger.stamp import ReceivedStamp, RedeliveryStamp
@@ -190,36 +201,46 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
 
 def _task_for(binding: _Binding, task_name: str) -> Callable[..., Coroutine[None, None, None]]:
     async def run(body: str, context: Context = _CONTEXT) -> None:
-        try:
-            labels = context.message.labels
-            name = binding.receiver_name(labels)
-            try:
-                envelope = _rebuild(body, labels, task_name, binding.serializer, name)
-            except MessageDecodingFailedError as error:
-                if binding.dead_letter is None:
-                    raise
-                # Decoding is deterministic: retrying can never end
-                # differently, so the delivery goes straight to quarantine
-                # and returning normally has it acknowledged.
-                await binding.dead_letter(context.message, error)
-                return
-            outcome = await handle(binding.bus, envelope, name, binding.dispatcher)
-            if isinstance(outcome, Failed):
-                await announce_failure(
-                    outcome,
-                    name,
-                    binding.dispatcher,
-                    _settled_by_raising,
-                    will_retry=binding.will_retry(outcome.envelope),
-                )
-                raise outcome.error
-        finally:
-            if binding.resetter is not None:
-                await binding.resetter.reset()
+        handling = _handle(binding, task_name, body, context.message)
+        if started_in_own_context():
+            # A worker started this task apart from its host already.
+            await handling
+        else:
+            await in_own_context(handling)
 
     run.__name__ = task_name.rpartition(".")[2]
     run.__qualname__ = task_name
     return run
+
+
+async def _handle(binding: _Binding, task_name: str, body: str, delivered: TaskiqMessage) -> None:
+    """Rebuild the envelope ``delivered`` carries and have the bound bus handle it."""
+    try:
+        labels = delivered.labels
+        name = binding.receiver_name(labels)
+        try:
+            envelope = _rebuild(body, labels, task_name, binding.serializer, name)
+        except MessageDecodingFailedError as error:
+            if binding.dead_letter is None:
+                raise
+            # Decoding is deterministic: retrying can never end
+            # differently, so the delivery goes straight to quarantine
+            # and returning normally has it acknowledged.
+            await binding.dead_letter(delivered, error)
+            return
+        outcome = await handle(binding.bus, envelope, name, binding.dispatcher)
+        if isinstance(outcome, Failed):
+            await announce_failure(
+                outcome,
+                name,
+                binding.dispatcher,
+                _settled_by_raising,
+                will_retry=binding.will_retry(outcome.envelope),
+            )
+            raise outcome.error
+    finally:
+        if binding.resetter is not None:
+            await binding.resetter.reset()
 
 
 async def _settled_by_raising(envelope: Envelope) -> None:

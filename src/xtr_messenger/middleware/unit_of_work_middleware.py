@@ -31,11 +31,16 @@ class UnitOfWorkMiddleware(MiddlewareInterface):
     every worker, so the middleware after it and every handler of the
     message share the unit's scoped services — one database session, say —
     released once the message is done with. A message dispatched while
-    another is handled joins the unit already open; a message a worker
-    received is new work, a unit of its own even inside one — a worker run
-    by a command. The middleware holding messages back until the current one
-    was handled comes before it, so each message held back is a unit of its
-    own.
+    another is handled joins the unit already open, and so does one a
+    request or a command dispatches: theirs. A message a worker received is
+    new work, a unit of its own even inside one.
+
+    The middleware holding messages back until the current one was handled
+    comes before it, so a message held back is opened once that one's unit
+    is over. In a worker — which handles each message apart from whatever
+    runs it — nothing is open by then, and it is a unit of its own; where a
+    request or a command dispatched the message that held it back, it joins
+    theirs, as anything they dispatch does.
     """
 
     __slots__ = ("_scopes",)

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, final
 from uuid import uuid4
 
 import pytest
-from taskiq import InMemoryBroker
+from taskiq import InMemoryBroker, TaskiqMiddleware
+from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
-from tests.support.fakes import RecordingBus
+from tests.support.fakes import ContextNotingBus, RecordingBus
 from tests.support.messages import AnalyseDocument, ingest_document
 from tests.support.serialization import json_serializer
+from tests.support.taskiq import DeliveringBroker, delivery
 from xtr_messenger import (
     Envelope,
     ErrorDetailsStamp,
@@ -22,6 +26,7 @@ from xtr_messenger import (
 )
 from xtr_messenger.bridge.taskiq.binding import bind_bus
 from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
+from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
 from xtr_messenger.event import (
     AbstractWorkerMessageEvent,
     WorkerMessageFailedEvent,
@@ -37,6 +42,9 @@ pytestmark = pytest.mark.anyio
 
 _INGEST = "test.ingest.v1"
 _LOST = 1_000_000
+_TIMEOUT = 5.0
+_TENANT: ContextVar[str] = ContextVar("test_binding_tenant", default="none")
+_SPAN: ContextVar[str] = ContextVar("test_binding_span", default="none")
 
 
 @pytest.fixture
@@ -80,6 +88,63 @@ async def test_a_task_rebuilds_the_envelope_and_dispatches_it(broker: InMemoryBr
     assert type(envelope.message).__name__ == "IngestDocument"
     assert envelope.last(ReceivedStamp) == ReceivedStamp("taskiq")
     assert envelope.last(RedeliveryStamp) == RedeliveryStamp(0)
+
+
+async def test_a_message_is_handled_apart_from_the_context_its_task_runs_in(
+    broker: InMemoryBroker,
+) -> None:
+    """Whatever runs the task — here the publisher's own — its context is not
+    the message's: a unit of work open there is not the one the message joins."""
+    bus = ContextNotingBus(_TENANT)
+    _ = bind_bus(broker, bus, json_serializer())
+    body, headers = _body()
+    token = _TENANT.set("publisher")
+    try:
+        _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+        after = _TENANT.get()
+    finally:
+        _TENANT.reset(token)
+
+    assert bus.noted == ["none"]
+    assert after == "publisher"
+
+
+@final
+class SpanMiddleware(TaskiqMiddleware):
+    """Sets a context variable for each message before its task runs, as tracing does."""
+
+    @override
+    def pre_execute(self, message: TaskiqMessage) -> TaskiqMessage:
+        _ = _SPAN.set(f"span of {message.task_name}")
+        return message
+
+
+async def test_a_task_a_worker_started_keeps_what_the_broker_set_for_its_message() -> None:
+    """A worker starts its receiver in a context of its own, so a task it runs
+    carries nothing of the host's to shed — and what the broker's middleware
+    set for the message, a tracing span say, reaches the handlers."""
+    bus = ContextNotingBus(_SPAN)
+    handled = asyncio.Event()
+    dispatcher = EventDispatcher()
+
+    def done(event: WorkerMessageHandledEvent) -> None:
+        del event
+        handled.set()
+
+    dispatcher.add_listener(WorkerMessageHandledEvent, done)
+    serializer = json_serializer()
+    broker = DeliveringBroker(
+        [delivery(serializer.encode(Envelope.wrap(ingest_document())), _INGEST)]
+    ).with_middlewares(SpanMiddleware())
+    _ = bind_bus(broker, bus, serializer, event_dispatcher=dispatcher)
+    worker = TaskiqWorker(broker)
+    run = asyncio.create_task(worker.run())
+
+    _ = await asyncio.wait_for(handled.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert bus.noted == [f"span of {_INGEST}"]
 
 
 async def test_the_attempt_comes_from_the_retries_label(broker: InMemoryBroker) -> None:

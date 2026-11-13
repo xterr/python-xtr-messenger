@@ -17,6 +17,7 @@ from xtr_messenger import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
+    from contextvars import ContextVar
 
     from xtr_messenger import StampInterface
 
@@ -76,6 +77,22 @@ class RecordingBus(MessageBusInterface):
         if self._failure is not None:
             raise self._failure
         return envelope
+
+
+@final
+class ContextNotingBus(MessageBusInterface):
+    """A bus noting what ``variable`` holds as each message arrives, then leaving ``left`` in it."""
+
+    def __init__(self, variable: ContextVar[str], left: str = "left behind") -> None:
+        self.noted: list[str] = []
+        self._variable = variable
+        self._left = left
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        self.noted.append(self._variable.get())
+        _ = self._variable.set(self._left)
+        return Envelope.wrap(message, stamps)
 
 
 @final

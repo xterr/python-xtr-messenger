@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, final
 from uuid import uuid4
 
@@ -27,6 +28,7 @@ pytestmark = pytest.mark.anyio
 
 _TIMEOUT = 5.0
 _CONSUME = "test.unit.worker.consume.v1"
+_TENANT: ContextVar[str] = ContextVar("test_taskiq_worker_tenant", default="none")
 
 
 @final
@@ -196,6 +198,32 @@ async def test_run_consumes_until_stop() -> None:
 
     assert calls == ["x", "x"]
     assert broker.is_worker_process is False
+
+
+async def test_a_message_is_handled_apart_from_the_context_the_worker_runs_in() -> None:
+    """What runs a worker — a command, say — is not its messages': a context
+    variable set there, a unit of work open there, stays behind."""
+    seen: list[str] = []
+    done = asyncio.Event()
+    broker = ScriptedBroker((_CONSUME,))
+
+    async def record() -> None:
+        seen.append(_TENANT.get())
+        done.set()
+
+    _ = broker.register_task(record, task_name=_CONSUME)
+    worker = TaskiqWorker(broker)
+    token = _TENANT.set("host")
+    try:
+        run = asyncio.create_task(worker.run())
+    finally:
+        _TENANT.reset(token)
+
+    _ = await asyncio.wait_for(done.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert seen == ["none"]
 
 
 async def test_a_stopped_worker_shuts_its_broker_down_as_a_worker() -> None:

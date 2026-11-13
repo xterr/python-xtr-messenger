@@ -95,3 +95,8 @@ fails that message like a handler would; one raising on a failure stops the work
 event names the transport it came from in `receiver_name`. Under taskiq's own worker there is no
 `WorkerRunningEvent`. With the event dispatcher bundle active, every worker announces these
 through the container's dispatcher with no wiring.
+
+A worker handles each message in a context of its own, apart from whatever runs it: a context
+variable set before the worker starts does not reach a handler, and a unit of work open there —
+a console command's — is never a message's. A listener of a message's events runs outside any
+unit of work; a scoped service it asks for is built for that call alone.

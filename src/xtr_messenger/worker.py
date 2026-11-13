@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
 from typing_extensions import override
 
 from ._handling import Failed, Handled, Skipped, announce_failure, handle, receiver_name_of
+from ._own_context import in_own_context
 from .event import WorkerRunningEvent, WorkerStartedEvent, WorkerStoppedEvent
 from .stamp import ReceivedStamp
 from .transport.receiver._close_stream import close_stream
@@ -113,6 +114,15 @@ class Worker(WorkerInterface):
         :class:`~xtr_messenger.stamp.ErrorDetailsStamp`, so whatever the
         transport does with a rejection carries the reason with it.
 
+        Each message is handled — announced, dispatched, settled — in a
+        context of its own, apart from the one this runs in. Whatever runs a
+        worker is not its messages': a unit of work open there, a command's,
+        would be joined by what a message does once its own unit is over —
+        the messages it held back, a listener of its events — and shared by
+        every message after it. Nor does a context variable one message left
+        behind reach the next. Collecting stays where this runs: only a
+        message is new work.
+
         With an event dispatcher, a message a listener decides not to handle
         is acknowledged without being dispatched — skipping is not failing.
         A listener raising while a message is received or handled fails that
@@ -130,7 +140,7 @@ class Worker(WorkerInterface):
         collected = self._receiver.get()
         try:
             while (envelope := await _next_unless_stopped(collected, stopped)) is not None:
-                await self._settle(envelope)
+                await in_own_context(self._settle(envelope))
                 await self._announce(WorkerRunningEvent(self))
         finally:
             self._stopped = None

@@ -316,6 +316,24 @@ is republished to `taskiq.dlq` — or the `dead_letter_queue` you name — in it
 format, so it can be inspected and replayed. A handler that asks for the envelope sees which
 attempt it is on in its `RedeliveryStamp`.
 
+### Each message in a context of its own
+
+Something runs a worker — `messenger:consume`, your own entrypoint — and a worker handles each
+message apart from it, in a context of its own. A console command is one
+[unit of work](../xtr-dependency-injection#units-of-work) for as long as it runs; were its
+context a message's too, whatever a message did once its own unit was over — the follow-ups it
+held back, a listener of its events — would join the command's unit, and every message the
+worker handles, several at once on AMQP, would share its scoped services: one database session
+for them all. So nothing the context a worker is run in carries reaches a message, and nothing
+one message leaves in its context reaches the next.
+
+The price is a context variable set before the worker starts: a handler does not see it. Hand
+such a value over through the container, or in the message.
+
+Under taskiq's worker it is the receive loop that starts in a context of its own, and each
+message's task is a copy of it — so what the broker's own middleware sets for a message, a
+tracing span say, still reaches its handlers.
+
 ### Worker events
 
 Give a worker an event dispatcher — any `EventDispatcherInterface`, such as
@@ -344,6 +362,11 @@ A skipped message is **acknowledged**, not rejected: skipping is a decision, and
 sends a message wherever failed ones go. A listener raising while a message is received or
 handled fails that message like a handler would; one raising on a failure is a bug in the
 listener, so the message is rejected first and the exception stops the worker.
+
+A listener of a message's events runs outside any unit of work: the message's own opens inside
+the bus — after the message is announced received, and over by the time it is announced
+handled or failed. Under a kernel, a listener asking for a scoped service is handed one built
+for that call alone — never the one the handlers had, nor one of whatever runs the worker.
 
 Each message event names the transport it came from in `receiver_name`. The events are the
 same under taskiq's worker, where they come from the task running the message: a failure
@@ -912,14 +935,17 @@ own, built by the container with those arguments set; one built by a factory tak
 
 **Every message is a unit of work.** The bundle puts `UnitOfWorkMiddleware` ahead of the
 configured middleware on the bus and in every worker — right after the one
-[holding messages back](#dispatching-after-the-current-message), so a message held back is a
-unit of its own — and the middleware after it and every handler of a message share one
+[holding messages back](#dispatching-after-the-current-message) — and the middleware after it
+and every handler of a message share one
 [unit of work](../xtr-dependency-injection#units-of-work): a `lifetime="scoped"` service — a
 database session — is built once per message, handed to each handler asking for it, and
 released when the message is done with, even when a handler raised. A message dispatched while
 another is handled — or while a request or a command runs — joins that unit; a message a worker
-received is always a unit of its own, even when a command runs the worker. A middleware needing the message's instance resolves it
-from `current_unit_of_work()`.
+received is always a unit of its own, even when a command runs the worker. A message held back
+is dispatched once the unit of the one that held it back is over: in a worker it is a unit of
+its own, and where a request or a command dispatched that message it joins theirs, as anything
+they dispatch does. A middleware needing the message's instance resolves it from
+`current_unit_of_work()`.
 
 A class in the application — or another bundle — that implements `TransportFactoryInterface`
 is registered automatically and consulted **ahead of** the factories discovery finds by entry

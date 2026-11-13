@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final, final
 
 from typing_extensions import override
 
+from xtr_messenger._own_context import in_own_context
 from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
 from xtr_messenger.worker_interface import WorkerInterface
 
@@ -148,6 +149,13 @@ class TaskiqWorker(WorkerInterface):
         fire to match the worker startup events; and forgotten in the
         ``publishers`` registry, if one was given, so a producing side sharing
         it opens it again on its next publish.
+
+        The receive loop runs in a context of its own, so the task taskiq
+        starts for each message — a copy of the loop's — carries nothing of
+        whatever runs this worker: a unit of work open there, a command's,
+        would otherwise be shared by every message in flight. What the
+        broker's middleware sets for a message, in that message's task, is
+        untouched.
         """
         claimed = self._broker.is_worker_process
         self._broker.is_worker_process = True
@@ -165,7 +173,7 @@ class TaskiqWorker(WorkerInterface):
         try:
             if self._dispatcher is not None:
                 _ = await self._dispatcher.dispatch(WorkerStartedEvent(self))
-            await receiver.listen(self._finished)
+            await in_own_context(receiver.listen(self._finished))
         finally:
             try:
                 await self._broker.shutdown()

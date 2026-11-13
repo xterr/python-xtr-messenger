@@ -312,7 +312,9 @@ serializer bundle's — and the `messenger:consume` command when the console bun
 Discovered transports get that serializer. Every handler it finds is
 bound at boot, so one asking for something the container cannot provide fails at boot, not on
 its first message. Every message is a unit of work: a `lifetime="scoped"` service is built once
-per message and released when the message is done with, even when a handler raised.
+per message and released when the message is done with, even when a handler raised. A message
+held back with `DispatchAfterCurrentBusStamp` is a unit of its own in a worker, and joins the
+unit of a request or a command that dispatched the message holding it back.
 
 ## Errors
 

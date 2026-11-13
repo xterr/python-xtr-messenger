@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, final
 
 import pytest
@@ -10,7 +11,7 @@ from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.errors import UnprintableError
-from tests.support.fakes import RecordingBus, StubReceiver
+from tests.support.fakes import ContextNotingBus, RecordingBus, StubReceiver
 from xtr_messenger import (
     DelayStamp,
     Envelope,
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 _TIMEOUT = 5.0
+
+_TENANT: ContextVar[str] = ContextVar("test_worker_tenant", default="none")
 
 
 @final
@@ -160,6 +163,26 @@ class ExplodingReceiver(ReceiverInterface):
         del envelope
 
 
+@final
+class TenantReceiver(ReceiverInterface):
+    """A receiver whose one message is the tenant in force where it collects."""
+
+    def __init__(self) -> None:
+        self.acked: list[Envelope] = []
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        yield Envelope(_TENANT.get())
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        self.acked.append(envelope)
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        del envelope
+
+
 def test_a_worker_is_recognised_by_its_contract_not_its_class() -> None:
     assert isinstance(Worker(RecordingBus(), StubReceiver()), WorkerInterface)
 
@@ -232,6 +255,41 @@ async def test_the_collected_envelope_is_dispatched_as_it_arrived() -> None:
 
     assert bus.dispatched[0] is envelope
     assert bus.dispatched[0].last(ReceivedStamp) == ReceivedStamp("in-memory")
+
+
+async def test_a_message_is_handled_apart_from_the_context_the_worker_runs_in() -> None:
+    """What runs a worker — a command, say — is not its messages': a context
+    variable set there, a unit of work open there, stays behind."""
+    bus = ContextNotingBus(_TENANT)
+    token = _TENANT.set("host")
+    try:
+        await Worker(bus, StubReceiver([Envelope("a")])).run()
+        after = _TENANT.get()
+    finally:
+        _TENANT.reset(token)
+
+    assert bus.noted == ["none"]
+    assert after == "host"
+
+
+async def test_what_one_message_leaves_in_its_context_does_not_reach_the_next() -> None:
+    bus = ContextNotingBus(_TENANT)
+
+    await Worker(bus, StubReceiver([Envelope("a"), Envelope("b")])).run()
+
+    assert bus.noted == ["none", "none"]
+
+
+async def test_the_receiver_collects_in_the_context_the_worker_runs_in() -> None:
+    """Only handling a message is new work: collecting one is the worker's own."""
+    receiver = TenantReceiver()
+    token = _TENANT.set("host")
+    try:
+        await Worker(RecordingBus(), receiver).run()
+    finally:
+        _TENANT.reset(token)
+
+    assert [envelope.message for envelope in receiver.acked] == ["host"]
 
 
 async def test_stop_returns_at_once_while_the_worker_waits_for_a_message() -> None:
