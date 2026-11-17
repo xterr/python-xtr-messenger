@@ -7,8 +7,9 @@ other returns or raises to taskiq — but must announce it the same way.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Final, final
 
 from ._text import safe_str
 from .envelope import Envelope
@@ -17,7 +18,7 @@ from .event import (
     WorkerMessageHandledEvent,
     WorkerMessageReceivedEvent,
 )
-from .exception import HandlersFailedError
+from .exception import DelayedMessageHandlingError, HandlersFailedError
 from .stamp import ErrorDetailsStamp, ReceivedStamp
 
 if TYPE_CHECKING:
@@ -28,6 +29,9 @@ if TYPE_CHECKING:
     from .message_bus_interface import MessageBusInterface
 
 __all__ = ["Failed", "Handled", "Skipped", "announce_failure", "handle", "receiver_name_of"]
+
+#: Through the messenger channel, beside the rest of the bus's output.
+_LOGGER: Final = logging.getLogger("messenger")
 
 
 @final
@@ -71,10 +75,16 @@ async def handle(
 ) -> Handled | Skipped | Failed:
     """Announce ``envelope`` as received, dispatch it unless skipped, announce it handled.
 
-    An exception from the bus, or from a listener of the received or handled
-    event, is a failure of this message and comes back as :class:`Failed`
-    rather than raised: one bad message must not stop a worker, and a listener
-    that raises on it is part of how that message was dealt with.
+    An exception from the bus, or from a listener of the received event, is a
+    failure of this message and comes back as :class:`Failed` rather than
+    raised: one bad message must not stop a worker, and a listener that raises
+    on it is part of how that message was dealt with.
+
+    Once the bus handled the message, it stays handled: what it did is
+    committed, and settling it as failed would have it run again. So a
+    follow-up it held back that then failed is announced as a failure of its
+    own, never retried, and a listener of the handled event that raises is
+    logged.
     """
     current = envelope
     try:
@@ -83,13 +93,51 @@ async def handle(
             current = received.envelope
             if not received.should_handle():
                 return Skipped(current)
-        current = await bus.dispatch(current)
-        if dispatcher is not None:
-            handled = await dispatcher.dispatch(WorkerMessageHandledEvent(current, receiver_name))
-            current = handled.envelope
+        try:
+            current = await bus.dispatch(current)
+        except DelayedMessageHandlingError as held:
+            current = held.envelope
+            await _announce_follow_ups(held, receiver_name, dispatcher)
     except Exception as error:  # noqa: BLE001 — reported to the caller, which settles the message
         return Failed(current, error)
+    if dispatcher is not None:
+        try:
+            handled = await dispatcher.dispatch(WorkerMessageHandledEvent(current, receiver_name))
+        except Exception:
+            _LOGGER.exception(
+                "a listener failed on handled message %s", type(current.message).__qualname__
+            )
+        else:
+            current = handled.envelope
     return Handled(current)
+
+
+async def _announce_follow_ups(
+    held: DelayedMessageHandlingError,
+    receiver_name: str,
+    dispatcher: EventDispatcherInterface | None,
+) -> None:
+    """Announce each held-back message that failed after its parent was handled.
+
+    Nothing is settled for them — they were never received — so a listener
+    raising here is logged rather than allowed to fail the parent.
+    """
+    for envelope, error in held.failures:
+        _LOGGER.error(
+            "message %s, held back until %s was handled, failed: %s",
+            type(envelope.message).__qualname__,
+            type(held.envelope.message).__qualname__,
+            safe_str(error),
+        )
+        try:
+            await announce_failure(Failed(envelope, error), receiver_name, dispatcher, _unsettled)
+        except Exception:
+            _LOGGER.exception("a listener failed on a held-back message's failure")
+
+
+async def _unsettled(envelope: Envelope) -> None:
+    """Settle nothing: a held-back message was dispatched, never received."""
+    del envelope
 
 
 async def announce_failure(

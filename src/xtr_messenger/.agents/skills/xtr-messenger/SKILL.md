@@ -134,7 +134,9 @@ decoding is an allow-list; two declared stamps may not share a class name. A
 
 `DispatchAfterCurrentBusStamp` holds a follow-up back until the message being handled has been
 handled, every middleware included; if that message fails, the follow-up never goes out.
-Failures of held-back messages come back as `DelayedMessageHandlingError`.
+Failures of held-back messages come back as `DelayedMessageHandlingError` (`failures`: each
+envelope with its error). In a worker the parent is still acknowledged — each failed follow-up
+is logged and announced as its own `WorkerMessageFailedEvent` (`will_retry=False`), not retried.
 
 `RedispatchMessage(BuildReport(id))` asks for a message to go out again **through routing**;
 `RedispatchMessage(BuildReport(id), "urgent")` pins the transport. Nothing needs declaring. It
@@ -343,7 +345,8 @@ Everything derives from `MessageBusError` and carries typed attributes.
   they are `Injected[...]` — a bare type is not injected and the declaration is refused.
 - Do not keep per-message state on a handler instance or on middleware; both are built once.
 - Do not expect a retry from the worker loop: it makes exactly one attempt and the transport
-  owns redelivery. Make handlers idempotent.
+  owns redelivery — a transport that retries implements `RetryingReceiverInterface.will_retry`,
+  which the worker reads into `WorkerMessageFailedEvent.will_retry`. Make handlers idempotent.
 - Do not assume one failing handler stops the rest — every handler runs, then the dispatch fails.
 - Do not route a `RedispatchMessage` to a remote transport; it holds an envelope no serializer
   writes.

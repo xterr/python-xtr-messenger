@@ -9,12 +9,16 @@ from typing import TYPE_CHECKING, final
 from uuid import uuid4
 
 import pytest
-from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage
+from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage, TaskiqMiddleware
 from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
-from xtr_messenger import WorkerInterface
+from tests.support.messages import ingest_document
+from tests.support.serialization import json_serializer
+from tests.support.taskiq import DeliveringBroker, delivery
+from xtr_messenger import Envelope, MessageBusInterface, StampInterface, WorkerInterface
 from xtr_messenger.bridge.taskiq import taskiq_worker
+from xtr_messenger.bridge.taskiq.binding import bind_bus
 from xtr_messenger.bridge.taskiq.started_brokers import StartedBrokers
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker, default_max_async_tasks
 from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent
@@ -226,6 +230,82 @@ async def test_a_message_is_handled_apart_from_the_context_the_worker_runs_in() 
     assert seen == ["none"]
 
 
+@final
+class StartupTenant(TaskiqMiddleware):
+    """Sets the tenant as the broker starts up, as a middleware opening a connection might."""
+
+    @override
+    def startup(self) -> None:
+        _ = _TENANT.set("startup")
+
+
+async def test_startup_context_does_not_reach_messages() -> None:
+    seen: list[str] = []
+    done = asyncio.Event()
+    broker = ScriptedBroker((_CONSUME,)).with_middlewares(StartupTenant())
+
+    async def record() -> None:
+        seen.append(_TENANT.get())
+        done.set()
+
+    _ = broker.register_task(record, task_name=_CONSUME)
+    worker = TaskiqWorker(broker)
+    run = asyncio.create_task(worker.run())
+
+    _ = await asyncio.wait_for(done.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert seen == ["none"]
+
+
+@final
+class HoldingBus(MessageBusInterface):
+    """Handles each message only once let go, journaling when it is done."""
+
+    def __init__(self, journal: list[str]) -> None:
+        self.journal = journal
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        self.started.set()
+        _ = await self.release.wait()
+        self.journal.append("handled")
+        return Envelope.wrap(message, stamps)
+
+
+async def test_cancelling_the_worker_waits_for_messages_in_flight() -> None:
+    journal: list[str] = []
+    serializer = json_serializer()
+    broker = DeliveringBroker(
+        [delivery(serializer.encode(Envelope.wrap(ingest_document())), "test.ingest.v1")]
+    )
+    bus = HoldingBus(journal)
+    _ = bind_bus(broker, bus, serializer)
+    dispatcher = EventDispatcher()
+
+    def stopped(event: WorkerStoppedEvent) -> None:
+        del event
+        journal.append("stopped")
+
+    dispatcher.add_listener(WorkerStoppedEvent, stopped)
+    run = asyncio.create_task(TaskiqWorker(broker, event_dispatcher=dispatcher).run())
+    _ = await asyncio.wait_for(bus.started.wait(), timeout=_TIMEOUT)
+
+    _ = run.cancel()
+    for _turn in range(1_000):
+        if run.done():
+            break
+        await asyncio.sleep(0)
+    bus.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert journal == ["handled", "stopped"]
+
+
 async def test_a_stopped_worker_shuts_its_broker_down_as_a_worker() -> None:
     """taskiq's receiver starts the broker and leaves closing it to taskiq's
     CLI, which this replaces — without it the connection outlived the worker.
@@ -271,3 +351,50 @@ async def test_it_announces_starting_and_stopping() -> None:
     await asyncio.wait_for(run, timeout=_TIMEOUT)
 
     assert [type(event) for event in seen] == [WorkerStartedEvent, WorkerStoppedEvent]
+
+
+@final
+class StuckBus(MessageBusInterface):
+    """Never finishes a message; journals the cancellation that ends it."""
+
+    def __init__(self, journal: list[str]) -> None:
+        self.journal = journal
+        self.started = asyncio.Event()
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        del message, stamps
+        self.started.set()
+        try:
+            _ = await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.journal.append("cancelled")
+            raise
+        raise AssertionError  # pragma: no cover — the wait never ends on its own
+
+
+@pytest.mark.parametrize("ending", ["stop", "cancel"])
+async def test_a_stuck_handler_is_cancelled_once_the_drain_bound_passes(
+    monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    monkeypatch.setattr(taskiq_worker, "_DRAIN_TIMEOUT", 0.05)
+    journal: list[str] = []
+    serializer = json_serializer()
+    broker = DeliveringBroker(
+        [delivery(serializer.encode(Envelope.wrap(ingest_document())), "test.ingest.v1")]
+    )
+    bus = StuckBus(journal)
+    _ = bind_bus(broker, bus, serializer)
+    worker = TaskiqWorker(broker)
+    run = asyncio.create_task(worker.run())
+    _ = await asyncio.wait_for(bus.started.wait(), timeout=_TIMEOUT)
+
+    if ending == "stop":
+        worker.stop()
+        await asyncio.wait_for(run, timeout=_TIMEOUT)
+    else:
+        _ = run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert journal == ["cancelled"]

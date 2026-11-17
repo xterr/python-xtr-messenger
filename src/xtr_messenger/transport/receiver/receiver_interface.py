@@ -54,9 +54,11 @@ class ReceiverInterface(Protocol):
     async def reject(self, envelope: Envelope) -> None:
         """Tell the transport ``envelope`` failed terminally.
 
-        Terminally is the operative word: whatever retry policy applies has
-        already run by the time this is called, so implementations should
-        move the message somewhere it can be inspected rather than putting it
-        back in line to fail again.
+        What happens next is the transport's: the worker makes one attempt per
+        message. A transport that keeps a delivery count may put it back for a
+        later attempt — saying so through
+        :class:`~xtr_messenger.transport.receiver.RetryingReceiverInterface` —
+        and once its attempts run out moves it somewhere it can be inspected,
+        never back in line to fail again at once.
         """
         ...

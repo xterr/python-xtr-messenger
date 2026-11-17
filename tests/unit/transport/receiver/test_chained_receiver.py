@@ -193,3 +193,42 @@ async def test_named_receivers_stamp_each_message_with_its_transport() -> None:
 def test_names_must_match_the_receivers_one_for_one() -> None:
     with pytest.raises(ValueError, match="one name per receiver"):
         _ = ChainedReceiver([StubReceiver()], ["a", "b"])
+
+
+@final
+class _Retrying(ReceiverInterface):
+    """A receiver yielding a fixed backlog, every message of which will be retried."""
+
+    def __init__(self, backlog: tuple[Envelope, ...]) -> None:
+        self._backlog = backlog
+        self.rejected: list[Envelope] = []
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        for envelope in self._backlog:
+            yield envelope
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        del envelope
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        self.rejected.append(envelope)
+
+    def will_retry(self, envelope: Envelope) -> bool:
+        del envelope
+        return True
+
+
+async def test_will_retry_asks_the_receiver_the_message_came_from() -> None:
+    retrying = _Retrying((Envelope("retried"),))
+    receiver = ChainedReceiver([StubReceiver([Envelope("plain")]), retrying])
+    plain, retried = sorted(await drain(receiver), key=lambda envelope: str(envelope.message))
+
+    assert receiver.will_retry(plain) is False
+    assert receiver.will_retry(retried) is True
+    assert receiver.will_retry(Envelope("never handed out")) is False
+    # Asking settles nothing: the message is still the receiver's to settle.
+    await receiver.reject(retried)
+    assert [envelope.message for envelope in retrying.rejected] == ["retried"]

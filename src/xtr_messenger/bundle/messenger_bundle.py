@@ -27,6 +27,7 @@ from xtr_dependency_injection import (
     qualified_name,
     required_bundle,
 )
+from xtr_dependency_injection.integration import register_detached_variable
 from xtr_serializer.bundle import SerializerBundle
 
 from xtr_messenger.exception import MessageBusError
@@ -36,6 +37,7 @@ from xtr_messenger.handler.handlers_registry import handlers_declared_on
 from xtr_messenger.handler.redispatch_message_handler import RedispatchMessageHandler
 from xtr_messenger.message import RedispatchMessage
 from xtr_messenger.message_bus_config import MessageBusConfig
+from xtr_messenger.middleware import dispatch_after_current_bus_middleware
 from xtr_messenger.middleware.logging_middleware import LoggingMiddleware
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.middleware.middleware_registry import middleware_declared_on
@@ -165,8 +167,11 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         The redispatch handler is registered here rather than declared, so the
         container builds it with the container's publishing bus — the factories
         then find a handler for :class:`RedispatchMessage` and add none of their own.
+        The messages a message holds back are registered as what a new
+        connection starts without.
         """
         del config
+        register_detached_variable(*dispatch_after_current_bus_middleware.DETACHED_VARIABLE)
         _ = self._handlers.register(RedispatchMessage, RedispatchMessageHandler)
         _ = services.set(RedispatchMessageHandler).add_tag(
             _HANDLES_TAG, handles=qualified_name(RedispatchMessage)

@@ -19,6 +19,7 @@ from xtr_messenger import (
     MessageBusInterface,
     ReceivedStamp,
     ReceiverInterface,
+    RetryingReceiverInterface,
     StampInterface,
     Worker,
     WorkerInterface,
@@ -244,6 +245,26 @@ async def test_one_undeliverable_message_does_not_stop_the_worker() -> None:
     assert [envelope.message for envelope in receiver.rejected] == ["poison"]
 
 
+@final
+class FailingResetter:
+    """Fails every reset, as a service of another message might."""
+
+    async def reset(self) -> None:
+        raise RuntimeError("a service failed to reset")
+
+
+async def test_a_failing_reset_does_not_stop_the_worker(caplog: pytest.LogCaptureFixture) -> None:
+    receiver = StubReceiver([Envelope("first"), Envelope("second")])
+
+    await Worker(RecordingBus(), receiver, FailingResetter()).run()
+
+    assert [envelope.message for envelope in receiver.acked] == ["first", "second"]
+    assert [record.getMessage() for record in caplog.records if record.name == "messenger"] == [
+        "services failed to reset after a message",
+        "services failed to reset after a message",
+    ]
+
+
 async def test_the_collected_envelope_is_dispatched_as_it_arrived() -> None:
     """Its stamps — the ReceivedStamp especially — must reach the bus intact,
     because that stamp is what stops the bus routing the message back out."""
@@ -255,6 +276,39 @@ async def test_the_collected_envelope_is_dispatched_as_it_arrived() -> None:
 
     assert bus.dispatched[0] is envelope
     assert bus.dispatched[0].last(ReceivedStamp) == ReceivedStamp("in-memory")
+
+
+@final
+class HoldingReceiver(ReceiverInterface):
+    """Sets the tenant around each envelope it yields, resetting it once the worker comes back."""
+
+    def __init__(self, backlog: Iterable[Envelope]) -> None:
+        self._backlog = tuple(backlog)
+        self.acked: list[Envelope] = []
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        for envelope in self._backlog:
+            token = _TENANT.set("receiving")
+            yield envelope
+            _TENANT.reset(token)
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        self.acked.append(envelope)
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        del envelope
+
+
+async def test_a_receiver_may_hold_a_context_variable_across_yield() -> None:
+    first, second = Envelope("first"), Envelope("second")
+    receiver = HoldingReceiver([first, second])
+
+    await Worker(RecordingBus(), receiver).run()
+
+    assert receiver.acked == [first, second]
 
 
 async def test_a_message_is_handled_apart_from_the_context_the_worker_runs_in() -> None:
@@ -582,3 +636,50 @@ async def test_the_receiver_is_closed_before_the_worker_says_it_stopped() -> Non
     await asyncio.wait_for(worker.run(), timeout=_TIMEOUT)
 
     assert events == ["receiver closed", "stopped"]
+
+
+@final
+class RetryingReceiver(ReceiverInterface):
+    """A receiver that retries every message once, and says so when asked."""
+
+    def __init__(self, backlog: Iterable[Envelope], *, retries: bool) -> None:
+        self._backlog = tuple(backlog)
+        self._retries = retries
+        self.asked: list[Envelope] = []
+        self.rejected: list[Envelope] = []
+
+    @override
+    async def get(self) -> AsyncIterator[Envelope]:
+        for envelope in self._backlog:
+            yield envelope
+
+    @override
+    async def ack(self, envelope: Envelope) -> None:
+        del envelope
+
+    @override
+    async def reject(self, envelope: Envelope) -> None:
+        self.rejected.append(envelope)
+
+    def will_retry(self, envelope: Envelope) -> bool:
+        self.asked.append(envelope)
+        return self._retries
+
+
+@pytest.mark.parametrize("retries", [True, False])
+async def test_a_failure_is_announced_as_retried_when_its_receiver_will_retry_it(
+    retries: bool,
+) -> None:
+    dispatcher = EventDispatcher()
+    failures: list[WorkerMessageFailedEvent] = []
+    dispatcher.add_listener(WorkerMessageFailedEvent, failures.append)
+    receiver = RetryingReceiver([Envelope("a")], retries=retries)
+
+    await Worker(
+        RecordingBus(failure=ValueError("boom")), receiver, event_dispatcher=dispatcher
+    ).run()
+
+    [failed] = failures
+    assert failed.will_retry is retries
+    assert isinstance(receiver, RetryingReceiverInterface)
+    assert receiver.rejected == [failed.envelope]

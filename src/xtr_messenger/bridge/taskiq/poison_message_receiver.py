@@ -11,6 +11,7 @@ never the body, which may carry anything a producer put in a message.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final, TypeAlias, final
@@ -49,7 +50,7 @@ class PoisonMessageReceiver(Receiver):
     asked for.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — everything past `broker` is keyword-only, mirroring taskiq's receiver
         self,
         broker: AsyncBroker,
         *,
@@ -57,15 +58,32 @@ class PoisonMessageReceiver(Receiver):
         max_async_tasks: int | None = None,
         max_prefetch: int = 0,
         run_startup: bool = True,
+        wait_tasks_timeout: float | None = None,
     ) -> None:
-        """Screen ``broker``'s deliveries, quarantining poison through ``dead_letter``."""
+        """Screen ``broker``'s deliveries, quarantining poison through ``dead_letter``.
+
+        ``wait_tasks_timeout`` bounds how long a stopping loop waits for the
+        deliveries it is still handling; ``None`` waits for as long as they take.
+        """
         super().__init__(
             broker,
             max_async_tasks=max_async_tasks,
             max_prefetch=max_prefetch,
             run_startup=run_startup,
+            wait_tasks_timeout=wait_tasks_timeout,
         )
         self._dead_letter = dead_letter
+        self._in_flight: set[asyncio.Task[object]] = set()
+
+    @property
+    def in_flight(self) -> frozenset[asyncio.Task[object]]:
+        """Return the tasks handling a delivery right now.
+
+        The loop starts each on its own, outside anything that is cancelled
+        with it, so whoever runs the loop waits for these before closing what
+        they still use.
+        """
+        return frozenset(self._in_flight)
 
     @override
     async def callback(
@@ -74,6 +92,16 @@ class PoisonMessageReceiver(Receiver):
         raise_err: bool = False,
     ) -> None:
         """Run the loop's own handling, unless the delivery is poison."""
+        task: asyncio.Task[object] | None = asyncio.current_task()
+        if task is not None:
+            self._in_flight.add(task)
+        try:
+            return await self._screened(message, raise_err)
+        finally:
+            if task is not None:
+                self._in_flight.discard(task)
+
+    async def _screened(self, message: bytes | AckableMessage, raise_err: bool) -> None:
         data = message.data if isinstance(message, AckableMessage) else message
         reason = self._poison_reason(data)
         if reason is None:

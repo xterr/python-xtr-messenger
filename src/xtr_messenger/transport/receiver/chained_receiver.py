@@ -13,6 +13,7 @@ from xtr_messenger.stamp import AckReceiptStamp, ReceivedStamp
 
 from ._close_stream import close_stream
 from .receiver_interface import ReceiverInterface
+from .retrying_receiver_interface import RetryingReceiverInterface
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
@@ -161,7 +162,26 @@ class ChainedReceiver(ReceiverInterface):
             return None
         return self._outstanding.pop(ticket.receipt, None)
 
+    def will_retry(self, envelope: Envelope) -> bool:
+        """Tell whether the receiver ``envelope`` came from retries it once rejected.
+
+        Asking settles nothing; an envelope this receiver never handed out,
+        or one from a receiver that never retries, is not retried.
+        """
+        ticket = envelope.last(AckReceiptStamp)
+        origin = None if ticket is None else self._outstanding.get(ticket.receipt)
+        if origin is None:
+            return False
+        receiver, collected = origin
+        if not isinstance(receiver, RetryingReceiverInterface):
+            return False
+        receipt = collected.last(AckReceiptStamp)
+        return receiver.will_retry(envelope if receipt is None else envelope.with_stamps(receipt))
+
 
 def _fetch(stream: AsyncIterator[Envelope]) -> _Fetch:
     """Start waiting for ``stream``'s next message."""
+    # The current context is right: the worker steps every receiver in the one context it
+    # collects messages in, never a unit of work. (``ensure_future`` takes no context.)
+    # ast-grep-ignore: task-without-context
     return asyncio.ensure_future(anext(stream))

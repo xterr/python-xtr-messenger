@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, Final, final
 
 from typing_extensions import override
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from .stack_interface import StackInterface
 
-__all__ = ["DispatchAfterCurrentBusMiddleware"]
+__all__ = ["DETACHED_VARIABLE", "DispatchAfterCurrentBusMiddleware"]
 
 
 @final
@@ -34,8 +34,18 @@ class _Held:
 # What the message being handled in this context holds back. In a context
 # variable, not on the middleware: a worker and the bus its handlers dispatch
 # through are two chains, and what a handler dispatches must wait for the
-# worker's message all the same.
-_held: ContextVar[_Held | None] = ContextVar("xtr_messenger_dispatch_after_current_bus")
+# worker's message all the same. Closed once its message is done, so work that
+# outlives the message — a task its handler started — holds nothing back.
+_held: ContextVar[_Held | None] = ContextVar(
+    "xtr_messenger_dispatch_after_current_bus", default=None
+)
+
+DETACHED_VARIABLE: Final = (_held, None)
+"""What a new connection starts without: the messages an earlier request holds back.
+
+The messenger bundle registers it with the container, so a request a server
+starts from a copy of a handler's context dispatches as a message of its own.
+"""
 
 
 @final
@@ -63,7 +73,7 @@ class DispatchAfterCurrentBusMiddleware(MiddlewareInterface):
             DelayedMessageHandlingError: When the current message succeeded
                 and a message it held back then failed.
         """
-        held = _held.get(None)
+        held = _held.get()
         current = held is not None and held.open
         if envelope.last(DispatchAfterCurrentBusStamp) is not None:
             envelope = envelope.without_stamps(DispatchAfterCurrentBusStamp)
@@ -80,18 +90,18 @@ class DispatchAfterCurrentBusMiddleware(MiddlewareInterface):
         token = _held.set(held)
         try:
             handled = await stack.next().handle(envelope, stack)
-            errors: list[Exception] = []
+            failures: list[tuple[Envelope, Exception]] = []
             # A message dispatched here may hold back more: they join the end.
             while held.envelopes:
                 waiting, rest = held.envelopes.pop(0)
                 try:
                     _ = await rest.next().handle(waiting, rest)
                 except Exception as error:  # noqa: BLE001 — every held message is tried; each failure is reported.
-                    errors.append(error)
+                    failures.append((waiting, error))
         finally:
             held.open = False
             held.envelopes.clear()
             _held.reset(token)
-        if errors:
-            raise DelayedMessageHandlingError(handled, errors) from errors[0]
+        if failures:
+            raise DelayedMessageHandlingError(handled, failures) from failures[0][1]
         return handled

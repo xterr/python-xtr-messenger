@@ -84,6 +84,7 @@ from .stamp import (
 from .stamp_registry import declared_stamps, register_stamp, stamp_type_for
 from .transport.in_memory import InMemoryTransport, InMemoryTransportFactory
 from .transport.receiver.receiver_interface import ReceiverInterface
+from .transport.receiver.retrying_receiver_interface import RetryingReceiverInterface
 from .transport.sender import SenderInterface, SendersLocator, SendersLocatorInterface
 from .transport.serialization import (
     EncodedEnvelope,
@@ -156,6 +157,7 @@ __all__ = [
     "ReceiverInterface",
     "RedeliveryStamp",
     "RedispatchMessage",
+    "RetryingReceiverInterface",
     "SendMessageMiddleware",
     "SenderInterface",
     "SendersLocator",

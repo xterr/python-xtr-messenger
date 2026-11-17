@@ -7,7 +7,12 @@ from contextvars import ContextVar
 
 import pytest
 
-from xtr_messenger._own_context import in_own_context, started_in_own_context
+from xtr_messenger._own_context import (
+    in_own_context,
+    in_receive_loop,
+    leave_receive_loop,
+    started_in_receive_loop,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -74,9 +79,41 @@ async def test_cancelling_the_caller_cancels_the_work() -> None:
     assert cancelled == [True]
 
 
-async def test_the_work_knows_its_context_was_started_for_it() -> None:
-    async def ask() -> bool:
-        return started_in_own_context()
+async def _in_loop() -> bool:
+    return started_in_receive_loop()
 
-    assert not started_in_own_context()
-    assert await in_own_context(ask())
+
+async def test_a_receive_loop_knows_it_is_one() -> None:
+    assert not started_in_receive_loop()
+    assert await in_receive_loop(_in_loop())
+
+
+async def test_a_context_of_its_own_is_not_a_receive_loop_s() -> None:
+    async def nested() -> bool:
+        return await in_own_context(_in_loop())
+
+    assert not await in_own_context(_in_loop())
+    assert not await in_receive_loop(nested())
+
+
+async def test_the_receive_loop_does_not_see_what_the_caller_s_context_carries() -> None:
+    token = _TENANT.set("caller")
+    try:
+        seen = await in_receive_loop(_tenant())
+    finally:
+        _TENANT.reset(token)
+
+    assert seen == "none"
+
+
+async def test_a_task_the_loop_starts_is_in_the_loop_until_it_leaves() -> None:
+    async def message() -> tuple[bool, bool]:
+        before = started_in_receive_loop()
+        leave_receive_loop()
+        return before, started_in_receive_loop()
+
+    async def loop() -> tuple[tuple[bool, bool], bool]:
+        left = await asyncio.create_task(message())
+        return left, started_in_receive_loop()
+
+    assert await in_receive_loop(loop()) == ((True, False), True)

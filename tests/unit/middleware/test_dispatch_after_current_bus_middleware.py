@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import final
 
 import pytest
 from typing_extensions import override
+from xtr_dependency_injection.integration import detached_context, register_detached_variable
 
 from xtr_messenger import (
     DelayedMessageHandlingError,
@@ -18,6 +20,7 @@ from xtr_messenger import (
     MiddlewareInterface,
     StackInterface,
 )
+from xtr_messenger.middleware.dispatch_after_current_bus_middleware import DETACHED_VARIABLE
 
 pytestmark = pytest.mark.anyio
 
@@ -170,6 +173,10 @@ async def test_every_held_message_is_tried_and_their_failures_raised_together() 
         _ = await bus.dispatch(Note("order"))
 
     assert [str(error) for error in raised.value.errors] == ["receipt", "archive"]
+    assert [envelope.message for envelope, _ in raised.value.failures] == [
+        Note("receipt"),
+        Note("archive"),
+    ]
     assert raised.value.envelope.message == Note("order")
     assert isinstance(raised.value.__cause__, LookupError)
     assert "handle audit" in log
@@ -191,3 +198,70 @@ async def test_a_stamped_message_dispatched_once_the_current_one_is_done_goes_ou
     await pending[0]()
 
     assert log == ["handle order", "done order", "handle receipt", "done receipt"]
+
+
+async def test_a_task_outliving_the_hold_back_does_not_see_it() -> None:
+    log: list[str] = []
+    handling = Handling(log)
+    bus = a_bus(handling)
+    gate = asyncio.Event()
+    outliving: list[asyncio.Task[None]] = []
+
+    async def later_on() -> None:
+        _ = await gate.wait()
+        await later(bus, "receipt")()
+
+    async def spawn() -> None:
+        outliving.append(asyncio.create_task(later_on()))
+
+    handling.steps["order"] = [spawn]
+
+    _ = await bus.dispatch(Note("order"))
+    gate.set()
+    await outliving[0]
+
+    assert log == ["handle order", "done order", "handle receipt", "done receipt"]
+
+
+async def test_follow_ups_from_gathered_children_are_held_until_the_parent_finishes() -> None:
+    log: list[str] = []
+    handling = Handling(log)
+    bus = a_bus(handling)
+
+    async def children() -> None:
+        _ = await asyncio.gather(later(bus, "first")(), later(bus, "second")())
+
+    handling.steps["order"] = [later(bus, "own"), children]
+
+    _ = await bus.dispatch(Note("order"))
+
+    assert log == [
+        "handle order",
+        "done order",
+        "handle own",
+        "done own",
+        "handle first",
+        "done first",
+        "handle second",
+        "done second",
+    ]
+
+
+async def test_a_detached_connection_does_not_join_an_open_hold_back() -> None:
+    register_detached_variable(*DETACHED_VARIABLE)
+    log: list[str] = []
+    handling = Handling(log)
+    bus = a_bus(handling)
+
+    async def serve_a_new_connection() -> None:
+        async def request() -> None:
+            await later(bus, "request")()
+
+        # A request served from inside the handler, its task copied from this context.
+        await asyncio.get_running_loop().create_task(request(), context=detached_context())
+
+    handling.steps["order"] = [serve_a_new_connection]
+
+    _ = await bus.dispatch(Note("order"))
+
+    assert log == ["handle order", "handle request", "done request", "done order"]

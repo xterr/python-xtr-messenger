@@ -105,7 +105,7 @@ def test_handlers_failed_error_names_a_failure_that_cannot_print_itself() -> Non
 def test_delayed_message_handling_error_names_a_failure_that_cannot_print_itself() -> None:
     failure = UnprintableError()
 
-    error = DelayedMessageHandlingError(Envelope(Sample()), [failure])
+    error = DelayedMessageHandlingError(Envelope(Sample()), [(Envelope(Sample()), failure)])
 
     assert error.errors == (failure,)
     assert str(error).endswith("failed: [unprintable tests.support.errors.UnprintableError]")

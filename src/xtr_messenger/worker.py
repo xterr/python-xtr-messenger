@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Protocol, final, runtime_checkable
+import logging
+from contextvars import copy_context
+from typing import TYPE_CHECKING, Final, Protocol, final, runtime_checkable
 
 from typing_extensions import override
 
@@ -12,10 +14,12 @@ from ._own_context import in_own_context
 from .event import WorkerRunningEvent, WorkerStartedEvent, WorkerStoppedEvent
 from .stamp import ReceivedStamp
 from .transport.receiver._close_stream import close_stream
+from .transport.receiver.retrying_receiver_interface import RetryingReceiverInterface
 from .worker_interface import WorkerInterface
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from contextvars import Context
 
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
@@ -24,6 +28,11 @@ if TYPE_CHECKING:
     from .transport.receiver.receiver_interface import ReceiverInterface
 
 __all__ = ["AsyncResetter", "Worker"]
+
+#: Log lines go through the messenger channel, so an application capturing
+#: the standard library's logging sees them beside the rest of the bus's
+#: output.
+_LOGGER: Final = logging.getLogger("messenger")
 
 
 @runtime_checkable
@@ -79,8 +88,9 @@ class Worker(WorkerInterface):
 
         ``resetter``, when given, has ``reset()`` awaited after each handled
         message — settled either way — so long-lived services (a logger's
-        fingers-crossed buffer, a request-scoped registry) are cleared between
-        units of work.
+        fingers-crossed buffer) are cleared between units of work. A reset
+        that fails is logged: it changes nothing about the message, already
+        settled, and does not stop the worker.
 
         ``event_dispatcher``, when given, hears about the worker and about
         every message — see :mod:`xtr_messenger.event`. ``receiver_name`` is
@@ -121,7 +131,9 @@ class Worker(WorkerInterface):
         the messages it held back, a listener of its events — and shared by
         every message after it. Nor does a context variable one message left
         behind reach the next. Collecting stays where this runs: only a
-        message is new work.
+        message is new work. It runs in one context for the whole run,
+        copied from this one, so a receiver may set a context variable before
+        it yields and reset it once the worker comes back for the next.
 
         With an event dispatcher, a message a listener decides not to handle
         is acknowledged without being dispatched — skipping is not failing.
@@ -138,13 +150,18 @@ class Worker(WorkerInterface):
         self._stopped = stopped
         await self._announce(WorkerStartedEvent(self))
         collected = self._receiver.get()
+        collecting = copy_context()
         try:
-            while (envelope := await _next_unless_stopped(collected, stopped)) is not None:
+            while (
+                envelope := await _next_unless_stopped(collected, stopped, collecting)
+            ) is not None:
                 await in_own_context(self._settle(envelope))
                 await self._announce(WorkerRunningEvent(self))
         finally:
             self._stopped = None
-            await close_stream(collected)
+            await asyncio.get_running_loop().create_task(
+                close_stream(collected), context=collecting
+            )
             await self._announce(WorkerStoppedEvent(self))
 
     @override
@@ -173,10 +190,19 @@ class Worker(WorkerInterface):
                 case Handled(settled) | Skipped(settled):
                     await self._receiver.ack(settled)
                 case Failed() as failed:
-                    await announce_failure(failed, name, self._dispatcher, self._receiver.reject)
+                    receiver = self._receiver
+                    will_retry = isinstance(
+                        receiver, RetryingReceiverInterface
+                    ) and receiver.will_retry(failed.envelope)
+                    await announce_failure(
+                        failed, name, self._dispatcher, receiver.reject, will_retry=will_retry
+                    )
         finally:
             if self._resetter is not None:
-                await self._resetter.reset()
+                try:
+                    await self._resetter.reset()
+                except Exception:
+                    _LOGGER.exception("services failed to reset after a message")
 
     async def _announce(self, event: object) -> None:
         if self._dispatcher is not None:
@@ -186,19 +212,24 @@ class Worker(WorkerInterface):
 async def _next_unless_stopped(
     collected: AsyncIterator[Envelope],
     stopped: asyncio.Event,
+    collecting: Context,
 ) -> Envelope | None:
     """Return the next envelope, or ``None`` once exhausted or stopped.
 
     Waits on both at once, so a stop is honoured while the receiver is still
     waiting for a message. A message that arrives together with the stop is
     returned rather than dropped: it was collected, so it has to be settled.
+    Every step of ``collected`` runs in ``collecting``, the one context the
+    receiver's generator sees from its first step to its last.
 
     Raises:
         Exception: Whatever the receiver raised while collecting.
     """
     if stopped.is_set():
         return None
-    fetch = asyncio.ensure_future(anext(collected, None))
+    fetch = asyncio.get_running_loop().create_task(_next(collected), context=collecting)
+    # Waiting on an event reads no context; it is cancelled before this returns.
+    # ast-grep-ignore: task-without-context
     halt = asyncio.ensure_future(stopped.wait())
     try:
         _ = await asyncio.wait((fetch, halt), return_when=asyncio.FIRST_COMPLETED)
@@ -210,3 +241,8 @@ async def _next_unless_stopped(
             # message it delivered just as it was cancelled is still settled.
             _ = await asyncio.gather(fetch, return_exceptions=True)
     return None if fetch.cancelled() else fetch.result()
+
+
+async def _next(collected: AsyncIterator[Envelope]) -> Envelope | None:
+    """Return the next envelope ``collected`` yields, or ``None`` once it is exhausted."""
+    return await anext(collected, None)

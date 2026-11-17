@@ -303,6 +303,10 @@ Ctrl-C cancels it. Run without a container — a plain console with no kernel be
 command's `WorkerFactory` cannot be filled, so the console reports the missing parameter
 rather than build it bare.
 
+On a transport with its own worker — taskiq, RabbitMQ — a stopping worker waits up to 30 seconds
+for the messages it is handling, then cancels those still running: a cancelled handler counts as
+a failed attempt, retried or dead-lettered as any failure, not redelivered as unsettled.
+
 ### Who retries
 
 The loop makes **exactly one attempt per message** and never retries. Redelivery is something
@@ -315,6 +319,12 @@ On AMQP that means a retry ladder and real dead-lettering. When attempts run out
 is republished to `taskiq.dlq` — or the `dead_letter_queue` you name — in its original wire
 format, so it can be inspected and replayed. A handler that asks for the envelope sees which
 attempt it is on in its `RedeliveryStamp`.
+
+A receiver that retries says so through `RetryingReceiverInterface.will_retry(envelope)`; the
+worker asks it before announcing a failure, so `WorkerMessageFailedEvent.will_retry` tells an
+attempt that will be made again from a message that failed for good. `ChainedReceiver` forwards
+the question to the receiver the message came from; a receiver that does not offer it never
+retries.
 
 ### Each message in a context of its own
 
@@ -577,8 +587,13 @@ async def place(message: PlaceOrder, bus: Injected[MessageBusInterface]) -> None
 
 - Held-back messages go out in the order dispatched; one they dispatch with the stamp joins the
   end of the line. Each is tried even when one before it failed, and then
-  `DelayedMessageHandlingError` carries every failure, and the envelope of the message that
-  succeeded.
+  `DelayedMessageHandlingError` carries every failure in `failures` — each held-back envelope
+  with what it raised — and the envelope of the message that succeeded.
+- In a worker, a follow-up failing does not fail the message that held it back: that message is
+  done and committed, and rejecting it would run it again. It is acknowledged; each failed
+  follow-up is logged on the `messenger` logger and announced as a `WorkerMessageFailedEvent`
+  of its own with `will_retry=False` — reported, never retried. A listener of
+  `WorkerMessageHandledEvent` that raises is logged too; the message stays handled.
 - The message being handled is the first dispatched in the task — on the bus or by a worker,
   whichever bus the handler dispatches through. A stamped message dispatched with nothing
   being handled goes out at once.
@@ -730,10 +745,6 @@ which the `amqp` extra brings too. Nothing in this package names a broker driver
 the taskiq bridge works installed without aio-pika: beside taskiq, the application adds the
 package of the broker it picks — Redis, NATS — or uses taskiq's in-memory broker. RabbitMQ is a
 package of its own, built on that bridge. Tests enforce all three claims.
-
-`xtr_messenger.bridge.amqp` and its modules still import, as the very objects
-xtr-amqp-messenger defines, through this major version; import from `xtr_amqp_messenger`
-instead — the old path goes in the next one.
 
 ### Writing your own
 
@@ -941,7 +952,9 @@ and every handler of a message share one
 database session — is built once per message, handed to each handler asking for it, and
 released when the message is done with, even when a handler raised. A message dispatched while
 another is handled — or while a request or a command runs — joins that unit; a message a worker
-received is always a unit of its own, even when a command runs the worker. A message held back
+received is always a unit of its own, even when a command runs the worker. A handler of a message
+that joined a request's unit sees that request's security token; the same message handled by a
+worker sees none. Authorize from what the message carries, not from the current user. A message held back
 is dispatched once the unit of the one that held it back is over: in a worker it is a unit of
 its own, and where a request or a command dispatched that message it joins theirs, as anything
 they dispatch does. A middleware needing the message's instance resolves it from
@@ -999,8 +1012,10 @@ TickReceiver()})`. One worker may drain registered receivers and configured tran
 together, except a transport that brings its own worker, which cannot share it
 (`IncompatibleReceiversError`).
 
-Between messages a worker calls `ServicesResetter.reset()`, so services opting in with
-`ResetInterface` — or explicitly tagged `kernel.reset` — are cleared per unit of work.
+Between messages a worker calls `ServicesResetter.reset()`, so built singletons opting in with
+`ResetInterface` — or explicitly tagged `kernel.reset` — are cleared; scoped services end with
+the message's own unit of work. A reset that fails is logged on the `messenger` logger and
+never changes a message's outcome.
 
 ## Layout
 
@@ -1051,6 +1066,11 @@ xtr_messenger/
   from untrusted producers.
 - Stamps come back grouped by class: the order among stamps of one class is kept, the order
   between classes is not.
+
+## Upgrading
+
+What changes for an application moving to 7.0, and how to keep the old behaviour where that is
+still possible: [Upgrading to 7.0](../../UPGRADING.md#xtr-messenger).
 
 ## Development
 

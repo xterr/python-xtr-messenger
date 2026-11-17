@@ -13,17 +13,21 @@ from taskiq import InMemoryBroker, TaskiqMiddleware
 from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
-from tests.support.fakes import ContextNotingBus, RecordingBus
+from tests.support.fakes import ContextNotingBus, RecordingBus, StubReceiver
 from tests.support.messages import AnalyseDocument, ingest_document
 from tests.support.serialization import json_serializer
 from tests.support.taskiq import DeliveringBroker, delivery
 from xtr_messenger import (
     Envelope,
     ErrorDetailsStamp,
+    MessageBusInterface,
     MessageDecodingFailedError,
     ReceivedStamp,
     RedeliveryStamp,
+    StampInterface,
+    Worker,
 )
+from xtr_messenger._own_context import started_in_receive_loop
 from xtr_messenger.bridge.taskiq.binding import bind_bus
 from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, QUEUE_LABEL, RETRIES_LABEL
 from xtr_messenger.bridge.taskiq.taskiq_worker import TaskiqWorker
@@ -119,7 +123,7 @@ class SpanMiddleware(TaskiqMiddleware):
         return message
 
 
-async def test_a_task_a_worker_started_keeps_what_the_broker_set_for_its_message() -> None:
+async def test_a_message_started_by_the_receive_loop_is_not_wrapped_twice() -> None:
     """A worker starts its receiver in a context of its own, so a task it runs
     carries nothing of the host's to shed — and what the broker's middleware
     set for the message, a tracing span say, reaches the handlers."""
@@ -145,6 +149,88 @@ async def test_a_task_a_worker_started_keeps_what_the_broker_set_for_its_message
     await asyncio.wait_for(run, timeout=_TIMEOUT)
 
     assert bus.noted == [f"span of {_INGEST}"]
+
+
+@final
+class KickingBus(MessageBusInterface):
+    """Sets the tenant for each message, then kicks a follow-up on ``broker`` in-process."""
+
+    def __init__(self, broker: InMemoryBroker, tenant: str) -> None:
+        self._broker = broker
+        self._tenant = tenant
+        self.kicked = asyncio.Event()
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        _ = _TENANT.set(self._tenant)
+        body, headers = _body()
+        _ = await _kick(self._broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+        self.kicked.set()
+        return Envelope.wrap(message, stamps)
+
+
+async def test_an_in_process_follow_up_of_a_worker_message_starts_in_a_context_of_its_own(
+    broker: InMemoryBroker,
+) -> None:
+    follow_ups = ContextNotingBus(_TENANT)
+    _ = bind_bus(broker, follow_ups, json_serializer())
+
+    await Worker(KickingBus(broker, "worker message"), StubReceiver([Envelope("job")])).run()
+
+    assert follow_ups.noted == ["none"]
+
+
+async def test_an_in_process_follow_up_of_a_taskiq_message_starts_in_a_context_of_its_own(
+    broker: InMemoryBroker,
+) -> None:
+    follow_ups = ContextNotingBus(_TENANT)
+    _ = bind_bus(broker, follow_ups, json_serializer())
+    serializer = json_serializer()
+    consumed = DeliveringBroker(
+        [delivery(serializer.encode(Envelope.wrap(ingest_document())), _INGEST)]
+    )
+    kicking = KickingBus(broker, "taskiq message")
+    _ = bind_bus(consumed, kicking, serializer)
+    worker = TaskiqWorker(consumed)
+    run = asyncio.create_task(worker.run())
+
+    _ = await asyncio.wait_for(kicking.kicked.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert follow_ups.noted == ["none"]
+
+
+@final
+class FlagNotingBus(MessageBusInterface):
+    """Notes whether each message reads as being in the receive loop."""
+
+    def __init__(self) -> None:
+        self.noted: list[bool] = []
+        self.handled = asyncio.Event()
+
+    @override
+    async def dispatch(self, message: object, *stamps: StampInterface) -> Envelope:
+        self.noted.append(started_in_receive_loop())
+        self.handled.set()
+        return Envelope.wrap(message, stamps)
+
+
+async def test_the_receive_loop_flag_reads_false_inside_a_taskiq_handler() -> None:
+    serializer = json_serializer()
+    consumed = DeliveringBroker(
+        [delivery(serializer.encode(Envelope.wrap(ingest_document())), _INGEST)]
+    )
+    bus = FlagNotingBus()
+    _ = bind_bus(consumed, bus, serializer)
+    worker = TaskiqWorker(consumed)
+    run = asyncio.create_task(worker.run())
+
+    _ = await asyncio.wait_for(bus.handled.wait(), timeout=_TIMEOUT)
+    worker.stop()
+    await asyncio.wait_for(run, timeout=_TIMEOUT)
+
+    assert bus.noted == [False]
 
 
 async def test_the_attempt_comes_from_the_retries_label(broker: InMemoryBroker) -> None:
@@ -452,6 +538,43 @@ async def test_services_are_reset_after_an_undecodable_message(broker: InMemoryB
     _ = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: "not json"})
 
     assert resetter.resets == 1
+
+
+@final
+class FailingResetter:
+    """Fails every reset, as a service of another message might."""
+
+    async def reset(self) -> None:
+        raise RuntimeError("a service failed to reset")
+
+
+async def test_a_failing_reset_does_not_change_a_handled_result(
+    broker: InMemoryBroker, caplog: pytest.LogCaptureFixture
+) -> None:
+    bus = RecordingBus()
+    _ = bind_bus(broker, bus, json_serializer(), resetter=FailingResetter())
+    body, headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+    result = await handle.wait_result()
+
+    assert not result.is_err
+    assert len(bus.dispatched) == 1
+    assert [record.getMessage() for record in caplog.records if record.name == "messenger"] == [
+        "services failed to reset after a message"
+    ]
+
+
+async def test_a_failing_reset_keeps_the_failure_a_message_raised(broker: InMemoryBroker) -> None:
+    bus = RecordingBus(failure=RuntimeError("boom"))
+    _ = bind_bus(broker, bus, json_serializer(), resetter=FailingResetter())
+    body, headers = _body()
+
+    handle = await _kick(broker, _INGEST, body, **{RETRIES_LABEL: 0, HEADERS_LABEL: headers})
+    result = await handle.wait_result()
+
+    assert result.is_err
+    assert str(result.error) == "boom"
 
 
 async def test_an_undecodable_message_is_dead_lettered_instead_of_retried(

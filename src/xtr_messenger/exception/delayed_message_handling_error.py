@@ -26,18 +26,22 @@ class DelayedMessageHandlingError(MessageBusError):
     Attributes:
         envelope: The message whose handling held them back, as its handling
             left it.
-        errors: What each failed dispatch raised, in the order dispatched.
+        failures: Each held-back message that failed, with what its dispatch
+            raised, in the order dispatched.
+        errors: What each failed dispatch raised, in the same order.
     """
 
     envelope: Envelope
+    failures: tuple[tuple[Envelope, Exception], ...]
     errors: tuple[Exception, ...]
 
-    def __init__(self, envelope: Envelope, errors: Sequence[Exception]) -> None:
-        """Record the message that succeeded and what its held-back messages raised."""
+    def __init__(self, envelope: Envelope, failures: Sequence[tuple[Envelope, Exception]]) -> None:
+        """Record the message that succeeded and each held-back message that then failed."""
         self.envelope = envelope
-        self.errors = tuple(errors)
-        failures = "; ".join(safe_str(error) for error in self.errors)
+        self.failures = tuple(failures)
+        self.errors = tuple(error for _, error in self.failures)
+        reasons = "; ".join(safe_str(error) for error in self.errors)
         kind = type(envelope.message).__qualname__
         super().__init__(
-            f"{len(self.errors)} message(s) dispatched after {kind} was handled failed: {failures}"
+            f"{len(self.errors)} message(s) dispatched after {kind} was handled failed: {reasons}"
         )
