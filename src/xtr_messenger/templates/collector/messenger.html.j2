@@ -1,0 +1,267 @@
+{#
+  Every message the request dispatched on the bus, and what came of each.
+
+  A traced bus records a dispatch as it starts, so the messages keep the order
+  they left in — one a handler dispatched follows the message it was handling —
+  and the record is completed once the bus answers: the stamps the envelope
+  came back with, the handlers that ran and what they returned, the senders
+  that took it, how long it took, and what it raised. The message itself was
+  cloned and masked as it was recorded, so the body shown here is what was
+  dispatched, not what the object holds now.
+#}
+{% block toolbar %}
+{% from "@xtr_web_profiler/profiler/toolbar_item.html.j2" import toolbar_item %}
+{% set count = collector.data.get("count") or 0 %}
+{% set failed = collector.data.get("failed") or 0 %}
+{% set icon %}
+<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1.6 8h5.2M5.2 5.9L7.3 8l-2.1 2.1"></path>
+  <rect x="9" y="3.2" width="5.4" height="9.6" rx="1.3"></rect>
+  <path d="M10.6 6h2.2M10.6 8h2.2M10.6 10h2.2"></path>
+</svg>
+<span class="xtr-toolbar-value">{{ count }}</span>
+{% endset %}
+{% set text %}
+<dl class="xtr-toolbar-rows">
+  <dt>Dispatched</dt><dd>{{ count }}</dd>
+  <dt>Handled</dt><dd>{{ collector.data.get("handled") or 0 }}</dd>
+  <dt>Sent</dt><dd>{{ collector.data.get("sent") or 0 }}</dd>
+  <dt>Failed</dt><dd>{{ failed }}</dd>
+  <dt>Took</dt><dd>{{ collector.data.get("duration_ms")|format_ms }}</dd>
+</dl>
+<p class="xtr-toolbar-note">Every dispatch of this request's unit of work, one made while the body streamed included.</p>
+{% endset %}
+{{ toolbar_item(collector.name, icon, text, link=panel_url(collector.name), status="red" if failed else "normal") }}
+{% endblock %}
+
+{% block menu %}
+<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M1.6 8h5.2M5.2 5.9L7.3 8l-2.1 2.1"></path>
+  <rect x="9" y="3.2" width="5.4" height="9.6" rx="1.3"></rect>
+  <path d="M10.6 6h2.2M10.6 8h2.2M10.6 10h2.2"></path>
+</svg>
+<span class="xtr-menu-label">Message bus</span>
+{% if collector.data.get("failed") %}
+<span class="xtr-menu-count xtr-menu-count-red" title="dispatches that raised">{{ collector.data.get("failed") }}</span>
+{% else %}
+<span class="xtr-menu-count">{{ collector.data.get("count") or 0 }}</span>
+{% endif %}
+{% endblock %}
+
+{% block panel %}
+{% set messages = collector.data.get("messages") or [] %}
+{% set handled_rows = [] %}
+{% set sent_rows = [] %}
+{% set failed_rows = [] %}
+{% set deliveries = [] %}
+{% for dispatch in messages %}
+{% if dispatch.get("handled") %}
+{% set _ = handled_rows.append(dispatch) %}
+{% endif %}
+{% if dispatch.get("sent") %}
+{% set _ = sent_rows.append(dispatch) %}
+{% endif %}
+{% if dispatch.get("error") %}
+{% set _ = failed_rows.append(dispatch) %}
+{% endif %}
+{% for sender in dispatch.get("sent") or [] %}
+{% set _ = deliveries.append(sender) %}
+{% endfor %}
+{% endfor %}
+{% macro dispatch_table(tag, rows, nothing) %}
+{% set tones = {"failed": "red", "handled": "green", "sent": "blue"} %}
+<div class="xtr-toolstrip">
+  <input class="xtr-filter" type="search" placeholder="Filter these messages…" aria-label="Filter the messages shown" data-xtr-filter="xtr-messenger-{{ tag }}" data-xtr-filter-count="xtr-messenger-{{ tag }}-count">
+  <span class="xtr-card-note" id="xtr-messenger-{{ tag }}-count">{{ rows|length }} of {{ rows|length }}</span>
+</div>
+{% if rows %}
+<div class="xtr-scroll">
+  <table class="xtr-table" id="xtr-messenger-{{ tag }}">
+    <thead>
+      <tr>
+        <th scope="col">Message</th>
+        <th scope="col">Outcome</th>
+        <th scope="col">Handlers</th>
+        <th scope="col">Sent through</th>
+        <th scope="col">Stamps</th>
+        <th scope="col">Body</th>
+        <th scope="col">Took</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for dispatch in rows %}
+      {% set outcome = "failed" if dispatch.get("error") else ("handled" if dispatch.get("handled") else ("sent" if dispatch.get("sent") else "nothing")) %}
+      {% set tone = tones.get(outcome, "") %}
+      {% set handlers = dispatch.get("handled") or [] %}
+      {% set senders = dispatch.get("sent") or [] %}
+      {% set stamps_in = dispatch.get("stamps_in") or [] %}
+      {% set stamps_out = dispatch.get("stamps_out") or [] %}
+      <tr>
+        <td class="xtr-cell-mono xtr-break">{{ dispatch.get("message_class") or "?" }}</td>
+        <td class="xtr-cell-tight"><span class="xtr-badge{% if tone %} xtr-badge-{{ tone }}{% endif %}">{{ outcome }}</span></td>
+        <td>
+          {% if handlers %}
+          <details class="xtr-dump">
+            <summary><span class="xtr-dump-type">handlers</span> <span class="xtr-dump-count">({{ handlers|length }})</span></summary>
+            <ul>
+              {% for handler in handlers %}
+              <li><span class="xtr-dump-key">{{ handler.get("handler") or "?" }}</span>: {{ handler.get("result")|profiler_dump }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% else %}
+          <span class="xtr-dump-null">none</span>
+          {% endif %}
+        </td>
+        <td class="xtr-break">
+          {% if senders %}
+          {% for sender in senders %}
+          <span class="xtr-badge" title="{{ sender.get('sender') or 'an unnamed sender' }}">{{ sender.get("alias") or sender.get("sender") or "?" }}</span>
+          {% endfor %}
+          {% else %}
+          <span class="xtr-dump-null">none</span>
+          {% endif %}
+        </td>
+        <td>
+          <details class="xtr-dump">
+            <summary><span class="xtr-dump-type">stamps</span> <span class="xtr-dump-count">({{ stamps_in|length }} in, {{ stamps_out|length }} out)</span></summary>
+            <ul>
+              <li><span class="xtr-dump-key">in</span>: {% if stamps_in %}<span class="xtr-dump-scalar">{{ stamps_in|join(", ") }}</span>{% else %}<span class="xtr-dump-null">none</span>{% endif %}</li>
+              <li><span class="xtr-dump-key">out</span>: {% if stamps_out %}<span class="xtr-dump-scalar">{{ stamps_out|join(", ") }}</span>{% else %}<span class="xtr-dump-null">none</span>{% endif %}</li>
+            </ul>
+          </details>
+        </td>
+        <td>
+          <details class="xtr-dump">
+            <summary><span class="xtr-dump-type">body</span></summary>
+            <ul><li>{{ dispatch.get("message")|profiler_dump }}</li></ul>
+          </details>
+        </td>
+        <td class="xtr-cell-num">{{ dispatch.get("duration_ms")|format_ms }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="xtr-empty">{{ nothing }}</p>
+{% endif %}
+{% endmacro %}
+<h1 class="xtr-panel-title">Message bus</h1>
+<section class="xtr-card">
+  <div class="xtr-card-body">
+    <table class="xtr-table xtr-table-key">
+      <tbody>
+        <tr><td>Dispatched</td><td class="xtr-cell-mono">{{ collector.data.get("count") or 0 }}</td></tr>
+        <tr><td>Handled</td><td class="xtr-cell-mono">{{ collector.data.get("handled") or 0 }}</td></tr>
+        <tr><td>Sent</td><td class="xtr-cell-mono">{{ collector.data.get("sent") or 0 }}</td></tr>
+        <tr><td>Failed</td><td class="xtr-cell-mono">{{ collector.data.get("failed") or 0 }}</td></tr>
+        <tr><td>Took</td><td class="xtr-cell-mono">{{ collector.data.get("duration_ms")|format_ms }}</td></tr>
+      </tbody>
+    </table>
+    <p class="xtr-card-note">
+      Handled counts the handlers that ran to the end, sent the senders that
+      took a message — a message handled here and a message put on a queue are
+      both one dispatch. Took is the time the bus itself spent, the handlers
+      that ran inside it included, so dispatches nested inside one another
+      count their time twice.
+    </p>
+  </div>
+</section>
+{% if failed_rows %}
+{% for dispatch in failed_rows %}
+{% set error = dispatch.get("error") or {} %}
+{% set handlers = error.get("handlers") or [] %}
+<section class="xtr-card">
+  <header class="xtr-card-head">
+    <div class="xtr-chain-head">
+      <span class="xtr-badge xtr-badge-red">raised</span>
+      <span class="xtr-chain-class">{{ error.get("class") or "Error" }}</span>
+    </div>
+    <div class="xtr-card-tail">
+      <span class="xtr-card-note">{{ dispatch.get("message_class") or "?" }}</span>
+    </div>
+  </header>
+  <div class="xtr-card-body">
+    <p class="xtr-chain-message">{{ error.get("message") or "(no message)" }}</p>
+    {% if handlers %}
+    <h3 class="xtr-section-title">Handlers that raised</h3>
+    <table class="xtr-table">
+      <thead>
+        <tr>
+          <th scope="col">Handler</th>
+          <th scope="col">Raised</th>
+          <th scope="col">Message</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for handler in handlers %}
+        <tr>
+          <td class="xtr-cell-mono xtr-break">{{ handler.get("handler") or "?" }}</td>
+          <td class="xtr-cell-mono xtr-break">{{ handler.get("class") or "Error" }}</td>
+          <td class="xtr-break">{{ handler.get("message") or "(no message)" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="xtr-card-note">
+      The bus raised this before any handler was reached, or raised it itself:
+      no handler of its own is named.
+    </p>
+    {% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+<section class="xtr-card xtr-card-flush xtr-tabs">
+  <div class="xtr-tablist" role="tablist" aria-label="Which messages to show">
+    <button type="button" class="xtr-tab xtr-on" data-xtr-tab="all" role="tab" aria-selected="true">All<span class="xtr-tab-count">{{ messages|length }}</span></button>
+    <button type="button" class="xtr-tab" data-xtr-tab="handled" role="tab" aria-selected="false">Handled<span class="xtr-tab-count">{{ handled_rows|length }}</span></button>
+    <button type="button" class="xtr-tab" data-xtr-tab="sent" role="tab" aria-selected="false">Sent<span class="xtr-tab-count">{{ sent_rows|length }}</span></button>
+    <button type="button" class="xtr-tab" data-xtr-tab="failed" role="tab" aria-selected="false">Failed<span class="xtr-tab-count">{{ failed_rows|length }}</span></button>
+  </div>
+  <section class="xtr-pane xtr-pane-flush xtr-on" data-xtr-pane="all" role="tabpanel">
+    {{ dispatch_table("all", messages, "This request dispatched nothing on the bus.") }}
+  </section>
+  <section class="xtr-pane xtr-pane-flush" data-xtr-pane="handled" role="tabpanel">
+    {{ dispatch_table("handled", handled_rows, "No handler ran to the end for a message of this request.") }}
+  </section>
+  <section class="xtr-pane xtr-pane-flush" data-xtr-pane="sent" role="tabpanel">
+    {{ dispatch_table("sent", sent_rows, "No message of this request was given to a sender.") }}
+  </section>
+  <section class="xtr-pane xtr-pane-flush" data-xtr-pane="failed" role="tabpanel">
+    {{ dispatch_table("failed", failed_rows, "Every dispatch of this request came back without raising.") }}
+  </section>
+</section>
+<section class="xtr-card xtr-card-flush">
+  <header class="xtr-card-head">
+    <h2 class="xtr-card-title">Senders</h2>
+    <span class="xtr-card-note">what took a message, by the alias it is configured under</span>
+  </header>
+  <div class="xtr-card-body">
+    {% if deliveries %}
+    <table class="xtr-table">
+      <thead>
+        <tr>
+          <th scope="col">Alias</th>
+          <th scope="col">Sender</th>
+          <th scope="col">Messages</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for alias, group in deliveries|groupby("alias") %}
+        <tr>
+          <td class="xtr-cell-mono xtr-break">{{ alias or "—" }}</td>
+          <td class="xtr-cell-mono xtr-break">{{ (group|first).get("sender") or "?" }}</td>
+          <td class="xtr-cell-num">{{ group|length }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="xtr-empty">No message of this request was given to a sender.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

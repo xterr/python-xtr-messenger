@@ -801,6 +801,28 @@ may run two applications, each with its own factory, and closing more than your 
 a connection the other is still publishing through. `TransportFactory` forwards to every
 factory behind it, and the `MessengerBundle` asks the one its own kernel built as it shuts down.
 
+## Profiler panel
+
+With [xtr-http-kernel](../xtr-http-kernel)'s profiler on, the profiler gains a `messenger` panel
+listing every message a profiled request dispatched on the container's bus, in the order it was
+dispatched — a message a handler dispatches comes after the one it is handling. For each: the
+message's class and its attributes, the stamps it went in with and came out with, every handler
+that ran and what it returned, every transport that took it, how long the dispatch took, and what
+it raised — with what each failed handler raised. The toolbar shows the count, and how many
+handlers ran, how many transports took a message and how many dispatches failed. An attribute or a
+key named like a credential — a password, a secret, a token, an API key, an authorization or
+cookie header — is kept as `******`.
+
+The `MessengerBundle` registers the panel only when the http kernel's bundle is active with its
+profiler on — the [web profiler](../xtr-web-profiler)'s bundle turns it on in development. It then
+wraps the container's `MessageBusInterface` in a `TraceableMessageBus`, which records into the
+trace the `MessengerDataCollector` reads; both live in `xtr_messenger.data_collector`. With the
+profiler off nothing is registered and the bus is not wrapped, so it costs nothing; with it on, a
+request that is not profiled costs one lookup per dispatch and records nothing.
+
+The panel covers what the request dispatched. A message a worker handles goes through the
+worker's own bus, which is not traced.
+
 ## Use in an application
 
 Everything adding this package to an application on
@@ -1047,6 +1069,7 @@ xtr_messenger/
 │   └── amqp/                where RabbitMQ used to be: re-exports xtr-amqp-messenger
 ├── command/
 │   └── consume.py           messenger:consume, on xtr-console
+├── data_collector/          the profiler's messenger panel: a traced bus and its collector
 └── bundle/                  MessengerBundle for xtr-dependency-injection
 ```
 

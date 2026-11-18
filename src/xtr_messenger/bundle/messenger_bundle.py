@@ -8,7 +8,9 @@ along: the envelope serializer writes every message through its
 active, ``messenger:consume`` is registered too; when the logging bundle is,
 the ``"messenger"`` channel is added to its config and the logging
 middleware writes through that channel's logger; when the event dispatcher
-bundle is, every worker announces itself and its messages through it.
+bundle is, every worker announces itself and its messages through it; when the
+http kernel's profiler is on, the bus records every message a profiled request
+dispatches, for the profiler's ``messenger`` panel.
 """
 
 from __future__ import annotations
@@ -195,6 +197,14 @@ class MessengerBundle(Bundle[MessageBusConfig]):
         _ = services.set(worker_factory)
         if bundle_active(builder, "console"):
             services.load("xtr_messenger.command")
+        if bundle_active(builder, "http_kernel"):
+            # xtr-http-kernel is optional; its bundle being active proves it installed.
+            from xtr_http_kernel.bundle import profiling_active  # noqa: PLC0415 — optional peer
+
+            if profiling_active(builder):
+                from ._profiler import register_profiler  # noqa: PLC0415 — needs the optional peer
+
+                register_profiler(services)
 
     @override
     def process(self, builder: ContainerBuilder) -> None:

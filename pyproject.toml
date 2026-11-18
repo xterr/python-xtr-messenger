@@ -14,6 +14,8 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    # The profiler panel times each dispatch on its monotonic clock.
+    "xtr-clock>=7.0,<8",
     "xtr-event-dispatcher-contracts>=7.0,<8",
     "xtr-logging-contracts>=7.0,<8",
     # Message bodies and stamps are written and read back exactly through it.
@@ -54,6 +56,8 @@ dev = [
     "anyio>=4.10",
     "taskiq>=0.12.4",
     "ty>=0.0.83",
+    # The profiler panel's collector, tested against the http kernel's profiler.
+    "xtr-http-kernel>=7.0,<8",
     # Transport discovery is tested against the RabbitMQ factory it advertises.
     "xtr-amqp-messenger>=7.0,<8",
     "xtr-console>=7.0,<8",

@@ -33,6 +33,9 @@ DSN. The dispatch site never knows which.
   from the factories above; only `xtr_messenger.bundle` needs it.
 - Tests: route to `in-memory://?serialize=true` and inspect `InMemoryTransport.messages`.
 - Read a stamp inside a handler by asking for a second parameter annotated `Envelope`.
+- Profiler: with xtr-http-kernel's profiler on, `MessengerBundle` wraps the container's bus in a
+  `TraceableMessageBus` and registers `MessengerDataCollector` — the `messenger` panel lists each
+  message a profiled request dispatched; with the profiler off nothing is registered.
 - Transport DSNs and their settings: [references/transports.md](references/transports.md).
 
 ## Declare a message and its handler
