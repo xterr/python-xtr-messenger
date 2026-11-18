@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from typing_extensions import override
+from typing import override
 
 from tests.support.messages import ingest_document
 from xtr_messenger import Envelope, RedispatchMessage

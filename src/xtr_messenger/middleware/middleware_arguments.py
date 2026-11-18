@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, TypeAlias, cast
+from typing import TYPE_CHECKING, cast
 
 from xtr_messenger.exception import InvalidMiddlewareArgumentsError
 
@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 
 __all__ = ["MiddlewareArguments", "MiddlewareEntry", "entry_arguments", "entry_key"]
 
-MiddlewareArguments: TypeAlias = "Mapping[str, object]"
+type MiddlewareArguments = "Mapping[str, object]"
 """A middleware's arguments, by the names of the parameters they fill."""
 
-MiddlewareEntry: TypeAlias = "str | MiddlewareInterface | Mapping[str, MiddlewareArguments]"
+type MiddlewareEntry = "str | MiddlewareInterface | Mapping[str, MiddlewareArguments]"
 """One entry of a chain: a name, middleware already built, or ``{name: arguments}``."""
 
 

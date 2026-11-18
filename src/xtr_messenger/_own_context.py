@@ -17,21 +17,20 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import Context, ContextVar
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine
 
 __all__ = ["in_own_context", "in_receive_loop", "leave_receive_loop", "started_in_receive_loop"]
 
-_T = TypeVar("_T")
 
 # True in the context a receive loop is started in, and so in each task it
 # starts — until that task, a message's, says it is not the loop.
 _RECEIVE_LOOP: ContextVar[bool] = ContextVar("xtr_messenger_receive_loop", default=False)
 
 
-async def in_own_context(work: Coroutine[object, object, _T]) -> _T:
+async def in_own_context[T](work: Coroutine[object, object, T]) -> T:
     """Run ``work`` in a context of its own, and return what it returns.
 
     The context starts empty: no variable set where this is called reaches
@@ -42,7 +41,7 @@ async def in_own_context(work: Coroutine[object, object, _T]) -> _T:
     return await asyncio.get_running_loop().create_task(work, context=Context())
 
 
-async def in_receive_loop(work: Coroutine[object, object, _T]) -> _T:
+async def in_receive_loop[T](work: Coroutine[object, object, T]) -> T:
     """Run the receive loop ``work`` as :func:`in_own_context` does, in a context saying so."""
     context = Context()
     context.run(_enter_receive_loop)

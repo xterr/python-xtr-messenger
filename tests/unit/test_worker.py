@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 
 import pytest
-from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.errors import UnprintableError

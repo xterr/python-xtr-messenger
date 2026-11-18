@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 from uuid import UUID, uuid4
 
 import pytest
 import xtr_serializer
-from typing_extensions import override
 from xtr_dependency_injection import (
     Bundle,
     CompilerPassInterface,

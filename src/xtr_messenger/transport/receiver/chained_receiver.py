@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from itertools import count
-from typing import TYPE_CHECKING, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, final, override
 
 from xtr_messenger.stamp import AckReceiptStamp, ReceivedStamp
 
@@ -17,14 +15,13 @@ from .retrying_receiver_interface import RetryingReceiverInterface
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Sequence
-    from typing import TypeAlias
 
     from xtr_messenger.envelope import Envelope
 
 __all__ = ["ChainedReceiver"]
 
 if TYPE_CHECKING:
-    _Fetch: TypeAlias = "asyncio.Task[Envelope]"
+    type _Fetch = "asyncio.Task[Envelope]"
 
 
 @final

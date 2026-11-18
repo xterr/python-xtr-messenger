@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import gc
-from typing import final
+from typing import final, override
 
 import pytest
 from taskiq import InMemoryBroker
-from typing_extensions import override
 
 from xtr_messenger.bridge.taskiq.started_brokers import StartedBrokers
 

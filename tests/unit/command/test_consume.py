@@ -5,11 +5,10 @@ import os
 import signal
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast, final
+from typing import TYPE_CHECKING, cast, final, override
 from uuid import UUID, uuid4
 
 import pytest
-from typing_extensions import override
 from xtr_console import (
     Application,
     CommandInvokerInterface,

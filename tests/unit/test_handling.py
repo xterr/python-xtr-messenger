@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import final
+from typing import final, override
 
 import pytest
-from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
 from xtr_messenger import (

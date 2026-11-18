@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import final
+from typing import final, override
 
 import pytest
-from typing_extensions import override
 
 from tests.support.messages import ingest_document
 from tests.support.serialization import json_serializer

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import final
-
-from typing_extensions import override
+from typing import final, override
 
 from xtr_messenger.envelope import Envelope
 

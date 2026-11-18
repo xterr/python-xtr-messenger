@@ -7,9 +7,7 @@ which puts it on every bus, exports it.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, final, override
 
 from xtr_messenger.middleware.middleware_interface import MiddlewareInterface
 from xtr_messenger.stamp import ReceivedStamp

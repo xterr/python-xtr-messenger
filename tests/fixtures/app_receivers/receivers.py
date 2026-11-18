@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
-from typing_extensions import override
 from xtr_dependency_injection import as_service, autoconfigure
 
 from xtr_messenger import Envelope, ReceivedStamp, ReceiverInterface

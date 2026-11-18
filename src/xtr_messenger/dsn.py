@@ -16,9 +16,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import override
 from urllib.parse import parse_qsl, urlsplit
-
-from typing_extensions import override
 
 from ._redaction import redacted
 from .exception import InvalidDsnError

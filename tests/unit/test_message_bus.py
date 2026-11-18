@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 
 import pytest
-from typing_extensions import override
 
 from tests.support.fakes import RecordingMiddleware
 from xtr_messenger import (

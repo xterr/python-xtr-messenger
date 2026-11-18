@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 from .stamp import StampInterface
 
@@ -11,8 +11,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 __all__ = ["Envelope"]
-
-StampT = TypeVar("StampT", bound=StampInterface)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,11 +59,11 @@ class Envelope:
             return self
         return replace(self, stamps=kept)
 
-    def all(self, stamp_type: type[StampT]) -> tuple[StampT, ...]:
+    def all[StampT: StampInterface](self, stamp_type: type[StampT]) -> tuple[StampT, ...]:
         """Return every stamp of ``stamp_type``, in the order they were added."""
         return tuple(stamp for stamp in self.stamps if isinstance(stamp, stamp_type))
 
-    def last(self, stamp_type: type[StampT]) -> StampT | None:
+    def last[StampT: StampInterface](self, stamp_type: type[StampT]) -> StampT | None:
         """Return the most recently added ``stamp_type`` stamp, or ``None``.
 
         When a stamp type can be added more than once, the last one wins.

@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-
-from typing_extensions import override
+from typing import override
 
 from xtr_messenger._redaction import redacted
 from xtr_messenger.dsn import Dsn

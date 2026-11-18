@@ -28,7 +28,7 @@ Two properties are supported:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar, overload
+from typing import TYPE_CHECKING, overload
 
 from xtr_messenger.message_registry import register_message
 
@@ -37,22 +37,20 @@ if TYPE_CHECKING:
 
 __all__ = ["as_message"]
 
-MessageT = TypeVar("MessageT", bound=type)
+
+@overload
+def as_message[MessageT: type](message_type: MessageT, /) -> MessageT: ...
 
 
 @overload
-def as_message(message_type: MessageT, /) -> MessageT: ...
-
-
-@overload
-def as_message(
+def as_message[MessageT: type](
     *,
     name: str | None = ...,
     transport: str | Sequence[str] | None = ...,
 ) -> Callable[[MessageT], MessageT]: ...
 
 
-def as_message(
+def as_message[MessageT: type](
     message_type: MessageT | None = None,
     /,
     *,

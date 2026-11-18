@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 
 from taskiq.kicker import AsyncKicker
-from typing_extensions import override
 
 from xtr_messenger.exception import UnsupportedStampError
 from xtr_messenger.message_registry import name_of

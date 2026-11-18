@@ -4,8 +4,8 @@
 
 **A message bus for Python — envelopes, stamps, a middleware chain, and pluggable transports.**
 
-<img alt="python 3.11+" src="https://img.shields.io/badge/python-%E2%89%A5%203.11-3776AB?logo=python&logoColor=white">
-<img alt="core dependencies: 4" src="https://img.shields.io/badge/core%20deps-4-3FB950">
+<img alt="python 3.14+" src="https://img.shields.io/badge/python-%E2%89%A5%203.14-3776AB?logo=python&logoColor=white">
+<img alt="core dependencies: 3" src="https://img.shields.io/badge/core%20deps-3-3FB950">
 <img alt="typed" src="https://img.shields.io/badge/typed-ty%20%2B%20basedpyright-1f6feb">
 <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-blue">
 
@@ -22,8 +22,8 @@ Dispatch wraps a message in an **envelope** and walks it through a **middleware 
 middleware records what it did by appending a **stamp**. A **routing table** maps a message
 type to one or more named **transports**. Nothing at the dispatch site knows which.
 
-- 🪶 **Four core dependencies** — [xtr-serializer](../xtr-serializer) (and through it
-  pydantic), `typing-extensions`, and two interface-only packages, `xtr-logging-contracts` and
+- 🪶 **Three core dependencies** — [xtr-serializer](../xtr-serializer) (and through it
+  pydantic) and two interface-only packages, `xtr-logging-contracts` and
   `xtr-event-dispatcher-contracts`. No broker is a dependency — RabbitMQ is
   [xtr-amqp-messenger](../xtr-amqp-messenger), the `amqp` extra — and neither is the container:
   the bundle is used when xtr-dependency-injection is installed beside it.
@@ -53,7 +53,7 @@ uv add xtr-console                             # beside it: the messenger:consum
 
 | Extra | Brings | For |
 | --- | --- | --- |
-| *(none)* | `xtr-serializer`, `typing-extensions`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core, dataclass and pydantic messages |
+| *(none)* | `xtr-serializer`, `xtr-logging-contracts`, `xtr-event-dispatcher-contracts` | `sync://`, `in-memory://`, the whole core, dataclass and pydantic messages |
 | `amqp` | [xtr-amqp-messenger](../xtr-amqp-messenger) — and through it `taskiq`, `taskiq-aio-pika` | `amqp://`: RabbitMQ, with retries and real dead-lettering |
 | `orm` | [xtr-orm-messenger](../xtr-orm-messenger) | `orm://`: messages in a table on an [xtr-orm](../xtr-orm) connection |
 
@@ -65,7 +65,7 @@ consumes through it. The only xtr packages that are extras are the transports be
 [xtr-console](https://github.com/xterr/python-xtr-console) the `messenger:consume` command; the
 bus and its workers run without either.
 
-Requires Python 3.11+. An application that wants records written somewhere adds `xtr-logging`
+Requires Python 3.14.4+. An application that wants records written somewhere adds `xtr-logging`
 itself.
 
 ## Quick start
@@ -971,7 +971,7 @@ entry-point discovery, so a zero-config app keeps working:
 ```python
 from collections.abc import Mapping
 
-from typing_extensions import override
+from typing import override
 
 from xtr_messenger import Dsn, TransportConfig, TransportFactoryInterface
 from xtr_messenger.transport.sender import SenderInterface

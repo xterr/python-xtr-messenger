@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 from uuid import uuid4
 
 from taskiq import AsyncBroker, TaskiqMessage, TaskiqMiddleware
-from typing_extensions import override
 
 from xtr_messenger.bridge.taskiq.labels import HEADERS_LABEL, RETRIES_LABEL
 
@@ -51,7 +50,7 @@ class DeliveringBroker(AsyncBroker):
         del message
 
     @override
-    async def listen(self) -> AsyncGenerator[bytes, None]:
+    async def listen(self) -> AsyncGenerator[bytes]:
         for message in self._deliveries:
             yield self.formatter.dumps(message).message
         _ = await self._parked.wait()

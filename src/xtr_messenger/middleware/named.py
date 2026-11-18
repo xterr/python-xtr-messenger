@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, TypeAlias, cast, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, cast, final, override
 
 from xtr_messenger.exception import InvalidMiddlewareArgumentsError, UnknownMiddlewareError
 
@@ -28,7 +26,7 @@ if TYPE_CHECKING:
 
 __all__ = ["MiddlewareBuilder", "chain", "named_middleware", "resolve"]
 
-MiddlewareBuilder: TypeAlias = "Callable[..., MiddlewareInterface]"
+type MiddlewareBuilder = "Callable[..., MiddlewareInterface]"
 """Builds one middleware, taking whatever it needs from where it was declared.
 
 Called with no argument for a bare name; for an entry carrying arguments,

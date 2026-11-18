@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, TypeAlias, cast, get_type_hints
+from typing import TYPE_CHECKING, cast, get_type_hints
 
 from xtr_messenger.envelope import Envelope
 from xtr_messenger.exception import HandlerSignatureError
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 __all__ = ["Handler", "HandlerDescriptor"]
 
-Handler: TypeAlias = "Callable[..., Awaitable[object]]"
+type Handler = "Callable[..., Awaitable[object]]"
 
 _WITH_ENVELOPE = 2
 
@@ -155,7 +155,7 @@ def _own_call_of(handler_type: type) -> Callable[..., object] | None:
 def _hints_of(target: object) -> dict[str, object]:
     try:
         return dict(get_type_hints(target, include_extras=True))
-    except (NameError, TypeError):
+    except NameError, TypeError:
         return _each_hint_of(target)
 
 
@@ -180,7 +180,7 @@ def _each_hint_of(target: object) -> dict[str, object]:
         try:
             # What get_type_hints does with a string annotation, one at a time.
             hints[parameter] = eval(annotation, namespace)  # noqa: S307 — a declared annotation
-        except (NameError, AttributeError, TypeError, SyntaxError):
+        except NameError, AttributeError, TypeError, SyntaxError:
             continue
     return hints
 

@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextvars import copy_context
-from typing import TYPE_CHECKING, Final, Protocol, final, runtime_checkable
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, Final, Protocol, final, override, runtime_checkable
 
 from ._handling import Failed, Handled, Skipped, announce_failure, handle, receiver_name_of
 from ._own_context import in_own_context

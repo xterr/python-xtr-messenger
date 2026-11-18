@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, cast, final
+from typing import TYPE_CHECKING, cast, final, override
 
 import pytest
-from typing_extensions import override
 
 from tests.support.fakes import StubReceiver
 from xtr_messenger import AckReceiptStamp, Envelope, ErrorDetailsStamp, ReceivedStamp

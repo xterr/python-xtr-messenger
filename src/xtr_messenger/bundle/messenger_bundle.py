@@ -14,9 +14,8 @@ bundle is, every worker announces itself and its messages through it.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Final, cast, final
+from typing import TYPE_CHECKING, Final, cast, final, override
 
-from typing_extensions import override
 from xtr_dependency_injection import (
     Bundle,
     ContainerBuilder,

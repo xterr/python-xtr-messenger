@@ -6,9 +6,8 @@ from collections.abc import (
     AsyncIterator,  # noqa: TC003 — the container reads the factory's return annotation
 )
 from itertools import count
-from typing import final
+from typing import final, override
 
-from typing_extensions import override
 from xtr_dependency_injection import as_service
 
 from xtr_messenger import Envelope, MiddlewareInterface, StackInterface

@@ -14,12 +14,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Final, TypeAlias, final
+from typing import TYPE_CHECKING, Final, final, override
 
 from taskiq import AckableMessage
 from taskiq.receiver import Receiver
 from taskiq.utils import maybe_awaitable
-from typing_extensions import override
 
 if TYPE_CHECKING:
     from taskiq import AsyncBroker
@@ -29,7 +28,7 @@ __all__ = ["DeadLetterer", "PoisonMessageReceiver"]
 #: What quarantines a poison delivery: called with the raw body and the
 #: reason, it must put the delivery somewhere it can be inspected — or raise,
 #: leaving the delivery unsettled for the broker to redeliver.
-DeadLetterer: TypeAlias = Callable[[bytes, str], Awaitable[None]]
+type DeadLetterer = Callable[[bytes, str], Awaitable[None]]
 
 #: Log lines go through the messenger channel, so an application capturing
 #: the standard library's logging sees them beside the rest of the bus's

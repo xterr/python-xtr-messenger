@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 from xtr_messenger.middleware.middleware_registry import (
     MIDDLEWARE_ATTRIBUTE,
@@ -17,10 +17,8 @@ if TYPE_CHECKING:
 
 __all__ = ["as_middleware"]
 
-M = TypeVar("M", bound="type[MiddlewareInterface]")
 
-
-def as_middleware(
+def as_middleware[M: "type[MiddlewareInterface]"](
     name: str,
     /,
     *,

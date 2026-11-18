@@ -12,9 +12,8 @@ wrongly shaped object arriving deep inside a handler.
 from __future__ import annotations
 
 from types import GenericAlias
-from typing import TYPE_CHECKING, cast, final
+from typing import TYPE_CHECKING, cast, final, override
 
-from typing_extensions import override
 from xtr_serializer import SerializerError
 
 from xtr_messenger.envelope import Envelope

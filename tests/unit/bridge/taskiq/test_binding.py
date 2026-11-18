@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 from uuid import uuid4
 
 import pytest
 from taskiq import InMemoryBroker, TaskiqMiddleware
-from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.fakes import ContextNotingBus, RecordingBus, StubReceiver

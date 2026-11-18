@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from os import cpu_count
-from typing import TYPE_CHECKING, Final, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, Final, final, override
 
 from xtr_messenger._own_context import in_own_context, in_receive_loop
 from xtr_messenger.event import WorkerStartedEvent, WorkerStoppedEvent

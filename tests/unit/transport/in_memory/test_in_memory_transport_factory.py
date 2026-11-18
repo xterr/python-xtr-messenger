@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import final
+from typing import final, override
 
 import pytest
-from typing_extensions import override
 
 from tests.support.messages import (
     assert_dispatch_invoice_is_exact,

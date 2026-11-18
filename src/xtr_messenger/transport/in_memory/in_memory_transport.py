@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 from uuid import uuid4
-
-from typing_extensions import override
 
 from xtr_messenger.exception import UnsupportedStampError
 from xtr_messenger.stamp import (

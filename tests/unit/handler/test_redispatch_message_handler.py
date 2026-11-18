@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import final
+from typing import final, override
 
 import pytest
-from typing_extensions import override
 
 from tests.support.messages import ingest_document
 from xtr_messenger import (

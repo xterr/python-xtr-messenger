@@ -8,9 +8,7 @@ transports without changing anything here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, final, override
 
 from xtr_messenger.exception import UnknownTransportError
 from xtr_messenger.message_registry import transports_of

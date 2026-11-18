@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator  # noqa: TC003 — the container reads the return type
 from itertools import count
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 
-from typing_extensions import override
 from xtr_dependency_injection import as_service
 from xtr_logging import HandlerInterface
 from xtr_service_contracts import ResetInterface

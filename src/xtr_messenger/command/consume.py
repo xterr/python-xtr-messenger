@@ -15,11 +15,10 @@ from xtr_messenger.worker_interface import WorkerInterface
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import FrameType
-    from typing import TypeAlias
 
     #: What :func:`signal.getsignal` returns, and what :func:`signal.signal`
     #: accepts — the handler object a restore puts back.
-    _SignalHandler: TypeAlias = Callable[[int, FrameType | None], object] | int | None
+    type _SignalHandler = Callable[[int, FrameType | None], object] | int | None
 
 __all__ = ["ConsumeMessagesCommand"]
 
@@ -101,7 +100,7 @@ def _stop_on_sigterm(
         return (False, None)
     try:
         loop.add_signal_handler(signal.SIGTERM, worker.stop)
-    except (NotImplementedError, RuntimeError):
+    except NotImplementedError, RuntimeError:
         return (False, None)
     return (True, previous)
 

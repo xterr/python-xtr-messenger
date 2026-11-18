@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
-
 from xtr_messenger.exception import MessageBusError
 from xtr_messenger.stamp import NonSendableStampInterface, StampInterface
 from xtr_messenger.stamp_registry import register_stamp
 
 __all__ = ["as_stamp"]
 
-StampT = TypeVar("StampT", bound=type[StampInterface])
 
-
-def as_stamp(stamp_type: StampT, /) -> StampT:
+def as_stamp[StampT: type[StampInterface]](stamp_type: StampT, /) -> StampT:
     """Declare ``stamp_type`` as a stamp that survives a real transport.
 
     A serializer built without an explicit ``stamp_types`` restores it on

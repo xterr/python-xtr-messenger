@@ -19,7 +19,7 @@ handlers itself.
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, TypeVar, cast
+from typing import TYPE_CHECKING, cast
 
 from xtr_messenger.handler.default_registry import default_registry
 from xtr_messenger.handler.handlers_registry import HANDLERS_ATTRIBUTE
@@ -31,10 +31,8 @@ if TYPE_CHECKING:
 
 __all__ = ["as_message_handler"]
 
-HandlerT = TypeVar("HandlerT", bound="Callable[..., Awaitable[object]] | type")
 
-
-def as_message_handler(
+def as_message_handler[HandlerT: "Callable[..., Awaitable[object]] | type"](
     message_type: type,
     registry: HandlersLocatorInterface | None = None,
 ) -> Callable[[HandlerT], HandlerT]:

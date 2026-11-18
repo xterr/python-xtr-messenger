@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Final, final
-
-from typing_extensions import override
+from typing import TYPE_CHECKING, Final, final, override
 
 from xtr_messenger.exception import DelayedMessageHandlingError
 from xtr_messenger.stamp import DispatchAfterCurrentBusStamp

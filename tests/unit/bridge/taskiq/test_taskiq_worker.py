@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, final, override
 from uuid import uuid4
 
 import pytest
 from taskiq import AsyncBroker, InMemoryBroker, TaskiqMessage, TaskiqMiddleware
-from typing_extensions import override
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.messages import ingest_document
@@ -82,7 +81,7 @@ class ScriptedBroker(AsyncBroker):
         del message
 
     @override
-    async def listen(self) -> AsyncGenerator[bytes, None]:
+    async def listen(self) -> AsyncGenerator[bytes]:
         for name in self._task_names:
             message = TaskiqMessage(
                 task_id=uuid4().hex,
