@@ -846,10 +846,8 @@ Everything adding this package to an application on
 - **Configure** — needed to move a message: with no configuration there are no transports, and
   a message routed nowhere is neither sent nor handled. Transports and routing go in
   `<app>/config/packages/messenger.py`, a `@configure` function returning `MessageBusConfig` — see
-  [Kernel / bundle](#kernel--bundle). An `amqp://` transport expects the RabbitMQ
-  `rabbitmq_delayed_message_exchange` plugin on the broker — delays and retry backoff ride it —
-  unless `delayed_message_exchange_plugin=false` turns it off, which also turns a delayed send
-  into an `UnsupportedStampError`.
+  [Kernel / bundle](#kernel--bundle). An `amqp://` transport delays — a `DelayStamp`, retry
+  backoff — with nothing enabled on the broker; its `delay` setting says how.
 - **Environment** — `MESSENGER_DSN`, the broker the written configuration's `jobs` transport
   reads with `env("MESSENGER_DSN")`, only when the bus is built.
 - **Ignore** — nothing.
