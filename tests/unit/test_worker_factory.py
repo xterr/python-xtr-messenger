@@ -177,6 +177,25 @@ async def test_a_whole_transport_is_driven_by_the_library_worker() -> None:
     assert seen == [first, second]
 
 
+async def test_a_worker_for_one_receiver_handles_it_as_the_transport_named() -> None:
+    received: list[str | None] = []
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def handle(message: IngestDocument, envelope: Envelope) -> None:
+        del message
+        stamp = envelope.last(ReceivedStamp)
+        received.append(stamp.transport_name if stamp is not None else None)
+
+    receiver = StubReceiver([Envelope(ingest_document())])
+    worker = WorkerFactory(MessageBusConfig(), [], handlers=handlers).worker_for("failed", receiver)
+
+    await worker.run()
+
+    assert received == ["failed"]
+    assert len(receiver.acked) == 1
+
+
 async def test_several_receivers_on_one_connection_drain_through_one_loop() -> None:
     seen: list[IngestDocument] = []
     handlers = HandlersLocator()

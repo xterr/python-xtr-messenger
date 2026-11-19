@@ -29,6 +29,7 @@ from .exception import (
     MessageEncodingFailedError,
     MissingSerializerError,
     MixedDsnError,
+    NoFailureTransportError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
     NotConsumableError,
@@ -37,7 +38,9 @@ from .exception import (
     UnknownTransportError,
     UnknownTransportOptionError,
     UnsupportedStampError,
+    UnsupportedTransportOperationError,
 )
+from .failure import FailedMessageFilter, FailedMessageRepository
 from .handler import (
     Handler,
     HandlerDescriptor,
@@ -77,20 +80,25 @@ from .stamp import (
     ReceivedStamp,
     RedeliveryStamp,
     SentStamp,
+    SentToFailureTransportStamp,
     StampInterface,
     TransportMessageIdStamp,
     TransportNamesStamp,
 )
 from .stamp_registry import declared_stamps, register_stamp, stamp_type_for
 from .transport.in_memory import InMemoryTransport, InMemoryTransportFactory
+from .transport.receiver.listable_receiver_interface import ListableReceiverInterface
+from .transport.receiver.message_count_aware_interface import MessageCountAwareInterface
 from .transport.receiver.receiver_interface import ReceiverInterface
 from .transport.receiver.retrying_receiver_interface import RetryingReceiverInterface
+from .transport.receiver.single_message_receiver import SingleMessageReceiver
 from .transport.sender import SenderInterface, SendersLocator, SendersLocatorInterface
 from .transport.serialization import (
     EncodedEnvelope,
     JsonSerializer,
     SerializerInterface,
 )
+from .transport.setupable_transport_interface import SetupableTransportInterface
 from .transport.sync import SyncTransport, SyncTransportFactory
 from .transport.transport_config import TransportConfig
 from .transport.transport_factory import TransportFactory
@@ -100,6 +108,7 @@ from .transport.transport_factory_interface import (
     UnsupportedDsnError,
 )
 from .transport.transport_interface import TransportInterface
+from .transport.transport_locator import TransportLocator
 from .worker import Worker
 from .worker_factory import WorkerFactory
 from .worker_interface import WorkerInterface
@@ -122,6 +131,8 @@ __all__ = [
     "EncodedEnvelope",
     "Envelope",
     "ErrorDetailsStamp",
+    "FailedMessageFilter",
+    "FailedMessageRepository",
     "HandleMessageMiddleware",
     "HandledStamp",
     "Handler",
@@ -137,17 +148,20 @@ __all__ = [
     "InvalidMiddlewareArgumentsError",
     "InvalidTransportOptionError",
     "JsonSerializer",
+    "ListableReceiverInterface",
     "LoggingMiddleware",
     "MessageBus",
     "MessageBusConfig",
     "MessageBusError",
     "MessageBusFactory",
     "MessageBusInterface",
+    "MessageCountAwareInterface",
     "MessageDecodingFailedError",
     "MessageEncodingFailedError",
     "MiddlewareInterface",
     "MissingSerializerError",
     "MixedDsnError",
+    "NoFailureTransportError",
     "NoHandlerForMessageError",
     "NoSenderForMessageError",
     "NonSendableStampInterface",
@@ -163,7 +177,10 @@ __all__ = [
     "SendersLocator",
     "SendersLocatorInterface",
     "SentStamp",
+    "SentToFailureTransportStamp",
     "SerializerInterface",
+    "SetupableTransportInterface",
+    "SingleMessageReceiver",
     "StackInterface",
     "StackMiddleware",
     "StampInterface",
@@ -173,6 +190,7 @@ __all__ = [
     "TransportFactory",
     "TransportFactoryInterface",
     "TransportInterface",
+    "TransportLocator",
     "TransportMessageIdStamp",
     "TransportNamesStamp",
     "UnknownMessageNameError",
@@ -181,6 +199,7 @@ __all__ = [
     "UnknownTransportOptionError",
     "UnsupportedDsnError",
     "UnsupportedStampError",
+    "UnsupportedTransportOperationError",
     "Worker",
     "WorkerFactory",
     "WorkerInterface",

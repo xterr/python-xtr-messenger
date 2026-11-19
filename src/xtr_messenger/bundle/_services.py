@@ -20,6 +20,7 @@ from xtr_dependency_injection import (
 from xtr_event_dispatcher_contracts import EventDispatcherInterface
 from xtr_logging_contracts import LoggerInterface
 
+from xtr_messenger.failure.failed_message_repository import FailedMessageRepository
 from xtr_messenger.handler.handlers_locator import HandlersLocator
 from xtr_messenger.message_bus_config import MessageBusConfig
 from xtr_messenger.message_bus_factory import MessageBusFactory
@@ -33,6 +34,7 @@ from xtr_messenger.transport.receiver.receiver_interface import ReceiverInterfac
 from xtr_messenger.transport.serialization import JsonSerializer, SerializerInterface
 from xtr_messenger.transport.transport_factory import TransportFactory
 from xtr_messenger.transport.transport_factory_interface import TransportFactoryInterface
+from xtr_messenger.transport.transport_locator import TransportLocator
 from xtr_messenger.worker import AsyncResetter
 from xtr_messenger.worker_factory import WorkerFactory
 
@@ -45,9 +47,11 @@ __all__ = [
     "combined_transport_factory",
     "combined_transport_factory_with",
     "envelope_serializer",
+    "failed_message_repository",
     "logging_middleware_for_messenger",
     "message_bus",
     "named_middleware",
+    "transport_locator",
     "worker_factory",
 ]
 
@@ -238,4 +242,29 @@ async def worker_factory(  # noqa: PLR0913, PLR0917 — one parameter per inject
         resetter=cast("AsyncResetter", resetter),
         event_dispatcher=event_dispatcher,
         receivers=built_receivers,
+    )
+
+
+async def transport_locator(
+    config: MessageBusConfig,
+    transports: TransportFactory,
+    receivers: ServiceLocator[ReceiverInterface],
+) -> TransportLocator:
+    """Build the transports the console commands reach by name — the bus's own instances.
+
+    Built over the shared transport factory, so a transport it hands over is
+    the one the bus sends through, and beside every tagged receiver.
+    """
+    built_receivers: dict[str, ReceiverInterface] = {}
+    async for alias, receiver in receivers:
+        built_receivers[str(alias)] = receiver
+    return TransportLocator(config, [transports], receivers=built_receivers)
+
+
+def failed_message_repository(
+    config: MessageBusConfig, transports: TransportLocator, bus: MessageBusInterface
+) -> FailedMessageRepository:
+    """Build the repository over the failure transports the configuration names."""
+    return FailedMessageRepository(
+        transports, bus, config.failure_transport_names(), config.failure_transport
     )

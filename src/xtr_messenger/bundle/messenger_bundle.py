@@ -54,9 +54,11 @@ from ._services import (
     combined_transport_factory,
     combined_transport_factory_with,
     envelope_serializer,
+    failed_message_repository,
     logging_middleware_for_messenger,
     message_bus,
     named_middleware,
+    transport_locator,
     worker_factory,
 )
 
@@ -195,6 +197,8 @@ class MessengerBundle(Bundle[MessageBusConfig]):
             )
         _ = services.set(message_bus)
         _ = services.set(worker_factory)
+        _ = services.set(transport_locator)
+        _ = services.set(failed_message_repository)
         if bundle_active(builder, "console"):
             services.load("xtr_messenger.command")
         if bundle_active(builder, "http_kernel"):

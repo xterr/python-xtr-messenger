@@ -28,6 +28,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from .exception import UnknownTransportError
 from .middleware.middleware_interface import MiddlewareInterface
 from .transport.transport_config import TransportConfig
 
@@ -74,6 +75,10 @@ class MessageBusConfig:
         require_handler: Refuse a message handled here that no handler
             takes. ``False`` for a bus shared by processes that each handle
             some of its messages.
+        failure_transport: The transport messages are kept in once they
+            failed for good, for every transport that names none of its own —
+            and the one the ``messenger:failed:*`` commands read when told no
+            other. See :attr:`TransportConfig.failure_transport`.
     """
 
     transports: Mapping[str, TransportConfig] = field(default_factory=_no_transports)
@@ -83,6 +88,37 @@ class MessageBusConfig:
     require_sender: bool = False
     handle_unrouted: bool = False
     require_handler: bool = True
+    failure_transport: str | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a failure transport that is not a configured transport.
+
+        Raises:
+            UnknownTransportError: If ``failure_transport``, or a transport's
+                own, names a transport the configuration does not define.
+        """
+        missing = tuple(n for n in self.failure_transport_names() if n not in self.transports)
+        if missing:
+            raise UnknownTransportError(missing, tuple(self.transports))
+
+    def failure_transport_names(self) -> tuple[str, ...]:
+        """Return every failure transport: the configuration's own first, then each transport's."""
+        named = (
+            self.failure_transport,
+            *(transport.failure_transport for transport in self.transports.values()),
+        )
+        return tuple(dict.fromkeys(name for name in named if name is not None))
+
+    def failure_transport_of(self, name: str) -> str | None:
+        """Return where the transport ``name`` keeps what failed for good, if anywhere.
+
+        ``None`` too for a transport that is its own failure transport: what
+        fails there for good has nowhere left to go.
+        """
+        transport = self.transports.get(name)
+        own = transport.failure_transport if transport is not None else None
+        failure = own if own is not None else self.failure_transport
+        return None if failure == name else failure
 
     def by_connection(self) -> dict[str, dict[str, TransportConfig]]:
         """Group the transports by the server each one addresses.

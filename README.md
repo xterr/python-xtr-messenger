@@ -307,6 +307,50 @@ On a transport with its own worker — taskiq, RabbitMQ — a stopping worker wa
 for the messages it is handling, then cancels those still running: a cancelled handler counts as
 a failed attempt, retried or dead-lettered as any failure, not redelivered as unsettled.
 
+### Looking after transports from the console
+
+The same kernel registers a command for each thing a transport can be asked beyond sending and
+receiving. A command reads a transport only through what it implements, so one that cannot do
+something says so instead of failing:
+
+| Command | Does | The transport must be |
+| --- | --- | --- |
+| `messenger:setup-transports [transport]` | creates what each transport needs — its table, its queues | `SetupableTransportInterface` (others are noted and skipped) |
+| `messenger:stats [transport...] [--format txt\|json]` | how many messages wait in each transport | `MessageCountAwareInterface` (others are listed as uncountable) |
+| `messenger:show [transport] [id] [--max N] [--stats] [--class-filter C]` | lists the waiting messages, counts them by class, or shows one (`-vv` for its content) | `ListableReceiverInterface` |
+| `debug:messenger [--message M] [--middleware]` | every handled or routed message, its handlers and transports, each transport's routing rules and failure transport | — |
+| `messenger:failed:show [id] [--transport T] [--stats] [--max N]` | the messages kept in a failure transport, when and why they failed | `ListableReceiverInterface` |
+| `messenger:failed:retry [id...] [--force] [--redispatch] [--transport T]` | handles a failed message again, here — or dispatches it to its transport with `--redispatch`; without ids, asks for each one whether to retry, delete or skip it | `ListableReceiverInterface` |
+| `messenger:failed:remove [id...] [--all] [--force] [--show-messages] [--transport T]` | drops failed messages for good | `ListableReceiverInterface` |
+
+`--class-filter module.QualName`, `--failed-after` and `--failed-before` select failed messages
+instead of ids, and narrow `--stats` down. A date is ISO 8601 or a modifier, written with `=` so
+the console does not read it as an option: `--failed-after='-1 hour'`. Both bounds are
+inclusive; the time a message failed is the one its `SentToFailureTransportStamp` records, so a
+message carrying none is never selected by a time window.
+
+A failure transport is a configured transport, named by `failure_transport` — on the
+configuration, for every transport, or on a `TransportConfig`, for that one. It names where what
+failed for good is kept; the transport itself moves it there, as an `orm://` transport does to
+its `failure_queue`. Point a transport reading that queue at it:
+
+```python
+MessageBusConfig(
+    transports={
+        "orders": TransportConfig("orm://default", queue="orders"),  # failure_queue: failed
+        "failed": TransportConfig("orm://default", queue="failed"),
+    },
+    failure_transport="failed",
+)
+```
+
+`messenger:failed:retry` hands each message to a worker of its own on the failure transport:
+handled, it is acknowledged and gone; failing again, the failure transport does with it what it
+does with any failed message — an `orm://` one retries it while its `max_attempts` last, then
+deletes it. `messenger:failed:remove` acknowledges a message rather than rejecting it, so it is
+dropped rather than retried. Outside the console the same is a `FailedMessageRepository`, and a
+transport by name a `TransportLocator`, both from the container.
+
 ### Who retries
 
 The loop makes **exactly one attempt per message** and never retries. Redelivery is something
@@ -855,7 +899,8 @@ Everything adding this package to an application on
 - **Remove** — drop the `BUNDLES` entry, delete `<app>/config/packages/messenger.py`, then
   `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 - **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
-  messenger` shows the resolved transports and routing.
+  messenger` shows the resolved transports and routing; `debug:messenger` which handler takes
+  each message and where it is routed.
 
 ## Kernel / bundle
 
@@ -916,8 +961,9 @@ class IssueInvoiceHandler:
     async def __call__(self, message: IssueInvoice, db: Injected[Session]) -> None: ...
 ```
 
-The bundle registers a `MessageBusInterface`, a `WorkerFactory` (and the `messenger:consume`
-command when the console bundle is active), a per-kernel `HandlersLocator`, and the envelope
+The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a `TransportLocator` and a
+`FailedMessageRepository` (and the [console commands](#looking-after-transports-from-the-console)
+when the console bundle is active), a per-kernel `HandlersLocator`, and the envelope
 serializer under this package's `SerializerInterface` — a `JsonSerializer` writing through the
 serializer bundle's `SerializerInterface`, handed to every discovered transport that writes
 messages. Configure that serializer — its default context, say — through the serializer bundle.
@@ -1066,7 +1112,9 @@ xtr_messenger/
 │   ├── taskiq/              broker-agnostic publish and consume
 │   └── amqp/                where RabbitMQ used to be: re-exports xtr-amqp-messenger
 ├── command/
-│   └── consume.py           messenger:consume, on xtr-console
+│   ├── consume.py           messenger:consume, on xtr-console
+│   └── *_command.py         setup-transports, stats, show, debug:messenger, failed:*
+├── failure/                 FailedMessageRepository, FailedMessageFilter
 ├── data_collector/          the profiler's messenger panel: a traced bus and its collector
 └── bundle/                  MessengerBundle for xtr-dependency-injection
 ```

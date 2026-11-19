@@ -84,17 +84,34 @@ class SendersLocator(SendersLocatorInterface):
             sorted(key if isinstance(key, str) else key.__qualname__ for key in self._routes)
         )
 
+    @staticmethod
+    def transport_names_for(
+        message_type: type, routes: Mapping[type | str, str | Sequence[str]]
+    ) -> tuple[str, ...]:
+        """Return the transports ``routes`` sends ``message_type`` to, by the rules above.
+
+        The table walked along the type's method resolution order, then its
+        ``"*"`` entry, then what the message declares — everything but a
+        :class:`~xtr_messenger.stamp.TransportNamesStamp`, which only a
+        dispatch carries. Duplicates are kept, in the order they matched.
+        """
+        matched: list[str] = []
+        for base in message_type.__mro__:
+            matched.extend(_names(routes.get(base, ())))
+        if matched:
+            return tuple(matched)
+        wildcard = _names(routes.get(WILDCARD, ()))
+        if wildcard:
+            return wildcard
+        return transports_of(message_type)
+
     def _transport_names(self, envelope: Envelope) -> tuple[str, ...]:
         override_names = envelope.last(TransportNamesStamp)
         if override_names is not None:
             return override_names.transport_names
-        message_type = type(envelope.message)
-        matched: list[str] = []
-        for base in message_type.__mro__:
-            matched.extend(self._routes.get(base, ()))
-        if matched:
-            return tuple(matched)
-        wildcard = self._routes.get(WILDCARD, ())
-        if wildcard:
-            return wildcard
-        return transports_of(message_type)
+        return self.transport_names_for(type(envelope.message), self._routes)
+
+
+def _names(value: str | Sequence[str]) -> tuple[str, ...]:
+    """Return a route's transport names: one written as a string, or several."""
+    return (value,) if isinstance(value, str) else tuple(value)

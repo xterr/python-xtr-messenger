@@ -18,6 +18,7 @@ from xtr_messenger import (
     MessageEncodingFailedError,
     MissingSerializerError,
     MixedDsnError,
+    NoFailureTransportError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
     NotConsumableError,
@@ -27,6 +28,7 @@ from xtr_messenger import (
     UnknownTransportOptionError,
     UnsupportedDsnError,
     UnsupportedStampError,
+    UnsupportedTransportOperationError,
     exception,
 )
 
@@ -43,6 +45,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     MessageEncodingFailedError,
     MissingSerializerError,
     MixedDsnError,
+    NoFailureTransportError,
     NoHandlerForMessageError,
     NoSenderForMessageError,
     NotConsumableError,
@@ -52,6 +55,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     UnknownTransportOptionError,
     UnsupportedDsnError,
     UnsupportedStampError,
+    UnsupportedTransportOperationError,
 )
 
 

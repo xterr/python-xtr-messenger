@@ -20,6 +20,7 @@ from .message_decoding_failed_error import MessageDecodingFailedError
 from .message_encoding_failed_error import MessageEncodingFailedError
 from .missing_serializer_error import MissingSerializerError
 from .mixed_dsn_error import MixedDsnError
+from .no_failure_transport_error import NoFailureTransportError
 from .no_handler_for_message_error import NoHandlerForMessageError
 from .no_sender_for_message_error import NoSenderForMessageError
 from .not_consumable_error import NotConsumableError
@@ -29,6 +30,7 @@ from .unknown_transport_error import UnknownTransportError
 from .unknown_transport_option_error import UnknownTransportOptionError
 from .unsupported_dsn_error import UnsupportedDsnError
 from .unsupported_stamp_error import UnsupportedStampError
+from .unsupported_transport_operation_error import UnsupportedTransportOperationError
 
 __all__ = [
     "DelayedMessageHandlingError",
@@ -43,6 +45,7 @@ __all__ = [
     "MessageEncodingFailedError",
     "MissingSerializerError",
     "MixedDsnError",
+    "NoFailureTransportError",
     "NoHandlerForMessageError",
     "NoSenderForMessageError",
     "NotConsumableError",
@@ -52,4 +55,5 @@ __all__ = [
     "UnknownTransportOptionError",
     "UnsupportedDsnError",
     "UnsupportedStampError",
+    "UnsupportedTransportOperationError",
 ]

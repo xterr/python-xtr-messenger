@@ -217,6 +217,30 @@ transport. `stop()` lets the message in hand finish and then returns. Give the w
 `EventDispatcherInterface` — `WorkerFactory(CONFIG, event_dispatcher=events)` — and it announces
 the events in [references/middleware.md](references/middleware.md).
 
+## Look after transports from the console
+
+With the console bundle active the kernel also has `messenger:setup-transports`,
+`messenger:stats [--format json]`, `messenger:show <transport> [id]`, `debug:messenger
+[--message M] [--middleware]` and, over the failure transports, `messenger:failed:show`,
+`messenger:failed:retry [id...] [--force] [--redispatch]` and `messenger:failed:remove [id...]
+[--all] [--force]`. Each needs the transport to implement `SetupableTransportInterface`,
+`MessageCountAwareInterface` or `ListableReceiverInterface` — `orm://` does all three; `amqp://`,
+`in-memory://` and `sync://` none — and says so otherwise. Name the failure transport:
+
+```python
+MessageBusConfig(
+    transports={
+        "orders": TransportConfig("orm://default", queue="orders"),
+        "failed": TransportConfig("orm://default", queue="failed"),  # orders' failure_queue
+    },
+    failure_transport="failed",  # or TransportConfig(..., failure_transport="failed")
+)
+```
+
+Select failed messages with `--class-filter module.QualName`, `--failed-after='-1 hour'`,
+`--failed-before=...` (the `=` keeps a leading `-` from reading as an option). In code:
+`FailedMessageRepository` and `TransportLocator` from the container.
+
 ## Testing
 
 Route to `in-memory://` and build the bus and worker from the **same** factory list so they
@@ -307,13 +331,15 @@ make for you.
    per-message dependencies go on `__call__` as `Injected[T]`.
 8. **Run** — a worker is `<script> messenger:consume <transport>`.
 9. **Check** — `debug:bundles` shows `messenger` as `listed` and `active`; `debug:config
-   messenger` shows the resolved transports and routing.
+   messenger` shows the resolved transports and routing; `debug:messenger` which handler takes
+   each message and where it is routed.
 10. **Remove** — drop the `BUNDLES` entry, delete `<app>/config/packages/messenger.py`, then
    `uv remove xtr-messenger` — unless xtr-scheduler is installed, which depends on it.
 
-The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a per-kernel `HandlersLocator`,
-the envelope serializer under this package's `SerializerInterface` — a `JsonSerializer` over the
-serializer bundle's — and the `messenger:consume` command when the console bundle is active.
+The bundle registers a `MessageBusInterface`, a `WorkerFactory`, a `TransportLocator`, a
+`FailedMessageRepository`, a per-kernel `HandlersLocator`, the envelope serializer under this
+package's `SerializerInterface` — a `JsonSerializer` over the serializer bundle's — and the
+console commands above when the console bundle is active.
 Discovered transports get that serializer. Every handler it finds is
 bound at boot, so one asking for something the container cannot provide fails at boot, not on
 its first message. Every message is a unit of work: a `lifetime="scoped"` service is built once

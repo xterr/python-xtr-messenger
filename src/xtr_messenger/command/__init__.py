@@ -15,5 +15,21 @@ and reports the missing parameter rather than build it bare.
 from __future__ import annotations
 
 from .consume import ConsumeMessagesCommand
+from .debug_command import DebugCommand
+from .failed_messages_remove_command import FailedMessagesRemoveCommand
+from .failed_messages_retry_command import FailedMessagesRetryCommand
+from .failed_messages_show_command import FailedMessagesShowCommand
+from .setup_transports_command import SetupTransportsCommand
+from .show_messages_command import ShowMessagesCommand
+from .stats_command import StatsCommand
 
-__all__ = ["ConsumeMessagesCommand"]
+__all__ = [
+    "ConsumeMessagesCommand",
+    "DebugCommand",
+    "FailedMessagesRemoveCommand",
+    "FailedMessagesRetryCommand",
+    "FailedMessagesShowCommand",
+    "SetupTransportsCommand",
+    "ShowMessagesCommand",
+    "StatsCommand",
+]

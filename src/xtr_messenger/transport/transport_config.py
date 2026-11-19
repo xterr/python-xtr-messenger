@@ -38,18 +38,25 @@ class TransportConfig:
         options: Adapter settings, overriding any of the same name in the
             DSN. Values are strings so that both sources read alike and a
             setting can move between them without changing meaning.
+        failure_transport: The transport this one's messages are kept in once
+            they failed for good, where the ``messenger:failed:*`` commands
+            look for them; the configuration's own ``failure_transport`` when
+            left out. It names the place, it does not move anything: the
+            transport moves what failed — an ``orm://`` transport to its
+            ``failure_queue``, which this then names a transport reading.
     """
 
     dsn: str
     queue: str | None = None
     options: Mapping[str, str] = field(default_factory=_no_options)
+    failure_transport: str | None = None
 
     @override
     def __repr__(self) -> str:
         """Render without the DSN's credentials, which a traceback would otherwise leak."""
         return (
             f"{type(self).__name__}(dsn={redacted(self.dsn)!r}, queue={self.queue!r}, "
-            f"options={self.options!r})"
+            f"options={self.options!r}, failure_transport={self.failure_transport!r})"
         )
 
     @property

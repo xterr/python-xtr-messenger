@@ -21,6 +21,7 @@ from .non_sendable_stamp_interface import NonSendableStampInterface
 from .received_stamp import ReceivedStamp
 from .redelivery_stamp import RedeliveryStamp
 from .sent_stamp import SentStamp
+from .sent_to_failure_transport_stamp import SentToFailureTransportStamp
 from .stamp_interface import StampInterface
 from .transport_message_id_stamp import TransportMessageIdStamp
 from .transport_names_stamp import TransportNamesStamp
@@ -36,6 +37,7 @@ __all__ = [
     "ReceivedStamp",
     "RedeliveryStamp",
     "SentStamp",
+    "SentToFailureTransportStamp",
     "StampInterface",
     "TransportMessageIdStamp",
     "TransportNamesStamp",
@@ -53,6 +55,7 @@ DEFAULT_STAMP_TYPES: tuple[type[StampInterface], ...] = (
     DelayStamp,
     ErrorDetailsStamp,
     RedeliveryStamp,
+    SentToFailureTransportStamp,
     TransportMessageIdStamp,
     TransportNamesStamp,
 )

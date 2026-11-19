@@ -37,6 +37,13 @@ def names_for(locator: SendersLocator, envelope: Envelope) -> list[str]:
     return [name for name, _ in locator.senders_for(envelope)]
 
 
+def test_the_routes_of_a_type_are_read_without_an_envelope() -> None:
+    routes: dict[type | str, str | list[str]] = {IngestDocument: ["a", "b"], "*": "c"}
+
+    assert SendersLocator.transport_names_for(IngestDocument, routes) == ("a", "b")
+    assert SendersLocator.transport_names_for(AnalyseDocument, routes) == ("c",)
+
+
 def test_a_route_naming_an_unknown_transport_fails_at_construction() -> None:
     with pytest.raises(UnknownTransportError) as excinfo:
         _ = SendersLocator({IngestDocument: "nowhere"}, {"async": RecordingSender()})

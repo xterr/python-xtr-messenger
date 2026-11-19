@@ -165,6 +165,22 @@ class WorkerFactory:
             receiver_name=ordered[0] if len(ordered) == 1 else None,
         )
 
+    def worker_for(self, name: str, receiver: ReceiverInterface) -> WorkerInterface:
+        """Build the worker for ``receiver``, consumed as the transport ``name``.
+
+        For a receiver no configuration names — one message taken out of a
+        transport to be retried on its own, say. It dispatches through the
+        same bus, and resets and announces the same way, as a worker built by
+        :meth:`worker`; what it receives is stamped as received from ``name``.
+        """
+        return Worker(
+            self._dispatcher(),
+            receiver,
+            self._resetter,
+            event_dispatcher=self._event_dispatcher,
+            receiver_name=name,
+        )
+
     def _dispatcher(self) -> MessageBusInterface:
         """Return the bus a collected message is dispatched through.
 
