@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from .envelope import Envelope
+    from .failure.failure_transport_sender import FailureTransportSender
     from .message_bus_interface import MessageBusInterface
     from .transport.receiver.receiver_interface import ReceiverInterface
 
@@ -57,15 +58,22 @@ class Worker(WorkerInterface):
     **This makes exactly one attempt per message and never retries.** That is
     a deliberate division of labour, not an omission. Redelivery is something
     only the transport can do correctly — it owns the delivery count, the
-    backoff state, and the dead-letter destination — so a message that fails
-    here is rejected and the transport decides what happens next. Adding a
-    retry here would not replace that; it would run *underneath* it, and
-    every failure would be attempted the product of both policies.
+    backoff state — so a message that fails here and will be delivered again
+    is rejected, and the transport retries it. Adding a retry here would not
+    replace that; it would run *underneath* it, and every failure would be
+    attempted the product of both policies.
+
+    A message that failed for good — no attempt left, by the transport's
+    :class:`~xtr_messenger.transport.receiver.RetryingReceiverInterface`, or
+    any failure on a transport that does not retry — goes to the failure
+    transport configured for its transport: sent there, then acknowledged.
+    With none, it is rejected, and the transport keeps it its own way.
     """
 
     __slots__ = (
         "_bus",
         "_dispatcher",
+        "_failure_transport_sender",
         "_receiver",
         "_receiver_name",
         "_resetter",
@@ -73,7 +81,7 @@ class Worker(WorkerInterface):
         "_stopped",
     )
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — everything past `resetter` is keyword-only
         self,
         bus: MessageBusInterface,
         receiver: ReceiverInterface,
@@ -81,6 +89,7 @@ class Worker(WorkerInterface):
         *,
         event_dispatcher: EventDispatcherInterface | None = None,
         receiver_name: str | None = None,
+        failure_transport_sender: FailureTransportSender | None = None,
     ) -> None:
         """Dispatch messages collected from ``receiver`` through ``bus``.
 
@@ -96,12 +105,19 @@ class Worker(WorkerInterface):
         :class:`~xtr_messenger.stamp.ReceivedStamp` carries to its handlers;
         left out, each envelope's own stamp names it, which is how a worker
         draining several transports reports each one.
+
+        ``failure_transport_sender``, when given, sends a message that failed
+        for good to the failure transport configured for the transport it
+        came from; it is then acknowledged. Without one — or for a transport
+        with none configured, a message that failed in a failure transport
+        already, or a send that fails — it is rejected.
         """
         self._bus = bus
         self._receiver = receiver
         self._resetter = resetter
         self._dispatcher = event_dispatcher
         self._receiver_name = receiver_name
+        self._failure_transport_sender = failure_transport_sender
         self._stopped: asyncio.Event | None = None
         self._stop_requested = False
 
@@ -193,7 +209,11 @@ class Worker(WorkerInterface):
                         receiver, RetryingReceiverInterface
                     ) and receiver.will_retry(failed.envelope)
                     await announce_failure(
-                        failed, name, self._dispatcher, receiver.reject, will_retry=will_retry
+                        failed,
+                        name,
+                        self._dispatcher,
+                        lambda settled, retried: self._settle_failure(settled, name, retried),
+                        will_retry=will_retry,
                     )
         finally:
             if self._resetter is not None:
@@ -201,6 +221,20 @@ class Worker(WorkerInterface):
                     await self._resetter.reset()
                 except Exception:
                     _LOGGER.exception("services failed to reset after a message")
+
+    async def _settle_failure(self, envelope: Envelope, name: str, will_retry: bool) -> None:
+        """Settle ``envelope``, which failed on ``name``, once listeners have had their say.
+
+        One that comes back — the transport retries it, or a listener said a
+        retry is arranged — is rejected. One that failed for good is sent to
+        its failure transport and acknowledged, and rejected when it has none
+        or the send did not happen: acknowledged only once it is kept there.
+        """
+        sender = self._failure_transport_sender
+        if not will_retry and sender is not None and await sender.send(envelope, name):
+            await self._receiver.ack(envelope)
+            return
+        await self._receiver.reject(envelope)
 
     async def _announce(self, event: object) -> None:
         if self._dispatcher is not None:

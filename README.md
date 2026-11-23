@@ -257,9 +257,14 @@ from xtr_messenger import TransportFactory, WorkerFactory
 
 
 async def main() -> None:
-    worker = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)]).worker(["high"])
+    workers = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)])
+    worker = workers.worker(["high"])
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, worker.stop)
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        # What sending to a failure transport, or a redispatch, opened.
+        await workers.close_publishers()
 
 
 asyncio.run(main())
@@ -330,14 +335,21 @@ inclusive; the time a message failed is the one its `SentToFailureTransportStamp
 message carrying none is never selected by a time window.
 
 A failure transport is a configured transport, named by `failure_transport` — on the
-configuration, for every transport, or on a `TransportConfig`, for that one. It names where what
-failed for good is kept; the transport itself moves it there, as an `orm://` transport does to
-its `failure_queue`. Point a transport reading that queue at it:
+configuration, for every transport, or on a `TransportConfig`, for that one. Once a message's
+last attempt fails, the worker sends it there — whatever either transport is, `amqp://` to
+`orm://` included — stamped with a `SentToFailureTransportStamp`, and acknowledges the original.
+A transport with no failure transport keeps what failed its own way: an `orm://` one in its
+`failure_queue`, an `amqp://` one in its dead-letter queue. A failure transport is where a
+message stops: one that fails there again — consumed there, or retried from it — is never sent
+on, whatever the configuration names for it, and keeps the stamp saying where it first failed.
+Sending and acknowledging are two steps, so a crash between them leaves the message in both
+places: handlers stay idempotent. Pick a transport that can be listed, such as an `orm://` one,
+so the commands can read it:
 
 ```python
 MessageBusConfig(
     transports={
-        "orders": TransportConfig("orm://default", queue="orders"),  # failure_queue: failed
+        "orders": TransportConfig("amqp://...", queue="orders"),
         "failed": TransportConfig("orm://default", queue="failed"),
     },
     failure_transport="failed",
@@ -845,6 +857,59 @@ may run two applications, each with its own factory, and closing more than your 
 a connection the other is still publishing through. `TransportFactory` forwards to every
 factory behind it, and the `MessengerBundle` asks the one its own kernel built as it shuts down.
 
+#### What an adapter must do, and what it may offer
+
+The contract a type checker holds an adapter to is small: a factory is a
+`TransportFactoryInterface`, and what it builds is a `SenderInterface` — a `TransportInterface`
+when it can be consumed, or a factory implementing `WorkerProvidingInterface` when its broker
+consumes on its own terms. Everything else a transport can do is a capability: a
+`@runtime_checkable` protocol it opts into by inheriting it, which the worker and the console
+commands check with `isinstance`. Nothing makes an adapter implement one — leave it out and the
+command that needs it says the transport cannot, instead of failing. Inherit each protocol you
+implement explicitly, so the type checker compares your methods with it.
+
+| Implement | To | The worker or command then |
+| --- | --- | --- |
+| `ReceiverInterface` (`get`, `ack`, `reject`) | be consumed | drives it with `Worker` |
+| `RetryingReceiverInterface` (`will_retry`) | retry a rejected message yourself | asks before settling a failure: `True` → `reject` (your retry); `False` → the message failed for good |
+| `SetupableTransportInterface` (`setup`) | create your table, queues, exchanges up front | `messenger:setup-transports` calls it |
+| `MessageCountAwareInterface` (`count`) | say how many messages wait | `messenger:stats` shows it |
+| `ListableReceiverInterface` (`all`, `find`) | let your messages be looked into without handing them out | `messenger:show` and `messenger:failed:*` read through it |
+| `WorkerProvidingInterface` (`worker`) | run your broker's own consume loop | is built instead of `Worker` |
+| `FailureTransportWorkerProvidingInterface` (`worker_with_failure_transport`) | have that loop send final failures to the failure transport | is called instead of `worker` when a transport of the group has a failure transport; without it, final failures stay with your broker and a warning says so |
+| `PublisherClosingInterface` (`close_publishers`) | release what your senders opened | is called as the kernel shuts down |
+
+What every adapter has to get right, whatever it implements:
+
+- **Failures.** The worker makes one attempt per message, then settles it. A receiver that is
+  not a `RetryingReceiverInterface` has every failure treated as final. A final failure is sent
+  to the failure transport configured for the transport it came from — the worker does that,
+  never the adapter — and the original is then **acknowledged**; with none configured, or when
+  that send fails, it is **rejected**, and the adapter keeps it its own way (a dead-letter
+  queue, a failure queue). So `ack` must drop the message for good, and `reject` must never put
+  it back to fail again at once. Do not move a message to a failure transport of your own
+  choosing: that is the configuration's decision. A message a listener sets for retry
+  (`WorkerMessageFailedEvent.set_for_retry()`) is not failed for good, and one that failed in a
+  failure transport already is never sent on — it stays there.
+- **A worker of your own.** Implement `FailureTransportWorkerProvidingInterface` beside
+  `WorkerProvidingInterface`: `worker_with_failure_transport(group, bus,
+  failure_transport_sender, ...)` is called when a transport of the group has a failure
+  transport. On a message's last attempt — one you know is the last, never a guess — call
+  `await failure_transport_sender.send(envelope, transport_name)` and, if it returns `True`,
+  acknowledge the delivery rather than dead-letter it; on `False`, settle it as you always
+  would. The taskiq bridge's `bind_bus(..., failure_transport_sender=...)` does this for a
+  taskiq broker. Keep `worker()`'s signature as it is.
+- **Ids.** Every envelope a `ListableReceiverInterface` hands back carries a
+  `TransportMessageIdStamp` holding what `find` takes, and whatever `get` would have stamped it
+  with to settle it, so `messenger:failed:retry` and `:remove` can acknowledge a listed message.
+  `all` lists what a worker could take now, oldest first, and must not hand anything out.
+- **Setup.** `setup` declares everything, whatever an `auto_setup` setting says — that is what
+  lets a deployment run with automatic setup off — and leaves what exists as it is.
+- **Errors.** Raise your package's own error deriving from `MessageBusError` for a broker that
+  refuses or cannot be reached; the commands report a `MessageBusError` and go on. Never put a
+  DSN's credentials in a message.
+- **Building.** Building a transport does no I/O; connect when it is first used.
+
 ## Profiler panel
 
 With [xtr-http-kernel](../xtr-http-kernel)'s profiler on, the profiler gains a `messenger` panel
@@ -1138,8 +1203,8 @@ xtr_messenger/
 
 ## Upgrading
 
-What changes for an application moving to 7.0, and how to keep the old behaviour where that is
-still possible: [Upgrading to 7.0](../../UPGRADING.md#xtr-messenger).
+What changes for an application moving to 7.0 and to 7.1, and how to keep the old behaviour
+where that is still possible: [Upgrading](../../UPGRADING.md).
 
 ## Development
 

@@ -40,7 +40,10 @@ from .exception import (
     UnsupportedStampError,
     UnsupportedTransportOperationError,
 )
-from .failure import FailedMessageFilter, FailedMessageRepository
+from .failure import FailedMessageFilter, FailedMessageRepository, FailureTransportSender
+from .failure_transport_worker_providing_interface import (
+    FailureTransportWorkerProvidingInterface,
+)
 from .handler import (
     Handler,
     HandlerDescriptor,
@@ -133,6 +136,8 @@ __all__ = [
     "ErrorDetailsStamp",
     "FailedMessageFilter",
     "FailedMessageRepository",
+    "FailureTransportSender",
+    "FailureTransportWorkerProvidingInterface",
     "HandleMessageMiddleware",
     "HandledStamp",
     "Handler",

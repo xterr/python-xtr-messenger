@@ -193,14 +193,18 @@ import signal
 
 import app.handlers  # noqa: F401 — importing declares the messages and handlers
 
-from app.bus import CONFIG
-from xtr_messenger import WorkerFactory
+from app.bus import CONFIG, wire
+from xtr_messenger import TransportFactory, WorkerFactory
 
 
 async def main() -> None:
-    worker = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)]).worker(["high"])
+    workers = WorkerFactory(CONFIG, [TransportFactory(serializer=wire)])
+    worker = workers.worker(["high"])
     asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, worker.stop)
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        await workers.close_publishers()  # what sending a failure on opened
 
 
 asyncio.run(main())
@@ -224,14 +228,16 @@ With the console bundle active the kernel also has `messenger:setup-transports`,
 [--message M] [--middleware]` and, over the failure transports, `messenger:failed:show`,
 `messenger:failed:retry [id...] [--force] [--redispatch]` and `messenger:failed:remove [id...]
 [--all] [--force]`. Each needs the transport to implement `SetupableTransportInterface`,
-`MessageCountAwareInterface` or `ListableReceiverInterface` — `orm://` does all three; `amqp://`,
-`in-memory://` and `sync://` none — and says so otherwise. Name the failure transport:
+`MessageCountAwareInterface` or `ListableReceiverInterface` — `orm://` does all three, `amqp://`
+the first two, `in-memory://` and `sync://` none — and says so otherwise. Name the failure
+transport; a worker sends a message there once its last attempt failed, whatever the transports,
+then acknowledges the original (with none, the transport keeps it its own way):
 
 ```python
 MessageBusConfig(
     transports={
-        "orders": TransportConfig("orm://default", queue="orders"),
-        "failed": TransportConfig("orm://default", queue="failed"),  # orders' failure_queue
+        "orders": TransportConfig("amqp://...", queue="orders"),
+        "failed": TransportConfig("orm://default", queue="failed"),  # listable
     },
     failure_transport="failed",  # or TransportConfig(..., failure_transport="failed")
 )

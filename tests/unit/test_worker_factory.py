@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, final, override
 
 import pytest
@@ -13,14 +14,20 @@ from tests.support.fakes import RecordingBus, RecordingMiddleware, StubReceiver
 from tests.support.messages import IngestDocument, ingest_document
 from xtr_messenger import (
     Envelope,
+    FailureTransportWorkerProvidingInterface,
     HandlersLocator,
     IncompatibleReceiversError,
+    InMemoryTransport,
     InMemoryTransportFactory,
     MessageBusConfig,
+    MessageBusFactory,
     NotConsumableError,
+    PublisherClosingInterface,
     ReceivedStamp,
     RedispatchMessage,
     SenderInterface,
+    SentToFailureTransportStamp,
+    SingleMessageReceiver,
     SyncTransportFactory,
     TransportConfig,
     TransportFactoryInterface,
@@ -41,6 +48,7 @@ if TYPE_CHECKING:
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from xtr_messenger import Dsn, MessageBusInterface
+    from xtr_messenger.failure.failure_transport_sender import FailureTransportSender
     from xtr_messenger.worker import AsyncResetter
 
 pytestmark = pytest.mark.anyio
@@ -131,6 +139,53 @@ class OwnWorkerFactory(TransportFactoryInterface, WorkerProvidingInterface):
         self.captured_bus = bus
         self.captured_dispatcher = event_dispatcher
         self.captured_resetter = resetter
+        return self.built
+
+
+@final
+class FailureAwareWorkerFactory(
+    TransportFactoryInterface, WorkerProvidingInterface, FailureTransportWorkerProvidingInterface
+):
+    """An adapter whose broker owns the loop and can send final failures on; records how."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, FailureTransportSender | None]] = []
+        self.built = FakeWorker()
+
+    @override
+    def supports(self, dsn: Dsn) -> bool:
+        return dsn.scheme == "own"
+
+    @override
+    def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
+        del group
+        return {}
+
+    @override
+    def worker(
+        self,
+        group: Mapping[str, TransportConfig],
+        bus: MessageBusInterface,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
+        resetter: AsyncResetter | None = None,
+    ) -> WorkerInterface:
+        del group, bus, event_dispatcher, resetter
+        self.calls.append(("worker", None))
+        return self.built
+
+    @override
+    def worker_with_failure_transport(
+        self,
+        group: Mapping[str, TransportConfig],
+        bus: MessageBusInterface,
+        failure_transport_sender: FailureTransportSender,
+        *,
+        event_dispatcher: EventDispatcherInterface | None = None,
+        resetter: AsyncResetter | None = None,
+    ) -> WorkerInterface:
+        del group, bus, event_dispatcher, resetter
+        self.calls.append(("worker_with_failure_transport", failure_transport_sender))
         return self.built
 
 
@@ -422,6 +477,142 @@ def test_a_worker_providing_factory_is_handed_the_event_dispatcher() -> None:
     _ = WorkerFactory(config, [adapter], event_dispatcher=dispatcher).worker(["jobs"])
 
     assert adapter.captured_dispatcher is dispatcher
+
+
+_OWN = {"jobs": TransportConfig("own://"), "failed": TransportConfig("own://")}
+
+
+def test_a_factory_that_can_send_final_failures_on_is_asked_to_when_its_group_has_one() -> None:
+    adapter = FailureAwareWorkerFactory()
+    configured = MessageBusConfig(transports=_OWN, failure_transport="failed")
+
+    _ = WorkerFactory(configured, [adapter]).worker(["jobs"])
+
+    [(called, sender)] = adapter.calls
+    assert called == "worker_with_failure_transport"
+    assert sender is not None
+    assert sender.failure_transport_of("jobs") == "failed"
+
+
+def test_a_factory_whose_group_has_no_failure_transport_builds_its_plain_worker() -> None:
+    adapter = FailureAwareWorkerFactory()
+    unconfigured = WorkerFactory(MessageBusConfig(transports=_OWN), [adapter])
+    only_for_others = MessageBusConfig(
+        transports={
+            **_OWN,
+            "mail": TransportConfig("in-memory://", failure_transport="failed"),
+        }
+    )
+
+    _ = unconfigured.worker(["jobs"])
+    _ = WorkerFactory(only_for_others, [adapter, InMemoryTransportFactory()]).worker(["jobs"])
+    # A failure transport consumed on its own has nowhere left to send to.
+    _ = WorkerFactory(
+        MessageBusConfig(transports=_OWN, failure_transport="failed"), [adapter]
+    ).worker(["failed"])
+
+    assert adapter.calls == [("worker", None)] * 3
+
+
+def test_a_factory_written_before_failure_transports_keeps_working_and_says_so(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    adapter = OwnWorkerFactory()
+    configured = MessageBusConfig(transports=_OWN, failure_transport="failed")
+
+    worker = WorkerFactory(configured, [adapter]).worker(["jobs"])
+
+    assert worker is adapter.built
+    assert "cannot send a message failing for good to its failure transport" in caplog.text
+
+
+async def test_a_message_failing_for_good_lands_in_the_configured_failure_transport() -> None:
+    handlers = HandlersLocator()
+
+    @as_message_handler(IngestDocument, handlers)
+    async def fail(message: IngestDocument) -> None:
+        del message
+        raise RuntimeError("boom")
+
+    memory = InMemoryTransportFactory()
+    config = MessageBusConfig(
+        transports={
+            "jobs": TransportConfig("in-memory://"),
+            "failed": TransportConfig("in-memory://"),
+        },
+        routing={IngestDocument: "jobs"},
+        failure_transport="failed",
+    )
+    _ = await MessageBusFactory(config, [memory], handlers).bus().dispatch(ingest_document())
+
+    await WorkerFactory(config, [memory], handlers).worker(["jobs"]).run()
+
+    failed = memory.create({"failed": config.transports["failed"]})["failed"]
+    assert isinstance(failed, InMemoryTransport)
+    [kept] = failed.sent
+    stamp = kept.last(SentToFailureTransportStamp)
+    assert stamp is not None
+    assert stamp.original_receiver_name == "jobs"
+
+
+async def test_a_retried_failed_message_failing_again_stays_in_its_failure_transport() -> None:
+    """``jobs`` fails to ``jobs_failed``, which falls back to the global ``failed``:
+    a message retried from ``jobs_failed`` that fails again is not passed on."""
+    memory = InMemoryTransportFactory()
+    config = MessageBusConfig(
+        transports={
+            "jobs": TransportConfig("in-memory://", failure_transport="jobs_failed"),
+            "jobs_failed": TransportConfig("in-memory://"),
+            "failed": TransportConfig("in-memory://"),
+        },
+        failure_transport="failed",
+    )
+    kept = Envelope(ingest_document(), (SentToFailureTransportStamp("jobs", _FIRST),))
+    held = StubReceiver([kept])
+
+    worker = WorkerFactory(config, [memory], bus=RecordingBus(RuntimeError("boom")))
+    await worker.worker_for("jobs_failed", SingleMessageReceiver(held, kept)).run()
+
+    failed = memory.create({"failed": config.transports["failed"]})["failed"]
+    assert isinstance(failed, InMemoryTransport)
+    assert failed.sent == ()
+    [rejected] = held.rejected
+    assert rejected.all(SentToFailureTransportStamp) == (
+        SentToFailureTransportStamp("jobs", _FIRST),
+    )
+
+
+async def test_closing_publishers_closes_what_its_transports_opened() -> None:
+    closing = ClosingFactory()
+    config = MessageBusConfig(transports={"own": TransportConfig("own://")})
+
+    await WorkerFactory(config, [closing]).close_publishers()
+
+    assert closing.closed == 1
+
+
+_FIRST = datetime(2025, 12, 31, 9, tzinfo=UTC)
+
+
+@final
+class ClosingFactory(TransportFactoryInterface, PublisherClosingInterface):
+    """A factory that counts how often it is asked to close its publishers."""
+
+    def __init__(self) -> None:
+        self.closed = 0
+
+    @override
+    def supports(self, dsn: Dsn) -> bool:
+        return dsn.scheme == "own"
+
+    @override
+    def create(self, group: Mapping[str, TransportConfig]) -> Mapping[str, SenderInterface]:
+        del group
+        return {}
+
+    @override
+    async def close_publishers(self) -> None:
+        self.closed += 1
 
 
 def test_a_worker_providing_factory_is_handed_the_resetter() -> None:

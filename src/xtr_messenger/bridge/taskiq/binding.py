@@ -21,7 +21,10 @@ Given an event dispatcher, each task announces its message the way the
 library's own worker does — received, then handled or failed — so listeners
 see one sequence whichever worker runs. A message a listener skips returns
 normally, which taskiq acknowledges; a failure is announced, then raised for
-taskiq's retry and dead-letter middleware to act on.
+taskiq's retry and dead-letter middleware to act on — unless it was the
+message's last attempt — known to be, never guessed — and its transport has a
+failure transport: it is sent there instead, and the task returns normally so
+the delivery is acknowledged.
 
 A task handles its message apart from the context it runs in. Whatever
 started it — a receive loop run by hand inside a command, a broker running
@@ -59,6 +62,7 @@ if TYPE_CHECKING:
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
 
     from xtr_messenger.envelope import Envelope
+    from xtr_messenger.failure.failure_transport_sender import FailureTransportSender
     from xtr_messenger.message_bus_interface import MessageBusInterface
     from xtr_messenger.transport.serialization import SerializerInterface
     from xtr_messenger.worker import AsyncResetter
@@ -101,6 +105,7 @@ class _Binding:
         "bus",
         "dead_letter",
         "dispatcher",
+        "failure_transport_sender",
         "max_attempts",
         "receiver_names",
         "resetter",
@@ -117,6 +122,7 @@ class _Binding:
         max_attempts: int | None,
         resetter: AsyncResetter | None,
         dead_letter: UndecodableDeadLetterer | None,
+        failure_transport_sender: FailureTransportSender | None,
     ) -> None:
         self.bus = bus
         self.serializer = serializer
@@ -125,6 +131,7 @@ class _Binding:
         self.max_attempts = max_attempts
         self.resetter = resetter
         self.dead_letter = dead_letter
+        self.failure_transport_sender = failure_transport_sender
 
     def receiver_name(self, labels: Mapping[str, object]) -> str:
         """Name the transport a delivery came from, by the queue it was published to.
@@ -147,6 +154,20 @@ class _Binding:
         attempt = stamp.retry_count if stamp is not None else _LOST_LABEL_ATTEMPT
         return attempt < self.max_attempts - 1
 
+    def is_last_attempt(self, labels: Mapping[str, object]) -> bool:
+        """Tell whether this delivery is known to be the last the broker makes.
+
+        Known only with ``max_attempts`` and a readable attempt count: an
+        unknown one is not the last, as the dead-letter middleware reads it,
+        so a message whose count was lost is retried rather than moved.
+        """
+        retries = retries_from(labels)
+        return (
+            self.max_attempts is not None
+            and retries is not None
+            and retries >= self.max_attempts - 1
+        )
+
 
 def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     broker: AsyncBroker,
@@ -158,6 +179,7 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
     max_attempts: int | None = None,
     resetter: AsyncResetter | None = None,
     dead_letter: UndecodableDeadLetterer | None = None,
+    failure_transport_sender: FailureTransportSender | None = None,
 ) -> tuple[str, ...]:
     """Register a task per declared message on ``broker``, dispatching into ``bus``.
 
@@ -185,6 +207,13 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
             instead of retried; the task then returns normally, so the
             delivery is acknowledged. Without it the decode failure is
             raised, and the broker's retry policy acts on it.
+        failure_transport_sender: Sends a message whose last attempt failed
+            to the failure transport configured for the transport it came
+            from, instead of raising it for the broker's dead-lettering. Only
+            a last attempt known to be one is sent — ``max_attempts`` given
+            and the attempt count readable — and only one no listener set for
+            retry; anything else, or a send that does not happen, is raised
+            as before.
 
     Returns:
         The task names registered.
@@ -197,6 +226,7 @@ def bind_bus(  # noqa: PLR0913 — everything past `serializer` is keyword-only
         max_attempts=max_attempts,
         resetter=resetter,
         dead_letter=dead_letter,
+        failure_transport_sender=failure_transport_sender,
     )
     names = declared_names()
     for task_name in names:
@@ -238,13 +268,10 @@ async def _handle(binding: _Binding, task_name: str, body: str, delivered: Taski
             return
         outcome = await handle(binding.bus, envelope, name, binding.dispatcher)
         if isinstance(outcome, Failed):
-            await announce_failure(
-                outcome,
-                name,
-                binding.dispatcher,
-                _settled_by_raising,
-                will_retry=binding.will_retry(outcome.envelope),
-            )
+            if await _failed(binding, outcome, name, labels):
+                # Kept by the failure transport now: returning has taskiq acknowledge
+                # the delivery, so it is neither retried nor dead-lettered.
+                return
             raise outcome.error
     finally:
         if binding.resetter is not None:
@@ -254,9 +281,37 @@ async def _handle(binding: _Binding, task_name: str, body: str, delivered: Taski
                 _LOGGER.exception("services failed to reset after a message")
 
 
-async def _settled_by_raising(envelope: Envelope) -> None:
-    """Leave settling to taskiq, which acts on the exception the task raises."""
-    del envelope
+async def _failed(
+    binding: _Binding, outcome: Failed, name: str, labels: Mapping[str, object]
+) -> bool:
+    """Announce ``outcome``; return whether it was sent to its failure transport.
+
+    Sent when it is the last attempt and no listener set it for retry. A
+    listener raising once it was sent is logged rather than raised: raising
+    would have taskiq dead-letter a message the failure transport keeps.
+    """
+    sender = binding.failure_transport_sender
+    last = binding.is_last_attempt(labels)
+    sent = False
+
+    async def settle(failed: Envelope, will_retry: bool) -> None:
+        nonlocal sent
+        if sender is not None and last and not will_retry:
+            sent = await sender.send(failed, name)
+
+    try:
+        await announce_failure(
+            outcome,
+            name,
+            binding.dispatcher,
+            settle,
+            will_retry=binding.will_retry(outcome.envelope),
+        )
+    except Exception:
+        if not sent:
+            raise
+        _LOGGER.exception("a listener failed on a message sent to its failure transport")
+    return sent
 
 
 def _rebuild(

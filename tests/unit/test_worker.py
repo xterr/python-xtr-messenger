@@ -10,16 +10,24 @@ import pytest
 from xtr_event_dispatcher import EventDispatcher
 
 from tests.support.errors import UnprintableError
+from tests.support.failure import FIRST_FAILED_AT, failure_transport, set_for_retry
 from tests.support.fakes import ContextNotingBus, RecordingBus, StubReceiver
 from xtr_messenger import (
     DelayStamp,
     Envelope,
     ErrorDetailsStamp,
+    FailureTransportSender,
+    InMemoryTransport,
+    InMemoryTransportFactory,
+    MessageBusConfig,
     MessageBusInterface,
     ReceivedStamp,
     ReceiverInterface,
     RetryingReceiverInterface,
+    SentToFailureTransportStamp,
     StampInterface,
+    TransportConfig,
+    TransportLocator,
     Worker,
     WorkerInterface,
 )
@@ -31,6 +39,7 @@ from xtr_messenger.event import (
     WorkerStartedEvent,
     WorkerStoppedEvent,
 )
+from xtr_messenger.transport.receiver import ChainedReceiver
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterable
@@ -682,3 +691,134 @@ async def test_a_failure_is_announced_as_retried_when_its_receiver_will_retry_it
     assert failed.will_retry is retries
     assert isinstance(receiver, RetryingReceiverInterface)
     assert receiver.rejected == [failed.envelope]
+
+
+# ── failure transports ──────────────────────────────────────────────────────
+
+
+def _from_orders(message: object, *stamps: StampInterface) -> Envelope:
+    return Envelope(message, (ReceivedStamp("orders"), *stamps))
+
+
+def _failing_worker(receiver: ReceiverInterface, sender: FailureTransportSender) -> Worker:
+    return Worker(
+        RecordingBus(failure=RuntimeError("boom")),
+        receiver,
+        receiver_name="orders",
+        failure_transport_sender=sender,
+    )
+
+
+async def test_a_message_failing_for_good_is_sent_to_its_failure_transport_then_acked() -> None:
+    sender, kept = failure_transport("orders")
+    receiver = StubReceiver([_from_orders("x")])
+
+    await _failing_worker(receiver, sender).run()
+
+    [moved] = kept.sent
+    assert moved.message == "x"
+    assert moved.last(ErrorDetailsStamp) == ErrorDetailsStamp("RuntimeError", "boom")
+    stamp = moved.last(SentToFailureTransportStamp)
+    assert stamp is not None
+    assert stamp.original_receiver_name == "orders"
+    assert len(receiver.acked) == 1
+    assert receiver.rejected == []
+
+
+async def test_a_message_its_transport_retries_is_rejected_not_sent() -> None:
+    sender, kept = failure_transport("orders")
+    receiver = RetryingReceiver([_from_orders("x")], retries=True)
+
+    await _failing_worker(receiver, sender).run()
+
+    assert kept.sent == ()
+    assert len(receiver.rejected) == 1
+
+
+async def test_a_message_a_listener_sets_for_retry_is_rejected_not_sent() -> None:
+    sender, kept = failure_transport("orders")
+    dispatcher = EventDispatcher()
+    dispatcher.add_listener(WorkerMessageFailedEvent, set_for_retry)
+    receiver = StubReceiver([_from_orders("x")])
+
+    await Worker(
+        RecordingBus(failure=RuntimeError("boom")),
+        receiver,
+        event_dispatcher=dispatcher,
+        receiver_name="orders",
+        failure_transport_sender=sender,
+    ).run()
+
+    assert kept.sent == ()
+    assert len(receiver.rejected) == 1
+
+
+async def test_a_message_that_failed_in_a_failure_transport_stays_there() -> None:
+    sender, kept = failure_transport("orders")
+    first = SentToFailureTransportStamp("jobs", FIRST_FAILED_AT)
+    receiver = StubReceiver([_from_orders("x", first)])
+
+    await _failing_worker(receiver, sender).run()
+
+    assert kept.sent == ()
+    [rejected] = receiver.rejected
+    assert rejected.all(SentToFailureTransportStamp) == (first,)
+
+
+async def test_a_message_from_a_transport_with_no_failure_transport_is_rejected() -> None:
+    sender, kept = failure_transport("orders")
+    receiver = StubReceiver([Envelope("x", (ReceivedStamp("failed"),))])
+
+    await Worker(
+        RecordingBus(failure=RuntimeError("boom")),
+        receiver,
+        receiver_name="failed",
+        failure_transport_sender=sender,
+    ).run()
+
+    assert kept.sent == ()
+    assert len(receiver.rejected) == 1
+
+
+async def test_a_message_the_failure_transport_refuses_is_rejected_not_lost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sender, _ = failure_transport("orders")
+
+    def refuse(_self: TransportLocator, _name: str) -> object:
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(TransportLocator, "get", refuse)
+    receiver = StubReceiver([_from_orders("x")])
+
+    await _failing_worker(receiver, sender).run()
+
+    assert receiver.acked == []
+    assert len(receiver.rejected) == 1
+
+
+async def test_transports_drained_together_each_fail_to_their_own() -> None:
+    config = MessageBusConfig(
+        transports={
+            "a": TransportConfig("in-memory://", failure_transport="a_failed"),
+            "b": TransportConfig("in-memory://", failure_transport="b_failed"),
+            "a_failed": TransportConfig("in-memory://"),
+            "b_failed": TransportConfig("in-memory://"),
+        }
+    )
+    locator = TransportLocator(config, [InMemoryTransportFactory()])
+    sender = FailureTransportSender(config, locator)
+    receiver = ChainedReceiver(
+        [StubReceiver([Envelope("x")]), StubReceiver([Envelope("y")])], ["a", "b"]
+    )
+
+    await Worker(
+        RecordingBus(failure=RuntimeError("boom")), receiver, failure_transport_sender=sender
+    ).run()
+
+    a_failed = locator.get("a_failed")
+    b_failed = locator.get("b_failed")
+    assert isinstance(a_failed, InMemoryTransport)
+    assert isinstance(b_failed, InMemoryTransport)
+    assert [e.message for e in a_failed.sent] == ["x"]
+    assert [e.message for e in b_failed.sent] == ["y"]

@@ -109,3 +109,35 @@ Building a receiver must do no I/O — every tagged one is built with the `Worke
 Without a container: `WorkerFactory(CONFIG, receivers={"ticks": TickReceiver()})`. One worker
 may drain receivers and configured transports together, except a transport bringing its own
 worker (`IncompatibleReceiversError`).
+
+## Writing an adapter
+
+Required: a `TransportFactoryInterface` (`supports`, `create`) advertised under
+`[project.entry-points."xtr_messenger.transport_factories"]`, the entry point named after the
+DSN scheme; what `create` returns is a `SenderInterface`, a `TransportInterface` when it can be
+consumed — or the factory implements `WorkerProvidingInterface` when its broker runs its own
+loop. Optional capabilities, each a `@runtime_checkable` protocol to inherit explicitly — the
+worker and the commands check them with `isinstance`, and say "cannot" when one is missing:
+
+- `RetryingReceiverInterface.will_retry(envelope)` — you retry rejected messages; without it
+  every failure is final.
+- `SetupableTransportInterface.setup()` — `messenger:setup-transports`; declare everything
+  whatever `auto_setup` says.
+- `MessageCountAwareInterface.count()` — `messenger:stats`.
+- `ListableReceiverInterface.all(limit)` / `find(id)` — `messenger:show`, `messenger:failed:*`;
+  every envelope carries a `TransportMessageIdStamp` with what `find` takes and settles like a
+  received one; `all` hands nothing out.
+- `PublisherClosingInterface.close_publishers()` — close only what this factory's senders opened.
+
+Failures: never route a message to a failure transport yourself. A final failure goes to the
+configured `failure_transport` — sent by the worker, then **acked** — and is **rejected** when
+there is none, the send fails, a listener set it for retry, or it failed in a failure transport
+already (it is never sent on); so `ack` drops it for good and `reject` keeps it your way (a
+dead-letter or failure queue). A factory bringing its own worker implements
+`FailureTransportWorkerProvidingInterface.worker_with_failure_transport(group, bus,
+failure_transport_sender, ...)`, called when the group has a failure transport — keep
+`WorkerProvidingInterface.worker()` unchanged: on a last attempt known to be one, `if await
+failure_transport_sender.send(envelope, name):` acknowledge instead of dead-lettering —
+`bind_bus(..., failure_transport_sender=...)` does it for taskiq. Raise your own `MessageBusError`
+subclass for a broker refusing, without credentials in the message; build with no I/O.
+The full table is the README's *What an adapter must do, and what it may offer*.

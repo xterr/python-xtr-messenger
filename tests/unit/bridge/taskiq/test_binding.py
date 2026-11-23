@@ -12,6 +12,7 @@ import pytest
 from taskiq import InMemoryBroker, TaskiqMiddleware
 from xtr_event_dispatcher import EventDispatcher
 
+from tests.support.failure import failure_transport, set_for_retry
 from tests.support.fakes import ContextNotingBus, RecordingBus, StubReceiver
 from tests.support.messages import AnalyseDocument, ingest_document
 from tests.support.serialization import json_serializer
@@ -23,7 +24,9 @@ from xtr_messenger import (
     MessageDecodingFailedError,
     ReceivedStamp,
     RedeliveryStamp,
+    SentToFailureTransportStamp,
     StampInterface,
+    TransportLocator,
     Worker,
 )
 from xtr_messenger._own_context import started_in_receive_loop
@@ -612,3 +615,89 @@ async def test_without_a_quarantine_an_undecodable_message_still_fails(
 
     assert result.is_err
     assert isinstance(result.error, MessageDecodingFailedError)
+
+
+# ── failure transports ──────────────────────────────────────────────────────
+
+
+async def _fail_once(
+    labels: dict[str, str | float],
+    *,
+    max_attempts: int | None = 3,
+    dispatcher: EventDispatcher | None = None,
+    refused: pytest.MonkeyPatch | None = None,
+) -> tuple[bool, int]:
+    """Fail one delivery carrying ``labels``; say whether taskiq saw it fail, and how many moved.
+
+    With ``refused``, the failure transport cannot be reached.
+    """
+    broker = InMemoryBroker(await_inplace=True)
+    sender, kept = failure_transport("orders")
+    if refused is not None:
+
+        def refuse(_self: TransportLocator, _name: str) -> object:
+            raise RuntimeError("down")
+
+        refused.setattr(TransportLocator, "get", refuse)
+    _ = bind_bus(
+        broker,
+        RecordingBus(failure=RuntimeError("boom")),
+        json_serializer(),
+        event_dispatcher=dispatcher,
+        receiver_names={None: "orders"},
+        max_attempts=max_attempts,
+        failure_transport_sender=sender,
+    )
+    body, headers = _body()
+    handle = await _kick(broker, _INGEST, body, **{HEADERS_LABEL: headers, **labels})
+    result = await handle.wait_result()
+    moved = kept.sent
+    for envelope in moved:
+        stamp = envelope.last(SentToFailureTransportStamp)
+        assert stamp is not None
+        assert stamp.original_receiver_name == "orders"
+    return result.is_err, len(moved)
+
+
+async def test_a_last_attempt_is_sent_to_the_failure_transport_and_acknowledged() -> None:
+    assert await _fail_once({RETRIES_LABEL: 2}) == (False, 1)
+
+
+async def test_an_attempt_that_will_be_retried_is_raised_for_taskiq() -> None:
+    assert await _fail_once({RETRIES_LABEL: 0}) == (True, 0)
+
+
+async def test_a_delivery_whose_attempt_is_unknown_is_raised_not_moved() -> None:
+    assert await _fail_once({}) == (True, 0)
+
+
+async def test_without_max_attempts_nothing_is_moved() -> None:
+    assert await _fail_once({RETRIES_LABEL: 2}, max_attempts=None) == (True, 0)
+
+
+async def test_a_last_attempt_a_listener_sets_for_retry_is_raised_not_moved() -> None:
+    dispatcher = EventDispatcher()
+    dispatcher.add_listener(WorkerMessageFailedEvent, set_for_retry)
+
+    assert await _fail_once({RETRIES_LABEL: 2}, dispatcher=dispatcher) == (True, 0)
+
+
+async def test_a_listener_raising_after_the_move_does_not_dead_letter_it_too(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    dispatcher = EventDispatcher()
+
+    def explode(event: WorkerMessageFailedEvent) -> None:
+        del event
+        raise RuntimeError("listener bug")
+
+    dispatcher.add_listener(WorkerMessageFailedEvent, explode)
+
+    assert await _fail_once({RETRIES_LABEL: 2}, dispatcher=dispatcher) == (False, 1)
+    assert "a listener failed on a message sent to its failure transport" in caplog.text
+
+
+async def test_a_last_attempt_the_failure_transport_refuses_is_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert await _fail_once({RETRIES_LABEL: 2}, refused=monkeypatch) == (True, 0)

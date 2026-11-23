@@ -34,7 +34,9 @@ class FailedMessagesRetryCommand(AbstractFailedMessagesCommand):
 
     A retried message is handled here, by a worker of its own on the failure
     transport: handled, it is acknowledged and gone; failing again, the
-    failure transport does with it what it does with any failed message.
+    failure transport does with it what it does with any failed message. It
+    is never sent on to another failure transport: it stays where it failed
+    for good, and keeps the stamp naming where it first failed.
     """
 
     def __init__(self, failed: FailedMessageRepository, workers: WorkerFactory) -> None:

@@ -75,8 +75,8 @@ class MessageBusConfig:
         require_handler: Refuse a message handled here that no handler
             takes. ``False`` for a bus shared by processes that each handle
             some of its messages.
-        failure_transport: The transport messages are kept in once they
-            failed for good, for every transport that names none of its own —
+        failure_transport: The transport a message is sent to once its last
+            attempt failed, for every transport that names none of its own —
             and the one the ``messenger:failed:*`` commands read when told no
             other. See :attr:`TransportConfig.failure_transport`.
     """

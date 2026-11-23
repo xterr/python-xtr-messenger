@@ -135,20 +135,25 @@ async def _announce_follow_ups(
             _LOGGER.exception("a listener failed on a held-back message's failure")
 
 
-async def _unsettled(envelope: Envelope) -> None:
+async def _unsettled(envelope: Envelope, will_retry: bool) -> None:
     """Settle nothing: a held-back message was dispatched, never received."""
-    del envelope
+    del envelope, will_retry
 
 
 async def announce_failure(
     failed: Failed,
     receiver_name: str,
     dispatcher: EventDispatcherInterface | None,
-    settle: Callable[[Envelope], Awaitable[None]],
+    settle: Callable[[Envelope, bool], Awaitable[None]],
     *,
     will_retry: bool = False,
 ) -> None:
-    """Stamp why ``failed`` failed, announce it, then ``settle`` the envelope listeners left.
+    """Stamp why ``failed`` failed, announce it, then ``settle`` what listeners left.
+
+    ``settle`` is handed the envelope and whether the message comes back —
+    ``will_retry``, unless a listener arranged a retry itself with
+    :meth:`~xtr_messenger.event.WorkerMessageFailedEvent.set_for_retry`, so
+    a message coming back is never treated as failed for good.
 
     A listener raising here is a bug in the listener rather than a problem
     with the message, so it is not caught — but the message is settled
@@ -159,10 +164,10 @@ async def announce_failure(
     cause = next(iter(error.errors.values())) if isinstance(error, HandlersFailedError) else error
     envelope = failed.envelope.with_stamps(ErrorDetailsStamp(type(cause).__name__, safe_str(cause)))
     if dispatcher is None:
-        await settle(envelope)
+        await settle(envelope, will_retry)
         return
     event = WorkerMessageFailedEvent(envelope, receiver_name, error, will_retry=will_retry)
     try:
         _ = await dispatcher.dispatch(event)
     finally:
-        await settle(event.envelope)
+        await settle(event.envelope, event.will_retry)

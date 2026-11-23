@@ -38,12 +38,13 @@ class TransportConfig:
         options: Adapter settings, overriding any of the same name in the
             DSN. Values are strings so that both sources read alike and a
             setting can move between them without changing meaning.
-        failure_transport: The transport this one's messages are kept in once
-            they failed for good, where the ``messenger:failed:*`` commands
-            look for them; the configuration's own ``failure_transport`` when
-            left out. It names the place, it does not move anything: the
-            transport moves what failed — an ``orm://`` transport to its
-            ``failure_queue``, which this then names a transport reading.
+        failure_transport: The transport a message from this one is sent to
+            once its last attempt failed — where the ``messenger:failed:*``
+            commands find it; the configuration's own ``failure_transport``
+            when left out. A worker sends it there, whatever either transport
+            is; with none, the transport keeps what failed its own way — an
+            ``orm://`` one in its ``failure_queue``, an ``amqp://`` one in its
+            dead-letter queue.
     """
 
     dsn: str

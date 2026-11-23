@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, final
+import logging
+from typing import TYPE_CHECKING, Final, final
 
 from .exception import IncompatibleReceiversError, NotConsumableError, UnknownTransportError
+from .failure.failure_transport_sender import FailureTransportSender
+from .failure_transport_worker_providing_interface import (
+    FailureTransportWorkerProvidingInterface,
+)
 from .handler import RedispatchingHandlers, default_registry
 from .message_bus import MessageBus
 from .message_bus_factory import MessageBusFactory
@@ -13,12 +18,14 @@ from .middleware.named import chain, named_middleware
 from .transport.receiver.chained_receiver import ChainedReceiver
 from .transport.receiver.receiver_interface import ReceiverInterface
 from .transport.transport_factory import TransportFactory
+from .transport.transport_locator import TransportLocator
 from .worker import Worker
 from .worker_providing_interface import WorkerProvidingInterface
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from xtr_clock import ClockInterface
     from xtr_event_dispatcher_contracts import EventDispatcherInterface
     from xtr_logging_contracts import LoggerInterface
 
@@ -33,6 +40,15 @@ if TYPE_CHECKING:
     from .worker_interface import WorkerInterface
 
 __all__ = ["WorkerFactory"]
+
+#: Through the messenger channel, beside the rest of the bus's output.
+_LOGGER: Final = logging.getLogger("messenger")
+
+#: Logged when a worker-providing factory cannot send final failures on.
+_NO_FAILURE_TRANSPORT_WARNING: Final = (
+    "the worker of %s cannot send a message failing for good to its failure transport; "
+    "the broker keeps it its own way"
+)
 
 
 @final
@@ -55,6 +71,7 @@ class WorkerFactory:
         "_bus",
         "_config",
         "_event_dispatcher",
+        "_failure_transport_sender",
         "_handlers",
         "_named",
         "_publishing",
@@ -75,6 +92,7 @@ class WorkerFactory:
         resetter: AsyncResetter | None = None,
         event_dispatcher: EventDispatcherInterface | None = None,
         receivers: Mapping[str, ReceiverInterface] | None = None,
+        clock: ClockInterface | None = None,
     ) -> None:
         """Build from ``config``; ``bus`` overrides the one built for handling.
 
@@ -94,6 +112,10 @@ class WorkerFactory:
         something that only receives — messages a process generates, say —
         and so has no DSN to configure. A configured transport of the same
         name wins.
+
+        ``clock`` reads the time a message failed at, which the
+        ``messenger:failed:*`` commands show and select by; the system clock
+        when left out.
         """
         self._config = config
         self._transports = TransportFactory(factories)
@@ -104,6 +126,11 @@ class WorkerFactory:
         self._event_dispatcher = event_dispatcher
         self._publishing: MessageBusInterface | None = None
         self._receivers: dict[str, ReceiverInterface] = dict(receivers or {})
+        self._failure_transport_sender = (
+            FailureTransportSender(config, TransportLocator(config, [self._transports]), clock)
+            if config.failure_transport_names()
+            else None
+        )
 
     def worker(self, names: Sequence[str]) -> WorkerInterface:
         """Build the worker for exactly the named transports.
@@ -120,6 +147,11 @@ class WorkerFactory:
             UnsupportedDsnError: If no factory recognises their DSN.
             IncompatibleReceiversError: If a transport bringing its own worker
                 is named together with a registered receiver.
+
+        A message that fails for good is sent to the failure transport the
+        configuration names for the transport it came from, when there is one
+        — by a factory bringing its own worker only when it implements
+        :class:`~xtr_messenger.failure_transport_worker_providing_interface.FailureTransportWorkerProvidingInterface`.
         """
         group = self._select(names)
         registered = {name: self._receivers[name] for name in names if name not in group}
@@ -147,7 +179,19 @@ class WorkerFactory:
             )
             if others:
                 raise IncompatibleReceiversError(brokered, others)
-            return providing[0].worker(
+            provider = providing[0]
+            sender = self._failure_transport_sender
+            if sender is not None and any(sender.failure_transport_of(n) for n in group):
+                if isinstance(provider, FailureTransportWorkerProvidingInterface):
+                    return provider.worker_with_failure_transport(
+                        group,
+                        bus,
+                        sender,
+                        event_dispatcher=self._event_dispatcher,
+                        resetter=self._resetter,
+                    )
+                _LOGGER.warning(_NO_FAILURE_TRANSPORT_WARNING, ", ".join(group))
+            return provider.worker(
                 group,
                 bus,
                 event_dispatcher=self._event_dispatcher,
@@ -163,6 +207,7 @@ class WorkerFactory:
             self._resetter,
             event_dispatcher=self._event_dispatcher,
             receiver_name=ordered[0] if len(ordered) == 1 else None,
+            failure_transport_sender=self._failure_transport_sender,
         )
 
     def worker_for(self, name: str, receiver: ReceiverInterface) -> WorkerInterface:
@@ -179,7 +224,20 @@ class WorkerFactory:
             self._resetter,
             event_dispatcher=self._event_dispatcher,
             receiver_name=name,
+            failure_transport_sender=self._failure_transport_sender,
         )
+
+    async def close_publishers(self) -> None:
+        """Close the publish connections this factory's transports opened.
+
+        Sending a message that failed for good to its failure transport, or
+        dispatching a redispatched one, opens a publishing connection — on
+        AMQP, a broker — which a worker's own loop never closes. Call this
+        once the workers built here are done. With a container, the messenger
+        bundle closes what its kernel's transports opened as it shuts down;
+        calling this there closes that too.
+        """
+        await self._transports.close_publishers()
 
     def _dispatcher(self) -> MessageBusInterface:
         """Return the bus a collected message is dispatched through.

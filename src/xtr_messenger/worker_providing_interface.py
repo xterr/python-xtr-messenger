@@ -57,5 +57,11 @@ class WorkerProvidingInterface(Protocol):
         is awaited in, as the library's own do: whatever runs a worker — a
         console command — may have a unit of work open, and one message
         after another, or several at once, must not find it theirs.
+
+        A worker built here keeps a message that failed for good the
+        broker's own way — a dead-letter queue. To send it to the configured
+        failure transport instead, implement
+        :class:`~xtr_messenger.failure_transport_worker_providing_interface.FailureTransportWorkerProvidingInterface`
+        too.
         """
         ...
