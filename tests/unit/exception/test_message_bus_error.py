@@ -10,6 +10,7 @@ from xtr_messenger import (
     HandlersFailedError,
     HandlerSignatureError,
     IncompatibleReceiversError,
+    InvalidCommandInputError,
     InvalidDsnError,
     InvalidMiddlewareArgumentsError,
     InvalidTransportOptionError,
@@ -37,6 +38,7 @@ EXPORTED_EXCEPTIONS: tuple[type, ...] = (
     HandlerSignatureError,
     HandlersFailedError,
     IncompatibleReceiversError,
+    InvalidCommandInputError,
     InvalidDsnError,
     InvalidMiddlewareArgumentsError,
     InvalidTransportOptionError,
@@ -321,3 +323,11 @@ def test_incompatible_receivers_error_names_both_sides() -> None:
 
     assert (error.brokered, error.registered) == (("jobs",), ("scheduler_default",))
     assert "cannot consume jobs together with scheduler_default" in str(error)
+
+
+def test_invalid_command_input_error_says_what_is_wrong() -> None:
+    error = InvalidCommandInputError('"--all" cannot be combined with "--class-filter".')
+
+    assert isinstance(error, MessageBusError)
+    assert error.reason == '"--all" cannot be combined with "--class-filter".'
+    assert str(error) == error.reason

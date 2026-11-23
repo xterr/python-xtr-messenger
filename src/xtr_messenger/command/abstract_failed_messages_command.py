@@ -9,6 +9,7 @@ from xtr_clock.exception import ClockError
 from xtr_console import ConsoleStyle, escape
 
 from xtr_messenger._text import class_name
+from xtr_messenger.exception import InvalidCommandInputError
 from xtr_messenger.failure.failed_message_filter import FailedMessageFilter
 from xtr_messenger.failure.failed_message_repository import FailedMessageRepository
 from xtr_messenger.stamp import (
@@ -26,17 +27,12 @@ if TYPE_CHECKING:
 __all__ = [
     "FILTER_OPTIONS",
     "AbstractFailedMessagesCommand",
-    "InvalidInputError",
     "failed_message_filter",
     "moment_text",
 ]
 
 FILTER_OPTIONS = '"--class-filter", "--failed-after" or "--failed-before"'
 """The filter options, as a refusal names them."""
-
-
-class InvalidInputError(Exception):
-    """What the command line asked for cannot be done as asked — said to the operator."""
 
 
 class AbstractFailedMessagesCommand:
@@ -131,7 +127,7 @@ def failed_message_filter(
     """Return the filter the options ask for.
 
     Raises:
-        InvalidInputError: If a date does not read, or a filter is combined
+        InvalidCommandInputError: If a date does not read, or a filter is combined
             with message ids.
     """
     selected = FailedMessageFilter(
@@ -140,7 +136,7 @@ def failed_message_filter(
         failed_before=_date("failed-before", failed_before),
     )
     if with_ids and not selected.is_empty():
-        raise InvalidInputError(f"Message ids cannot be combined with {FILTER_OPTIONS}.")
+        raise InvalidCommandInputError(f"Message ids cannot be combined with {FILTER_OPTIONS}.")
     return selected
 
 
@@ -150,7 +146,7 @@ def _date(option: str, value: str | None) -> datetime | None:
     try:
         return now(value)
     except ClockError as error:
-        raise InvalidInputError(f'"--{option}" is not a date: {value!r}') from error
+        raise InvalidCommandInputError(f'"--{option}" is not a date: {value!r}') from error
 
 
 def moment_text(moment: datetime) -> str:

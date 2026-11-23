@@ -8,14 +8,13 @@ from typing import Annotated, final
 from xtr_console import Argument, ConsoleStyle, ExitCode, Option, Range, as_command, escape
 
 from xtr_messenger._text import class_name
-from xtr_messenger.exception import MessageBusError
+from xtr_messenger.exception import InvalidCommandInputError, MessageBusError
 from xtr_messenger.failure.failed_message_filter import FailedMessageFilter
 from xtr_messenger.failure.failed_message_repository import FailedMessageRepository
 from xtr_messenger.stamp import ErrorDetailsStamp, SentToFailureTransportStamp
 
 from .abstract_failed_messages_command import (
     AbstractFailedMessagesCommand,
-    InvalidInputError,
     failed_message_filter,
     moment_text,
 )
@@ -74,7 +73,7 @@ class FailedMessagesShowCommand(AbstractFailedMessagesCommand):
                 await self._list(io, name, selected, max_messages or _DEFAULT_MAX)
             else:
                 return await self._show(io, name, message_id)
-        except (MessageBusError, InvalidInputError) as error:
+        except (MessageBusError, InvalidCommandInputError) as error:
             io.error(escape(str(error)))
             return ExitCode.FAILURE
         return ExitCode.SUCCESS

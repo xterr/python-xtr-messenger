@@ -30,6 +30,11 @@ def test_a_failure_transport_has_none_of_its_own() -> None:
     assert _config().failure_transport_names() == ()
 
 
+def test_a_name_the_configuration_does_not_define_has_no_failure_transport() -> None:
+    """A receiver registered on its own — the scheduler's — never inherits the default."""
+    assert _config("failed").failure_transport_of("scheduler_default") is None
+
+
 def test_the_default_failure_transport_must_be_configured() -> None:
     with pytest.raises(UnknownTransportError, match="missing"):
         _ = _config("missing")

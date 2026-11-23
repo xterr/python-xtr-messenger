@@ -626,6 +626,7 @@ async def _fail_once(
     max_attempts: int | None = 3,
     dispatcher: EventDispatcher | None = None,
     refused: pytest.MonkeyPatch | None = None,
+    receiver_names: dict[str | None, str] | None = None,
 ) -> tuple[bool, int]:
     """Fail one delivery carrying ``labels``; say whether taskiq saw it fail, and how many moved.
 
@@ -644,7 +645,7 @@ async def _fail_once(
         RecordingBus(failure=RuntimeError("boom")),
         json_serializer(),
         event_dispatcher=dispatcher,
-        receiver_names={None: "orders"},
+        receiver_names=receiver_names if receiver_names is not None else {None: "orders"},
         max_attempts=max_attempts,
         failure_transport_sender=sender,
     )
@@ -701,3 +702,10 @@ async def test_a_last_attempt_the_failure_transport_refuses_is_raised(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert await _fail_once({RETRIES_LABEL: 2}, refused=monkeypatch) == (True, 0)
+
+
+async def test_a_delivery_on_a_queue_no_transport_serves_is_raised_not_moved() -> None:
+    """Reported as received from ``taskiq``, which is no configured transport."""
+    names: dict[str | None, str] = {"orders_q": "orders", "mail_q": "mail"}
+
+    assert await _fail_once({RETRIES_LABEL: 2}, receiver_names=names) == (True, 0)

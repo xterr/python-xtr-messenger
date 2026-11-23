@@ -113,10 +113,15 @@ class MessageBusConfig:
         """Return where the transport ``name`` keeps what failed for good, if anywhere.
 
         ``None`` too for a transport that is its own failure transport: what
-        fails there for good has nowhere left to go.
+        fails there for good has nowhere left to go. And ``None`` for a name
+        the configuration does not define — a receiver registered on its own,
+        as the scheduler's are: only a configured transport has a failure
+        transport, its own or the configuration's.
         """
         transport = self.transports.get(name)
-        own = transport.failure_transport if transport is not None else None
+        if transport is None:
+            return None
+        own = transport.failure_transport
         failure = own if own is not None else self.failure_transport
         return None if failure == name else failure
 

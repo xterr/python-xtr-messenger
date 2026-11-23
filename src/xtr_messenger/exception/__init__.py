@@ -12,6 +12,7 @@ from .delayed_message_handling_error import DelayedMessageHandlingError
 from .handler_signature_error import HandlerSignatureError
 from .handlers_failed_error import HandlersFailedError
 from .incompatible_receivers_error import IncompatibleReceiversError
+from .invalid_command_input_error import InvalidCommandInputError
 from .invalid_dsn_error import InvalidDsnError
 from .invalid_middleware_arguments_error import InvalidMiddlewareArgumentsError
 from .invalid_transport_option_error import InvalidTransportOptionError
@@ -37,6 +38,7 @@ __all__ = [
     "HandlerSignatureError",
     "HandlersFailedError",
     "IncompatibleReceiversError",
+    "InvalidCommandInputError",
     "InvalidDsnError",
     "InvalidMiddlewareArgumentsError",
     "InvalidTransportOptionError",

@@ -780,6 +780,22 @@ async def test_a_message_from_a_transport_with_no_failure_transport_is_rejected(
     assert len(receiver.rejected) == 1
 
 
+async def test_a_registered_receivers_failure_is_rejected_not_sent() -> None:
+    sender, kept = failure_transport("orders")
+    receiver = StubReceiver([Envelope("tick", (ReceivedStamp("scheduler_default"),))])
+
+    await Worker(
+        RecordingBus(failure=RuntimeError("boom")),
+        receiver,
+        receiver_name="scheduler_default",
+        failure_transport_sender=sender,
+    ).run()
+
+    assert kept.sent == ()
+    assert receiver.acked == []
+    assert len(receiver.rejected) == 1
+
+
 async def test_a_message_the_failure_transport_refuses_is_rejected_not_lost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING, Annotated, Final, final
 
 from xtr_console import Argument, ConsoleStyle, ExitCode, as_command, escape
 
-from xtr_messenger.exception import MessageBusError
+from xtr_messenger.exception import InvalidCommandInputError, MessageBusError
 from xtr_messenger.failure.failed_message_repository import FailedMessageRepository
 from xtr_messenger.transport.receiver.single_message_receiver import SingleMessageReceiver
 from xtr_messenger.worker_factory import WorkerFactory
 
 from .abstract_failed_messages_command import (
     AbstractFailedMessagesCommand,
-    InvalidInputError,
     failed_message_filter,
 )
 
@@ -89,16 +88,20 @@ class FailedMessagesRetryCommand(AbstractFailedMessagesCommand):
                     if (found := FailedMessageRepository.message_id(envelope)) is not None
                 ]
                 if not ids:
-                    raise InvalidInputError("No failed messages were found with this filter.")  # noqa: TRY301
+                    raise InvalidCommandInputError(  # noqa: TRY301
+                        "No failed messages were found with this filter."
+                    )
             if ids:
                 succeeded = await self._retry_ids(io, name, ids, force=force, redispatch=redispatch)
             elif not io.interactive:
-                raise InvalidInputError("Message ids must be passed when in non-interactive mode.")  # noqa: TRY301
+                raise InvalidCommandInputError(  # noqa: TRY301
+                    "Message ids must be passed when in non-interactive mode."
+                )
             else:
                 succeeded = await self._retry_interactively(
                     io, name, force=force, redispatch=redispatch
                 )
-        except (MessageBusError, InvalidInputError) as error:
+        except (MessageBusError, InvalidCommandInputError) as error:
             io.error(escape(str(error)))
             return ExitCode.FAILURE
         if not succeeded:
@@ -113,7 +116,7 @@ class FailedMessagesRetryCommand(AbstractFailedMessagesCommand):
         for message_id in ids:
             envelope = await self._failed.find(message_id, name)
             if envelope is None:
-                raise InvalidInputError(f'The message "{message_id}" was not found.')
+                raise InvalidCommandInputError(f'The message "{message_id}" was not found.')
             succeeded = (
                 await self._settle(io, name, envelope, force=force, redispatch=redispatch)
                 and succeeded

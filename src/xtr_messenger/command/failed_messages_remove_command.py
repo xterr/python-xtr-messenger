@@ -6,13 +6,12 @@ from typing import Annotated, final
 
 from xtr_console import Argument, ConsoleStyle, ExitCode, Option, as_command, escape
 
-from xtr_messenger.exception import MessageBusError
+from xtr_messenger.exception import InvalidCommandInputError, MessageBusError
 from xtr_messenger.failure.failed_message_repository import FailedMessageRepository
 
 from .abstract_failed_messages_command import (
     FILTER_OPTIONS,
     AbstractFailedMessagesCommand,
-    InvalidInputError,
     failed_message_filter,
 )
 
@@ -62,7 +61,7 @@ class FailedMessagesRemoveCommand(AbstractFailedMessagesCommand):
             name = self._transport(io, transport)
             if remove_all and not selected.is_empty():
                 # Raised to be reported with the other refusals below.
-                raise InvalidInputError(f'"--all" cannot be combined with {FILTER_OPTIONS}.')  # noqa: TRY301
+                raise InvalidCommandInputError(f'"--all" cannot be combined with {FILTER_OPTIONS}.')  # noqa: TRY301
             ids = list(message_ids)
             if not selected.is_empty():
                 ids = [
@@ -71,7 +70,9 @@ class FailedMessagesRemoveCommand(AbstractFailedMessagesCommand):
                     if (found := FailedMessageRepository.message_id(envelope)) is not None
                 ]
                 if not ids:
-                    raise InvalidInputError("No failed messages were found with this filter.")  # noqa: TRY301
+                    raise InvalidCommandInputError(  # noqa: TRY301
+                        "No failed messages were found with this filter."
+                    )
                 plural = "" if len(ids) == 1 else "s"
                 if not io.confirm(
                     f"Can you confirm you want to remove {len(ids)} message{plural}?"
@@ -79,17 +80,17 @@ class FailedMessagesRemoveCommand(AbstractFailedMessagesCommand):
                     return ExitCode.SUCCESS
                 force = True
             if not remove_all and not ids:
-                raise InvalidInputError(  # noqa: TRY301
+                raise InvalidCommandInputError(  # noqa: TRY301
                     'Specify at least one message id, or "--all" to remove every failed message.'
                 )
             if remove_all and ids:
-                raise InvalidInputError('Message ids cannot be combined with "--all".')  # noqa: TRY301
+                raise InvalidCommandInputError('Message ids cannot be combined with "--all".')  # noqa: TRY301
             show = show_messages or len(ids) == 1
             if remove_all:
                 await self._remove_all(io, name, force=force, show=show)
             else:
                 await self._remove(io, name, ids, force=force, show=show)
-        except (MessageBusError, InvalidInputError) as error:
+        except (MessageBusError, InvalidCommandInputError) as error:
             io.error(escape(str(error)))
             return ExitCode.FAILURE
         return ExitCode.SUCCESS
